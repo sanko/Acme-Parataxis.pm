@@ -1,0 +1,167 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis - High-concurrency Green Threads and Hybrid Thread Pool for Perl
+
+=head1 SYNOPSIS
+
+    use Acme::Parataxis;
+
+    Acme::Parataxis::run(sub {
+        say "Main started";
+
+        # Spawn a new green thread
+        my $c1 = Acme::Parataxis->spawn(sub {
+            say "  Worker 1: Sleeping...";
+            Acme::Parataxis->await_sleep(1000);
+            say "  Worker 1: Woke up!";
+            return "Result from C1";
+        });
+
+        # Another one
+        my $c2 = Acme::Parataxis->spawn(sub {
+            say "  Worker 2: Checking CPU core...";
+            my $core = Acme::Parataxis->await_core_id();
+            return "Ran on core $core";
+        });
+
+        # Wait for them and get results
+        say "C1 returned: " . $c1->await();
+        say "C2 returned: " . $c2->await();
+    });
+
+=head1 DESCRIPTION
+
+C<Acme::Parataxis> provides a hybrid concurrency model for Perl, combining cooperative multitasking (Green
+Threads/Fibers) with a preemptive native thread pool.
+
+=head2 Key Features
+
+=over 4
+
+=item * B<User-Mode Stack Switching:> Efficient context switches using native OS primitives.
+
+=item * B<Hybrid Concurrency:> Offload blocking C operations to a native thread pool.
+
+=item * B<Modern Perl API:> Leverages Perl 5.40+ features like C<class> and C<try/catch>.
+
+=item * B<Asynchronous IO:> Built-in support for non-blocking socket operations.
+
+=back
+
+=head1 PACKAGE METHODS
+
+=head2 run( $code )
+
+Starts the parataxis runtime and executes the provided coderef in the main coroutine. This method handles the event
+loop and thread pool initialization/cleanup automatically.
+
+=head2 spawn( $code )
+
+Creates and enqueues a new parataxis. Returns an C<Acme::Parataxis::Future> object which can be used to wait for the
+result.
+
+=head2 yield( @args )
+
+Suspends the current parataxis and returns control (and C<@args>) to the scheduler.
+
+=head2 maybe_yield()
+
+If a preemption threshold is set (via C<set_preempt_threshold>), this method increments an internal counter. If the
+threshold is reached, it yields back to the scheduler. This is useful for preventing long-running loops from starving
+other coroutines.
+
+=head2 set_preempt_threshold( $count )
+
+Sets the number of calls to C<maybe_yield()> allowed before a context switch is triggered. Set to 0 to disable.
+
+=head2 await_sleep( $ms )
+
+Suspends the current parataxis for C<$ms> milliseconds. The sleep is performed in a background worker thread.
+
+=head2 await_core_id()
+
+Suspends the current parataxis until it can retrieve the ID of the CPU core it is currently running on (via a
+background thread).
+
+=head2 await_read( $fh ) / await_write( $fh )
+
+Suspends the current parataxis until the provided filehandle is ready for reading or writing.
+
+=head2 tid()
+
+Returns the Operating System thread ID (TID) of the current thread.
+
+=head2 fid()
+
+Returns the unique internal ID of the current parataxis (Fiber ID).
+
+=head2 stop()
+
+Signals the runtime to stop once all current coroutines have finished.
+
+=head1 CLASS METHODS
+
+=head2 root()
+
+Returns the root parataxis context, which can be used to transfer control back to the main thread.
+
+=head2 init_system()
+
+Manually initializes the parataxis system. Usually called automatically by C<run()>.
+
+=head2 poll_io()
+
+Checks for completed background tasks. Returns a list of C<[id, result]> pairs.
+
+=head1 OBJECT METHODS
+
+=head2 await()
+
+Suspends the current coroutine until this coroutine completes, then returns its result.
+
+=head2 call( @args )
+
+Manually resumes this coroutine with the provided arguments.
+
+=head2 transfer( @args )
+
+Directly transfers control to this coroutine, suspending the current one.
+
+=head2 is_done()
+
+Returns true if the coroutine has finished execution.
+
+=head1 CLASSES
+
+=head2 Acme::Parataxis::Future
+
+An object representing a value that may not yet be available.
+
+=head3 await()
+
+Suspends the current coroutine until the future is ready, then returns the result.
+
+=head3 is_ready()
+
+Returns true if the result or error has been set.
+
+=head3 result()
+
+Returns the result if available, or throws the stored error.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut
