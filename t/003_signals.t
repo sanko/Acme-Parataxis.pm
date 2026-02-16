@@ -11,7 +11,7 @@ subtest 'Signal handled inside coroutine' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
             kill 'INT', $$;
-            return "Done";
+            return 'Done';
         }
     );
     $coro->call();
@@ -27,7 +27,7 @@ subtest 'Signal during yield/resume' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
             Acme::Parataxis->yield('READY');
-            return "Finished";
+            return 'Finished';
         }
     );
     $coro->call();

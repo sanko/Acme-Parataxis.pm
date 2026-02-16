@@ -45,7 +45,10 @@ requires:
   File::Basename: '0'
   File::Spec: '0'
 resources:
+  bugtracker: https://github.com/sanko/Acme-Parataxis.pm/issues
+  homepage: https://github.com/sanko/Acme-Parataxis.pm
   license: http://www.perlfoundation.org/artistic_license_2_0
+  repository: git://github.com/sanko/Acme-Parataxis.pm.git
 version: v0.0.1
 x_ignore:
   - .tidyallrc

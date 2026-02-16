@@ -40,7 +40,10 @@ Acme::Parataxis::run(
 
 # DESCRIPTION
 
-I had this idea while writting cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
+I had this idea while writting cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
+for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
+attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of
+Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
 
 This is in the Acme namespace for a reason. Don't use this. Forget you even saw it. Just **reading** this has probably
 made your projects more prone to breaking. Reading the package name out loud might cause brain damage to yourself and

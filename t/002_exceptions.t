@@ -7,7 +7,7 @@ use experimental 'class';
 subtest 'Die inside coroutine, catch outside' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
-            die "Death in coro";
+            die 'Death in coro';
         }
     );
     eval { $coro->call(); };
@@ -17,8 +17,8 @@ subtest 'Die inside coroutine, catch outside' => sub {
 subtest 'Eval inside coroutine' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
-            eval { die "Inner death"; };
-            return "Survived: $@";
+            eval { die 'Inner death'; };
+            return 'Survived: ' . $@;
         }
     );
     my $res = $coro->call();
@@ -30,11 +30,11 @@ subtest 'Nested coroutines exceptions' => sub {
         code => sub {
             my $coro2 = Acme::Parataxis->new(
                 code => sub {
-                    die "Deep death";
+                    die 'Deep death';
                 }
             );
             $coro2->call();
-            return "Coro2 survived?";
+            return 'Coro2 survived?';
         }
     );
     eval { $coro1->call(); };

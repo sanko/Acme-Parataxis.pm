@@ -67,10 +67,18 @@
    },
    "release_status" : "stable",
    "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/sanko/Acme-Parataxis.pm/issues"
+      },
+      "homepage" : "https://github.com/sanko/Acme-Parataxis.pm",
       "license" : [
          "http://www.perlfoundation.org/artistic_license_2_0"
       ],
-      "repository" : {}
+      "repository" : {
+         "type" : "git",
+         "url" : "git://github.com/sanko/Acme-Parataxis.pm.git",
+         "web" : "https://github.com/sanko/Acme-Parataxis.pm"
+      }
    },
    "version" : "v0.0.1",
    "x_ignore" : [
