@@ -14,7 +14,7 @@ jobs:
           multi-thread: "${{ inputs.flags == '-Dusethreads' && true || false }}"
           perl-version: '${{ inputs.perl }}'
       - name: Install trial Affix
-        run: cpanm --v https://cpan.metacpan.org/authors/id/S/SA/SANKO/Affix-v1.0.8-20260216170758-TRIAL.tar.gz
+        run: cpanm --v --notest https://cpan.metacpan.org/authors/id/S/SA/SANKO/Affix-v1.0.8-20260216170758-TRIAL.tar.gz
       - name: Check meta
         run: perl -MModule::Metadata -MData::Dumper -e '$m=Module::Metadata->new_from_module("Affix"); print Dumper($m)'
       - name: Install prereqs
@@ -22,11 +22,11 @@ jobs:
       - name: Run tests
         run: |
           perl -V
-          
+
           perl Build.PL
           ./Build
           ./Build test --v
-          
+
           if ($LASTEXITCODE -eq 0) {
             perl -V > test-output-${{ inputs.os }}-${{ inputs.perl }}${{ inputs.flags }}.txt
           } else {
