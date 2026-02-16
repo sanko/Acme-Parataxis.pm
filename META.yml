@@ -58,5 +58,4 @@ x_ignore:
   - ROADMAP.md
 x_plugins:
   - GitHubActions
-  - GitHubActions
 x_serialization_backend: 'CPAN::Meta::YAML version 0.020'

@@ -19,6 +19,7 @@ Acme::Parataxis::run(
             sub {
                 say '  Task 1: Sleeping in a native thread pool...';
                 Acme::Parataxis->await_sleep(1000);
+                say '  Task 1: Ah! What a nice nap...';
                 return 42;
             }
         );
