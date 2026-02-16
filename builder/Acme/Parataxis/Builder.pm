@@ -51,7 +51,8 @@ class    #
         require Affix::Build;    # This module is used for C compilation
         require Config;
         require File::Spec;
-        mkpath( catdir(qw[blib lib Acme]), $verbose );
+        my $arch_dir = catdir(qw[blib arch auto Acme Parataxis]);
+        mkpath( $arch_dir, $verbose );
         my $build = Affix::Build->new(
             name  => 'parataxis',
             flags => {
@@ -64,7 +65,7 @@ class    #
                         ( $Config::Config{libperl} =~ s/^lib//r =~ s/\.a$//r =~ s/\.lib$//r ) .
                         ' -lws2_32' ) : ( $^O eq 'darwin' ? '-undefined dynamic_lookup' : '' )
             },
-            build_dir => 'blib/lib/Acme',
+            build_dir => $arch_dir,
             clean     => 0
         );
 

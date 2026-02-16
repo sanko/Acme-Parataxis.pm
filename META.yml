@@ -6,7 +6,7 @@ build_requires:
   Test2::V1: '0'
 configure_requires:
   Affix: '0'
-  CPAN::Meta: '0'
+  CPAN::Meta: '2.150012'
   Exporter: '5.57'
   ExtUtils::Helpers: '0.028'
   ExtUtils::Install: '0'
@@ -52,6 +52,7 @@ x_ignore:
   - .gitignore
   - .clang-format
   - .github/**
+  - ROADMAP.md
 x_plugins:
   - GitHubActions
   - GitHubActions

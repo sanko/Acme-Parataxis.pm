@@ -44,12 +44,15 @@ package Acme::Parataxis v0.0.1 {
 
     BEGIN {
         my $lib_name = ( $^O eq 'MSWin32' ? '' : 'lib' ) . 'parataxis.' . $Config{so};
-        my @paths    = (
-            File::Spec->catfile( dirname(__FILE__), $lib_name ),
-            File::Spec->catfile( dirname(__FILE__), '..', $lib_name ),
-            File::Spec->catfile( dirname(__FILE__), '..', '..', 'build', $lib_name ),
-            File::Spec->catfile( dirname(__FILE__), '..', '..', 'blib',  'lib', $lib_name )
-        );
+        my @paths;
+        push @paths, File::Spec->catfile( dirname(__FILE__), $lib_name );
+        push @paths, File::Spec->catfile( dirname(__FILE__), '..',   'arch', 'auto',      'Acme', 'Parataxis', $lib_name );
+        push @paths, File::Spec->catfile( dirname(__FILE__), '..',   '..',   'arch',      'auto', 'Acme', 'Parataxis', $lib_name );
+        push @paths, File::Spec->catfile( dirname(__FILE__), 'auto', 'Acme', 'Parataxis', $lib_name );
+        for my $inc (@INC) {
+            next if ref $inc;
+            push @paths, File::Spec->catfile( $inc, 'auto', 'Acme', 'Parataxis', $lib_name );
+        }
         for my $path (@paths) {
             if ( -e $path ) {
                 $lib = Affix::load_library($path);
@@ -152,14 +155,14 @@ package Acme::Parataxis v0.0.1 {
         method is_ready () {$is_ready}
 
         method set_result ($val) {
-            die "Future already ready" if $is_ready;
+            die 'Future already ready' if $is_ready;
             $result   = $val;
             $is_ready = 1;
             $_->($self) for @callbacks;
         }
 
         method set_error ($err) {
-            die "Future already ready" if $is_ready;
+            die 'Future already ready' if $is_ready;
             $error    = $err;
             $is_ready = 1;
             $_->($self) for @callbacks;
@@ -212,14 +215,14 @@ package Acme::Parataxis v0.0.1 {
 
         sub await_read ( $class, $fh ) {
             my $fileno = fileno($fh);
-            die "Not a valid filehandle" unless defined $fileno;
+            die 'Not a valid filehandle' unless defined $fileno;
             my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
             submit_c_job( 2, $handle ) < 0 ? 'Queue Full' : $class->yield('WAITING');
         }
 
         sub await_write ( $class, $fh ) {
             my $fileno = fileno($fh);
-            die "Not a valid filehandle" unless defined $fileno;
+            die 'Not a valid filehandle' unless defined $fileno;
             my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
             submit_c_job( 3, $handle ) < 0 ? 'Queue Full' : $class->yield('WAITING');
         }

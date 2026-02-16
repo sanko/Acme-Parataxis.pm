@@ -3,7 +3,7 @@ requires 'File::Basename';
 requires 'File::Spec';
 on configure => sub {
     requires 'Affix';
-    requires 'CPAN::Meta';
+    requires 'CPAN::Meta',        '2.150012';
     requires 'Exporter',          '5.57';
     requires 'ExtUtils::Helpers', '0.028';
     requires 'ExtUtils::Install';

@@ -25,7 +25,7 @@
       "configure" : {
          "requires" : {
             "Affix" : "0",
-            "CPAN::Meta" : "0",
+            "CPAN::Meta" : "2.150012",
             "Exporter" : "5.57",
             "ExtUtils::Helpers" : "0.028",
             "ExtUtils::Install" : "0",
@@ -77,7 +77,8 @@
       ".tidyallrc",
       ".gitignore",
       ".clang-format",
-      ".github/**"
+      ".github/**",
+      "ROADMAP.md"
    ],
    "x_plugins" : [
       "GitHubActions",
