@@ -2,6 +2,7 @@ use v5.40;
 use Test2::V1 -ipP;
 use blib;
 use Acme::Parataxis;
+$|++;
 
 # This is the synopsis for Acme::Parataxis but verbose
 Acme::Parataxis::run(

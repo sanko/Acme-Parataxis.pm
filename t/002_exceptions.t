@@ -3,6 +3,7 @@ use Test2::V1 -ipP;
 use blib;
 use Acme::Parataxis;
 use experimental 'class';
+$|++;
 #
 diag 'Testing exception handling in Acme::Parataxis fibers...';
 subtest 'Die inside coroutine, catch outside' => sub {

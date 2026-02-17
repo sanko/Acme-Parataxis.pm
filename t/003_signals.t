@@ -3,6 +3,7 @@ use Test2::V1 -ipP;
 use blib;
 use Acme::Parataxis;
 use experimental 'class';
+$|++;
 #
 skip_all 'Signals on Windows? Ha!', 2 if $^O eq 'MSWin32';
 diag 'Testing signal handling during fiber execution...';

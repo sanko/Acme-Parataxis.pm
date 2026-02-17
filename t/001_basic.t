@@ -2,6 +2,7 @@ use v5.40;
 use blib;
 use Acme::Parataxis;
 use Test2::V1 -ipP;
+$|++;
 #
 diag '$Acme::Parataxis::VERSION = ' . $Acme::Parataxis::VERSION;
 diag 'Testing basic asymmetric coroutine flow...';

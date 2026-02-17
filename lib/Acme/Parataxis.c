@@ -69,6 +69,7 @@ typedef pthread_mutex_t para_mutex_t;
 
 // Forward declarations
 DLLEXPORT SV * coro_yield(SV * ret_val);
+DLLEXPORT SV * coro_transfer(int id, SV * args);
 
 // Identity and affinity Helpers
 /**
@@ -206,9 +207,10 @@ typedef struct {
 
     SV * transfer_data; /**< Arguments passed during yield/transfer/call */
 
-    int id;        /**< Unique numeric Fiber ID */
-    int finished;  /**< Flag: 1 if returned, 0 if running */
-    int parent_id; /**< ID of the caller (for asymmetric yield) */
+    int id;          /**< Unique numeric Fiber ID */
+    int finished;    /**< Flag: 1 if returned, 0 if running */
+    int parent_id;   /**< ID of the caller (for asymmetric yield) */
+    int last_sender; /**< ID of the fiber that last transferred control here */
 } my_coro_t;
 
 // Thread pool definitions
@@ -654,6 +656,7 @@ DLLEXPORT int init_system() {
     main_context.transfer_data = &PL_sv_undef;
     main_context.id = -1;
     main_context.finished = 0;
+    main_context.last_sender = -1;
 #ifdef _WIN32
     if (!main_fiber) {
         main_fiber = ConvertThreadToFiber(NULL);
@@ -673,6 +676,10 @@ void perform_switch(int to_id) {
         return;
     my_coro_t * from = (current_coro_index == -1) ? &main_context : coroutines[current_coro_index];
     my_coro_t * to = (to_id == -1) ? &main_context : coroutines[to_id];
+
+    // Track where we are coming from so the target can return here if needed
+    to->last_sender = current_coro_index;
+
     current_coro_index = to_id;
     swap_perl_state(from, to);
 #ifdef _WIN32
@@ -691,7 +698,19 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
     if (current_coro_index == -1)
         return &PL_sv_undef;
 
-    int parent = coroutines[current_coro_index]->parent_id;
+    my_coro_t * self = coroutines[current_coro_index];
+    int parent = self->parent_id;
+
+    // Fallback logic: if parent is finished, missing, or destroyed, try the last sender
+    if (parent != -1 && (!coroutines[parent] || coroutines[parent]->finished))
+        parent = self->last_sender;
+    else if (parent == -1)
+        parent = self->last_sender;
+
+    // Final safety: if the fallback is ALSO finished or destroyed, go back to main
+    if (parent >= 0 && (!coroutines[parent] || coroutines[parent]->finished))
+        parent = -1;
+
     my_coro_t * caller = (parent == -1) ? &main_context : coroutines[parent];
 
     if (caller->transfer_data != ret_val) {
@@ -704,7 +723,6 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
 
     perform_switch(parent);
 
-    my_coro_t * self = coroutines[current_coro_index];
     return self->transfer_data;
 }
 
@@ -805,6 +823,7 @@ DLLEXPORT int create_coro_ptr(SV * user_code, SV * self_ref) {
 
     c->id = idx;
     c->parent_id = -1;
+    c->last_sender = -1;
     c->transfer_data = &PL_sv_undef;
 
     init_perl_stacks(c);

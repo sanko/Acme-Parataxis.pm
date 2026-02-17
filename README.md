@@ -341,6 +341,27 @@ because the stack doesn't unwind the way the compiler expects. Maybe it's a coin
 whatever this is and `eval` is simpler, more predictable, and less likely to make the garbage collector have a nervous
 breakdown. For now.
 
+## Signal Handling
+
+Signals are delivered to the main process thread. Perl handles these at 'safe points,' which in this module typically
+occur during a context switch (yield, transfer, or call). If you send a signal while a fiber is suspended, it will
+generally be processed when the fiber is resumed and hits the next internal Perl opcode.
+
+## The 'Final Transfer' Requirement
+
+In a symmetric coroutine model (using `transfer( )`), fibers don't have a natural 'parent' to return to. I've added
+fallback logic to return to the `last_sender` or the main thread on exit but it's good practice to explicitly
+`transfer( )` back to a partner fiber or the `root( )` context to ensure your application logic remains predictable.
+Leaving a fiber to just 'fall off the end' is like walking out of a room without closing the door; eventually, the
+draft will bother someone.
+
+## `is_done( )` vs. Destruction
+
+A fiber being `is_done( )` simply means its Perl code has finished executing. The underlying C-level memory (stacks,
+context, etc.) is not immediately freed until the `Acme::Parataxis` object is destroyed or the runtime performs its
+final `cleanup( )`. This is why you might see memory usage stay flat even after a fiber finishes, until the garbage
+collector finally catches up with the object.
+
 # AUTHOR
 
 Sanko Robinson <sanko@cpan.org>

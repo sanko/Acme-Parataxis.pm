@@ -1,4 +1,4 @@
-package Acme::Parataxis v0.0.1 {
+package Acme::Parataxis v0.0.2 {
     use v5.40;
     use experimental qw[class try];
     use Affix;
@@ -63,7 +63,8 @@ package Acme::Parataxis v0.0.1 {
         _bind_functions($lib);
     }
 
-    class Acme::Parataxis {
+    class #
+    Acme::Parataxis {
         use Carp         qw[croak];
         use Scalar::Util qw[weaken];
         field $code : reader : param;
@@ -136,8 +137,8 @@ package Acme::Parataxis v0.0.1 {
         }
         sub by_id ( $class, $id ) { $REGISTRY{$id} }
     }
-
-    class Acme::Parataxis::Root {
+    class    #
+        Acme::Parataxis::Root {
 
         method transfer (@args) {
             my $rv  = Acme::Parataxis::coro_transfer( -1, \@args );
@@ -146,8 +147,8 @@ package Acme::Parataxis v0.0.1 {
         }
         method id () {-1}
     }
-
-    class Acme::Parataxis::Future {
+    class    #
+        Acme::Parataxis::Future {
         field $is_ready = 0;
         field $result;
         field $error;
@@ -190,8 +191,8 @@ package Acme::Parataxis v0.0.1 {
             $self->result;
         }
     }
-
-    package Acme::Parataxis {
+    package    #
+        Acme::Parataxis {
         use Time::HiRes qw[usleep];
         my @SCHEDULER_QUEUE;
         my $IS_RUNNING = 0;
