@@ -45,8 +45,10 @@ typedef CRITICAL_SECTION para_mutex_t;
 #else
 #include <pthread.h>
 #include <sched.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <ucontext.h>
 #include <unistd.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)
@@ -321,43 +323,34 @@ void * worker_thread(void * arg) {
 #ifdef _WIN32
                 SOCKET s = (SOCKET)job->input.i;
                 FD_SET(s, &fds);
-                struct timeval tv = {0, 10000};  // 10ms poll interval
+#else
+                int fd = (int)job->input.i;
+                FD_SET(fd, &fds);
+#endif
+                // Reset tv inside the loop because select updates it on Linux
+                struct timeval tv;
                 int res;
 
                 int elapsed_ms = 0;
                 int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;  // Default 5s
 
                 while (threads_keep_running) {
-                    FD_ZERO(&fds);
-                    FD_SET(s, &fds);
+                    tv.tv_sec = 0;
+                    tv.tv_usec = 10000;  // 10ms poll
+
+                    fd_set work_fds = fds;  // Use a copy of the FD set
                     if (job->type == TASK_READ)
-                        res = select(0, &fds, NULL, NULL, &tv);
-                    else
-                        res = select(0, NULL, &fds, NULL, &tv);
-
-                    if (res != 0)
-                        break;
-
-                    elapsed_ms += 10;
-                    if (elapsed_ms >= timeout)
-                        break;
-                }
-                job->output.i = (res > 0) ? 1 : -1;
+#ifdef _WIN32
+                        res = select(0, &work_fds, NULL, NULL, &tv);
 #else
-                int fd = (int)job->input.i;
-                FD_SET(fd, &fds);
-                struct timeval tv = {0, 10000};
-                int res;
-                int elapsed_ms = 0;
-                int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;
-
-                while (threads_keep_running) {
-                    FD_ZERO(&fds);
-                    FD_SET(fd, &fds);
-                    if (job->type == TASK_READ)
-                        res = select(fd + 1, &fds, NULL, NULL, &tv);
+                        res = select(fd + 1, &work_fds, NULL, NULL, &tv);
+#endif
                     else
-                        res = select(fd + 1, NULL, &fds, NULL, &tv);
+#ifdef _WIN32
+                        res = select(0, NULL, &work_fds, NULL, &tv);
+#else
+                        res = select(fd + 1, NULL, &work_fds, NULL, &tv);
+#endif
 
                     if (res != 0)
                         break;
@@ -367,7 +360,6 @@ void * worker_thread(void * arg) {
                         break;
                 }
                 job->output.i = (res > 0) ? 1 : -1;
-#endif
             }
 
             LOCK(queue_lock);

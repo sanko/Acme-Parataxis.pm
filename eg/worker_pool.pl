@@ -4,6 +4,7 @@ use lib 'lib';
 use blib;
 use Acme::Parataxis;
 use Time::HiRes qw[time];
+$|++;
 
 # This simulates a pool of workers processing a queue of jobs.
 # Each job 'blocks' by sleeping in the native thread pool (simulating I/O),

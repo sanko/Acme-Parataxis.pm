@@ -49,6 +49,9 @@ package Acme::Parataxis v0.0.3 {
         push @paths, File::Spec->catfile( dirname(__FILE__), '..',   'arch', 'auto',      'Acme', 'Parataxis', $lib_name );
         push @paths, File::Spec->catfile( dirname(__FILE__), '..',   '..',   'arch',      'auto', 'Acme', 'Parataxis', $lib_name );
         push @paths, File::Spec->catfile( dirname(__FILE__), 'auto', 'Acme', 'Parataxis', $lib_name );
+
+        # XXX - Local dir check (This is temporary)
+        push @paths, File::Spec->catfile( '.', $lib_name );
         for my $inc (@INC) {
             next if ref $inc;
             push @paths, File::Spec->catfile( $inc, 'auto', 'Acme', 'Parataxis', $lib_name );
@@ -62,11 +65,9 @@ package Acme::Parataxis v0.0.3 {
         die 'Could not find or load ' . $lib_name unless $lib;
         _bind_functions($lib);
     }
-
-    class #
-    Acme::Parataxis {
-        use Carp         qw[croak];
-        use Scalar::Util qw[weaken];
+    class    #
+        Acme::Parataxis {
+        use Carp qw[croak];
         field $code : reader : param;
         field $is_done = 0;
         field $error  : reader;
@@ -93,15 +94,15 @@ package Acme::Parataxis v0.0.3 {
         our %REGISTRY;
         our $SEQ = 0;
         ADJUST {
-            force_depth_zero($code);
-            $id = create_coro_ptr( $code, $self );
+            Acme::Parataxis::force_depth_zero($code);
+            $id = Acme::Parataxis::create_coro_ptr( $code, $self );
             $REGISTRY{$id} = $self;
-            weaken( $REGISTRY{$id} );
+            builtin::weaken $REGISTRY{$id};
         }
 
         method call (@args) {
             croak 'Cannot call a finished parataxis' if $is_done;
-            my $rv = coro_call( $id, \@args );
+            my $rv = Acme::Parataxis::coro_call( $id, \@args );
             if ( $self->is_done ) {
                 my $err = $error;
                 $self->_clear_result();
@@ -113,7 +114,7 @@ package Acme::Parataxis v0.0.3 {
 
         method transfer (@args) {
             croak 'Cannot transfer to a finished parataxis' if $self->is_done;
-            my $rv = coro_transfer( $id, \@args );
+            my $rv = Acme::Parataxis::coro_transfer( $id, \@args );
             if ( $self->is_done ) {
                 my $err = $error;
                 $self->_clear_result();
@@ -126,12 +127,12 @@ package Acme::Parataxis v0.0.3 {
         method is_done () {
             return 1 if $is_done;
             return 0 if $id < 0;
-            return 0 unless is_finished($id);
+            return 0 unless Acme::Parataxis::is_finished($id);
             $is_done = 1;
             my $old_id = $id;
             $id = -1;
             my $self_ref = delete $REGISTRY{$old_id};
-            destroy_coro($old_id) if $old_id >= 0;
+            Acme::Parataxis::destroy_coro($old_id) if $old_id >= 0;
             return 1;
         }
 
@@ -146,7 +147,7 @@ package Acme::Parataxis v0.0.3 {
             return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
             if ( defined $id && $id >= 0 ) {
                 delete $REGISTRY{$id};
-                destroy_coro($id);
+                Acme::Parataxis::destroy_coro($id);
                 $id = -1;
             }
             $self->_clear_result();
@@ -165,15 +166,15 @@ package Acme::Parataxis v0.0.3 {
     }
     class    #
         Acme::Parataxis::Future {
-        field $is_ready :reader= 0;
+        field $is_ready : reader = 0;
         field $result : reader;
         field $error;
         field @callbacks;
 
         method set_result ($val) {
             die 'Future already ready' if $is_ready;
-            $result    = $val;
-             $is_ready = 1;
+            $result   = $val;
+            $is_ready = 1;
             $_->($self) for @callbacks;
         }
 
@@ -183,7 +184,6 @@ package Acme::Parataxis v0.0.3 {
             $is_ready = 1;
             $_->($self) for @callbacks;
         }
-
 
         method clear_result () {
             $result = undef;
@@ -279,10 +279,13 @@ package Acme::Parataxis v0.0.3 {
                 my @ready = poll_io();
                 for my $ready (@ready) {
                     my ( $id, $res ) = @$ready;
-                    my $coro = Acme::Parataxis->by_id($id);
+                    my $coro = Acme::Parataxis->by_id( $id );
                     if ($coro) {
                         my $yield_val = $coro->call($res);
                         if ( !$coro->is_done ) {
+
+                            # If it yields WAITING, it might be starting another job immediately
+                            # or waiting on another future.
                             if ( defined $yield_val && $yield_val eq 'WAITING' ) {
 
                                 # Waiting
@@ -311,7 +314,9 @@ package Acme::Parataxis v0.0.3 {
                 if ( $main_coro->is_done && $active_count == 0 && !@SCHEDULER_QUEUE ) {
                     $IS_RUNNING = 0;
                 }
-                if ( $IS_RUNNING && !@SCHEDULER_QUEUE ) {
+
+                # Don't busy wait if queue is empty but things are running
+                if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
                     usleep(1000);
                 }
             }
