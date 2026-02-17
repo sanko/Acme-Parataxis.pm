@@ -49,6 +49,7 @@
       },
       "test" : {
          "requires" : {
+            "Test2::Suite" : "0",
             "Test2::V1" : "0"
          }
       }
@@ -56,7 +57,7 @@
    "provides" : {
       "Acme::Parataxis" : {
          "file" : "lib/Acme/Parataxis.pm",
-         "version" : "v0.0.2"
+         "version" : "v0.0.3"
       }
    },
    "release_status" : "stable",
@@ -74,7 +75,7 @@
          "web" : "https://github.com/sanko/Acme-Parataxis.pm"
       }
    },
-   "version" : "v0.0.2",
+   "version" : "v0.0.3",
    "x_ignore" : [
       ".tidyallrc",
       ".gitignore",

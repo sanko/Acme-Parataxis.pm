@@ -1,4 +1,4 @@
-package Acme::Parataxis v0.0.2 {
+package Acme::Parataxis v0.0.3 {
     use v5.40;
     use experimental qw[class try];
     use Affix;
@@ -21,7 +21,7 @@ package Acme::Parataxis v0.0.2 {
         affix $l, 'cleanup',                           [],                             Void;
         affix $l, 'get_os_thread_id_export',           [],                             Int;
         affix $l, 'get_current_parataxis_id',          [],                             Int;
-        affix $l, 'submit_c_job',                      [ Int, LongLong ],              Int;
+        affix $l, 'submit_c_job',                      [ Int, LongLong, Int ],         Int;
         affix $l, 'check_for_completion',              [],                             Int;
         affix $l, 'get_job_result',                    [Int],                          Pointer [SV];
         affix $l, 'get_job_coro_id',                   [Int],                          Int;
@@ -84,28 +84,43 @@ package Acme::Parataxis v0.0.2 {
             $future->set_error($err) if $future;
         }
 
+        method _clear_result () {
+            $result = undef;
+            $error  = undef;
+        }
+
         # Registry to track active coroutines
         our %REGISTRY;
         our $SEQ = 0;
         ADJUST {
+            force_depth_zero($code);
             $id = create_coro_ptr( $code, $self );
             $REGISTRY{$id} = $self;
+            weaken( $REGISTRY{$id} );
         }
 
         method call (@args) {
-            croak 'Cannot call a finished parataxis' if $self->is_done;
-            $result = coro_call( $id, \@args );
-            die $error if $self->is_done && defined $error;
-            return unless $result;
-            ref $result ? $result->[-1] : $result;
+            croak 'Cannot call a finished parataxis' if $is_done;
+            my $rv = coro_call( $id, \@args );
+            if ( $self->is_done ) {
+                my $err = $error;
+                $self->_clear_result();
+                die $err if defined $err;
+            }
+            return unless defined $rv;
+            return ( ref $rv eq 'ARRAY' ) ? $rv->[-1] : $rv;
         }
 
         method transfer (@args) {
             croak 'Cannot transfer to a finished parataxis' if $self->is_done;
-            $result = coro_transfer( $id, \@args );
-            $self->is_done;
-            return unless $result;
-            ref $result ? $result->[-1] : $result;
+            my $rv = coro_transfer( $id, \@args );
+            if ( $self->is_done ) {
+                my $err = $error;
+                $self->_clear_result();
+                die $err if defined $err;
+            }
+            return unless defined $rv;
+            return ( ref $rv eq 'ARRAY' ) ? $rv->[-1] : $rv;
         }
 
         method is_done () {
@@ -134,6 +149,7 @@ package Acme::Parataxis v0.0.2 {
                 destroy_coro($id);
                 $id = -1;
             }
+            $self->_clear_result();
         }
         sub by_id ( $class, $id ) { $REGISTRY{$id} }
     }
@@ -149,16 +165,15 @@ package Acme::Parataxis v0.0.2 {
     }
     class    #
         Acme::Parataxis::Future {
-        field $is_ready = 0;
-        field $result;
+        field $is_ready :reader= 0;
+        field $result : reader;
         field $error;
         field @callbacks;
-        method is_ready () {$is_ready}
 
         method set_result ($val) {
             die 'Future already ready' if $is_ready;
-            $result   = $val;
-            $is_ready = 1;
+            $result    = $val;
+             $is_ready = 1;
             $_->($self) for @callbacks;
         }
 
@@ -169,9 +184,10 @@ package Acme::Parataxis v0.0.2 {
             $_->($self) for @callbacks;
         }
 
-        method result () {
-            die $error if defined $error;
-            return $result;
+
+        method clear_result () {
+            $result = undef;
+            $error  = undef;
         }
 
         method on_ready ($cb) {
@@ -211,21 +227,21 @@ package Acme::Parataxis v0.0.2 {
         }
         sub tid { get_os_thread_id_export() }
         sub fid { get_current_parataxis_id() }
-        sub await_sleep   ( $class, $ms ) { submit_c_job( 0, $ms ) < 0 ? 'Queue Full' : $class->yield('WAITING') }
-        sub await_core_id ($class)        { submit_c_job( 1, 0 ) < 0   ? 'Queue Full' : $class->yield('WAITING') }
+        sub await_sleep   ( $class, $ms ) { submit_c_job( 0, $ms, 0 ) < 0 ? 'Queue Full' : $class->yield('WAITING') }
+        sub await_core_id ($class)        { submit_c_job( 1, 0,   0 ) < 0 ? 'Queue Full' : $class->yield('WAITING') }
 
-        sub await_read ( $class, $fh ) {
+        sub await_read ( $class, $fh, $timeout = 5000 ) {
             my $fileno = fileno($fh);
             die 'Not a valid filehandle' unless defined $fileno;
             my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-            submit_c_job( 2, $handle ) < 0 ? 'Queue Full' : $class->yield('WAITING');
+            submit_c_job( 2, $handle, $timeout ) < 0 ? 'Queue Full' : $class->yield('WAITING');
         }
 
-        sub await_write ( $class, $fh ) {
+        sub await_write ( $class, $fh, $timeout = 5000 ) {
             my $fileno = fileno($fh);
             die 'Not a valid filehandle' unless defined $fileno;
             my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-            submit_c_job( 3, $handle ) < 0 ? 'Queue Full' : $class->yield('WAITING');
+            submit_c_job( 3, $handle, $timeout ) < 0 ? 'Queue Full' : $class->yield('WAITING');
         }
 
         sub poll_io {
