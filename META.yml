@@ -1,5 +1,5 @@
 ---
-abstract: ' '
+abstract: 'A dangerous hybrid of cooperative fibers and preemptive native threads'
 author:
   - 'Sanko Robinson <sanko@cpan.org>'
 build_requires:

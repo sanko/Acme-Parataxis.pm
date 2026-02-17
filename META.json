@@ -1,9 +1,9 @@
 {
-   "abstract" : " ",
+   "abstract" : "A dangerous hybrid of cooperative fibers and preemptive native threads",
    "author" : [
       "Sanko Robinson <sanko@cpan.org>"
    ],
-   "description" : " ",
+   "description" : "Acme::Parataxis is an experimental concurrency platform that merges cooperative user mode fibers with a preemptive native thread pool. It should allow thousands of concurrent 'green threads' to run alongside blocking C-level tasks without stalling the main event loop.",
    "dynamic_config" : 1,
    "generated_by" : "App::mii v1.0.0",
    "keywords" : [],
