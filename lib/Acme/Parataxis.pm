@@ -59,7 +59,7 @@ package Acme::Parataxis v0.0.1 {
                 last if $lib;
             }
         }
-        die "Could not find or load $lib_name" unless $lib;
+        die 'Could not find or load ' . $lib_name unless $lib;
         _bind_functions($lib);
     }
 

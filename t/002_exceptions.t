@@ -4,32 +4,48 @@ use blib;
 use Acme::Parataxis;
 use experimental 'class';
 #
+diag 'Testing exception handling in Acme::Parataxis fibers...';
 subtest 'Die inside coroutine, catch outside' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
+            pass 'Inside the sub. Hang on a sec while I die...';
             die 'Death in coro';
         }
     );
-    eval { $coro->call(); };
-    like( $@, qr/Death in coro/, 'Caught exception from coroutine' );
-    ok( $coro->is_done, 'Coroutine is marked as done after die' );
+    like dies { $coro->call(); }, qr/Death in coro/, 'Caught exception from coroutine';
+    ok $coro->is_done, 'Coroutine is marked as done after die';
 };
-subtest 'Eval inside coroutine' => sub {
+subtest 'eval inside coroutine' => sub {
     my $coro = Acme::Parataxis->new(
         code => sub {
-            eval { die 'Inner death'; };
-            return 'Survived: ' . $@;
+            pass 'Inside the sub. Hang on a sec while I die inside an eval...';
+            eval { die 'Inner death' };
+            my $err = $@;
+            return 'Survived: ' . $err;
         }
     );
-    my $res = $coro->call();
-    like( $res, qr/Survived: Inner death/, 'Inner eval caught the death' );
-    ok( $coro->is_done, 'Coroutine finished normally' );
+    like $coro->call(), qr/Survived: Inner death/, 'Inner eval caught the death';
+    ok $coro->is_done, 'Coroutine finished normally';
+};
+subtest 'try/catch inside coroutine' => sub {
+    my $coro = Acme::Parataxis->new(
+        code => sub {
+            diag 'Inside fiber: About to try/catch inner death...';
+            try { die 'Inner death' } catch ($e) {
+                return 'Survived: ' . $e;
+            }
+        }
+    );
+    like $coro->call(), qr/Survived: Inner death/, 'Inner catch block executed';
+    ok $coro->is_done, 'Coroutine finished normally';
 };
 subtest 'Nested coroutines exceptions' => sub {
     my $coro1 = Acme::Parataxis->new(
         code => sub {
+            diag 'Coro1: Spawning Coro2...';
             my $coro2 = Acme::Parataxis->new(
                 code => sub {
+                    diag 'Coro2: About to die...';
                     die 'Deep death';
                 }
             );
@@ -37,7 +53,6 @@ subtest 'Nested coroutines exceptions' => sub {
             return 'Coro2 survived?';
         }
     );
-    eval { $coro1->call(); };
-    like( $@, qr/Deep death/, 'Caught deep death' );
+    like dies { $coro1->call() }, qr/Deep death/, 'Caught deep death in top-level parent';
 };
 done_testing();
