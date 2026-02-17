@@ -42,9 +42,11 @@ our $DESTROYED = 0;
 {
 
     package Local::Destructor {
+        use Test2::V1 qw[diag];
         sub new { bless { name => pop @_ }, $_[0] }
 
-        sub DESTROY {
+        sub DESTROY ( $self, @ ) {
+            diag 'Destroy ' . $self->{name};
             $main::DESTROYED++;
         }
     }

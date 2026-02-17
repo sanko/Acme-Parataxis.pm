@@ -202,6 +202,7 @@ typedef struct {
     OP * op;          /**< Current Operation */
     PAD * comppad;    /**< Pad (Lexicals) */
     SV ** curpad;     /**< Current Pad Array */
+    PMOP * curpm;     /**< Current Pattern Match */
 
     // Fiber metadata
     SV * user_cv;  /**< The user's code SV (CV*) */
@@ -555,6 +556,7 @@ void swap_perl_state(my_coro_t * from, my_coro_t * to) {
     from->op = PL_op;
     from->comppad = PL_comppad;
     from->curpad = PL_curpad;
+    from->curpm = PL_curpm;
 
     // Load target stack
     PL_curstackinfo = to->si;
@@ -586,7 +588,12 @@ void swap_perl_state(my_coro_t * from, my_coro_t * to) {
     PL_curcop = to->curcop;
     PL_op = to->op;
     PL_comppad = to->comppad;
-    PL_curpad = to->curpad;
+    PL_curpm = to->curpm;
+
+    if (PL_comppad)
+        PL_curpad = AvARRAY(PL_comppad);
+    else
+        PL_curpad = to->curpad;
 }
 
 /**
@@ -644,6 +651,7 @@ void init_perl_stacks(my_coro_t * c) {
     c->curcop = PL_curcop;
     c->op = PL_op;
     c->top_env = PL_top_env;
+    c->curpm = PL_curpm;
 
     // Start with fresh pads to avoid interfering with caller.
     c->comppad = NULL;
