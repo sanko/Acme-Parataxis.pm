@@ -126,14 +126,15 @@ package Acme::Parataxis v0.0.7 {
 
         method is_done () {
             return 1 if $is_done;
-            return 0 if $id < 0;
-            return 0 unless Acme::Parataxis::is_finished($id);
-            $is_done = 1;
-            my $old_id = $id;
-            $id = -1;
-            my $self_ref = delete $REGISTRY{$old_id};
-            Acme::Parataxis::destroy_coro($old_id) if $old_id >= 0;
-            return 1;
+            if ( defined $id && $id >= 0 && Acme::Parataxis::is_finished($id) ) {
+                $is_done = 1;
+                my $old_id = $id;
+                $id = -1;
+                delete $REGISTRY{$old_id};
+                Acme::Parataxis::destroy_coro($old_id);
+                return 1;
+            }
+            return 0;
         }
 
         method await () {
