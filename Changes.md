@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Resolved assertion failures in `Perl_cx_popsub_args` and `Perl_pp_entersub` when running on a `DEBUGGING` build of Perl. This was fixed by ensuring `CvDEPTH` and pads are correctly restored during context switches. (I hope...)
+
+### Added
+- Added `--debug` build to GitHub Actions matrix to ensure future compatibility with Perl debugging builds.
+
+### Changed
+- Refactored `swap_perl_state` to be more robust regarding Perl's internal stack management.
+
 ## [v0.0.5] - 2026-02-18
 
 ### Changed

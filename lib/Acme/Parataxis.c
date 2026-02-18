@@ -511,6 +511,31 @@ DLLEXPORT SV * maybe_yield() {
 }
 
 /**
+ * @brief Activates subroutines in the current context stack by restoring their depths.
+ *
+ * Each fiber needs its own view of the call depth for subroutines it is currently
+ * executing. This *should* prevent assertion failures in Perl's pad management (see
+ * https://www.cpantesters.org/cpan/report/6b3fa766-0c98-11f1-83fe-bd6d137c6e88) and ensures
+ * that recursive calls or multiple fibers running the same sub use distinct pads.
+ */
+static void _activate_current_depths(pTHX) {
+    PERL_SI * si = PL_curstackinfo;
+    if (!si || !si->si_cxstack)
+        return;
+    for (I32 i = 0; i <= si->si_cxix; i++) {
+        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
+        if (CxTYPE(cx) == CXt_SUB) {
+            CV * cv = cx->blk_sub.cv;
+            if (cv && SvTYPE((SV *)cv) == SVt_PVCV) {
+                // Restore CvDEPTH to the depth this context expects.
+                // The current depth is exactly olddepth + 1
+                CvDEPTH(cv) = cx->blk_sub.olddepth + 1;
+            }
+        }
+    }
+}
+
+/**
  * @brief Swaps the complete Perl Interpreter state between two contexts.
  *
  * This function manually saves and restores the global pointers that the
@@ -597,6 +622,9 @@ void swap_perl_state(my_coro_t * from, my_coro_t * to) {
         PL_curpad = AvARRAY(PL_comppad);
     else
         PL_curpad = to->curpad;
+
+    // Restore depths for the newly loaded SI.
+    _activate_current_depths(aTHX);
 }
 
 /**
@@ -663,6 +691,7 @@ void init_perl_stacks(my_coro_t * c) {
 
 DLLEXPORT int init_system() {
     dTHX;
+    main_context.si = PL_curstackinfo;
     main_context.transfer_data = &PL_sv_undef;
     main_context.id = -1;
     main_context.finished = 0;

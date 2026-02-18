@@ -42,6 +42,7 @@ jobs:
           - -Dusethreads
           - -Duselongdouble
           - -Dusequadmath
+          - --debug
         os:
           - ubuntu-24.04
         perl: '${{ fromJSON(needs.setup.outputs.matrix).perl }}'
@@ -119,7 +120,7 @@ jobs:
           DATA: |
             {
               "perl":  ["5.42.0"],
-              "flags": ["", "-Dusethreads", "-Duselongdouble", "-Dusequadmath"]
+              "flags": ["", "-Dusethreads", "-Duselongdouble", "-Dusequadmath", "--debug"]
             }
         id: matrix
         run: "jq -rn 'env.DATA | fromjson | @json \"matrix=\\(.)\"' > $GITHUB_OUTPUT\n"
