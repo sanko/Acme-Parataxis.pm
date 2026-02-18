@@ -902,11 +902,8 @@ DLLEXPORT int create_coro_ptr(SV * user_code, SV * self_ref) {
     c->context.uc_link = &main_context.context;
     makecontext(&c->context, (void (*)())posix_entry, 1, c->id);
 #endif
-
-
     return idx;
 }
-
 
 DLLEXPORT SV * coro_call(int id, SV * args) {
     dTHX;
@@ -923,6 +920,16 @@ DLLEXPORT SV * coro_call(int id, SV * args) {
 
     coroutines[id]->parent_id = current_coro_index;
     perform_switch(id);
+
+    // If the fiber finished during this call, ensure we release the arguments
+    // we passed to it. The results are in our own transfer_data.
+    if (coroutines[id] && coroutines[id]->finished) {
+        if (coroutines[id]->transfer_data && coroutines[id]->transfer_data != &PL_sv_undef) {
+            SvREFCNT_dec(coroutines[id]->transfer_data);
+            coroutines[id]->transfer_data = &PL_sv_undef;
+        }
+    }
+
     my_coro_t * me = (current_coro_index == -1) ? &main_context : coroutines[current_coro_index];
     SV * res = me->transfer_data;
     me->transfer_data = &PL_sv_undef;
@@ -949,6 +956,16 @@ DLLEXPORT SV * coro_transfer(int id, SV * args) {
     }
 
     perform_switch(id);
+
+    // If the target fiber was a real fiber (not main) and it finished during this transfer,
+    // ensure we release the arguments we passed to it.
+    if (id >= 0 && coroutines[id] && coroutines[id]->finished) {
+        if (coroutines[id]->transfer_data && coroutines[id]->transfer_data != &PL_sv_undef) {
+            SvREFCNT_dec(coroutines[id]->transfer_data);
+            coroutines[id]->transfer_data = &PL_sv_undef;
+        }
+    }
+
     my_coro_t * me = (current_coro_index == -1) ? &main_context : coroutines[current_coro_index];
     SV * res = me->transfer_data;
     me->transfer_data = &PL_sv_undef;
