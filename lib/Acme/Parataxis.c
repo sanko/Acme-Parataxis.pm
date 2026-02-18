@@ -65,6 +65,7 @@ typedef pthread_mutex_t para_mutex_t;
 #endif
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,7 @@ typedef pthread_mutex_t para_mutex_t;
 // Forward declarations
 DLLEXPORT SV * coro_yield(SV * ret_val);
 DLLEXPORT SV * coro_transfer(int id, SV * args);
+DLLEXPORT void destroy_coro(int id);
 
 // Identity and affinity Helpers
 /**
@@ -168,7 +170,8 @@ typedef struct {
     coro_handle_t context; /**< OS-specific context handle */
 
 #ifndef _WIN32
-    char stack[2 * 1024 * 1024]; /**< Dedicated 2MB C-stack for POSIX (Perl needs deep stacks) */
+    void * stack_p;  /**< Dynamically allocated stack */
+    size_t stack_sz; /**< Size of the stack */
 #endif
 
     /*
@@ -848,27 +851,33 @@ DLLEXPORT int create_coro_ptr(SV * user_code, SV * self_ref) {
     c->self_ref = self_ref;
     if (self_ref && self_ref != &PL_sv_undef)
         SvREFCNT_inc(self_ref);
-
     c->id = idx;
     c->parent_id = -1;
     c->last_sender = -1;
     c->transfer_data = &PL_sv_undef;
-
+    coroutines[idx] = c;
     init_perl_stacks(c);
-
 #ifdef _WIN32
     c->context = CreateFiber(0, fiber_entry, c);
 #else
+    c->stack_sz = 2 * 1024 * 1024;
+    // posix_memalign ensures 16-byte alignment
+    if (posix_memalign(&c->stack_p, 16, c->stack_sz) != 0) {
+        destroy_coro(idx);  // Clean up partially created coro
+        return -3;
+    }
+
     getcontext(&c->context);
-    c->context.uc_stack.ss_sp = c->stack;
-    c->context.uc_stack.ss_size = sizeof(c->stack);
+    c->context.uc_stack.ss_sp = c->stack_p;
+    c->context.uc_stack.ss_size = c->stack_sz;
     c->context.uc_link = &main_context.context;
     makecontext(&c->context, (void (*)())posix_entry, 1, c->id);
 #endif
 
-    coroutines[idx] = c;
+
     return idx;
 }
+
 
 DLLEXPORT SV * coro_call(int id, SV * args) {
     dTHX;
@@ -981,6 +990,10 @@ DLLEXPORT void destroy_coro(int id) {
     }
 
     if (PL_dirty) {
+#ifndef _WIN32
+        if (c->stack_p)
+            free(c->stack_p);
+#endif
         free(c);
         return;
     }
@@ -988,6 +1001,9 @@ DLLEXPORT void destroy_coro(int id) {
 #ifdef _WIN32
     if (c->context)
         DeleteFiber(c->context);
+#else
+    if (c->stack_p)
+        free(c->stack_p);
 #endif
 
     // Now, it should be safe for cleanup
