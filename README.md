@@ -72,234 +72,217 @@ the `Acme::` namespace for a reason. It manually manipulates Perl's internal sta
 dangerous. It's irresponsible, honestly, that I'm even putting this terrible idea into the world. Close the browser and
 clear your history before this does further harm!
 
-# Scheduler Functions
+# CORE CONCEPTS
 
-These functions are intended to be used with or within a `run( )` block.
+## The Scheduler
+
+The simplest way to use this module is via `Acme::Parataxis::run`. This sets up an event loop that manages all fibers.
+Within this loop, you use `spawn` to start new tasks.
+
+## Fibers vs. Threads
+
+In Parataxis, your **Perl code** always runs on a single OS thread. However, when you call an `await_*` function, the
+current fiber is suspended, and the work is performed on a **different** OS thread. Once the work is done, your fiber is
+resumed back on the main thread.
+
+# SCHEDULER FUNCTIONS
 
 ## `run( $code )`
 
-Starts the event loop and executes the provided coderef as the "main" fiber. The loop continues as long as there are
-active fibers or pending I/O.
+Starts the event loop and executes `$code` as the first fiber. The loop runs until all spawned fibers have completed.
 
 ```perl
 Acme::Parataxis::run(sub {
-    # Your application code here
+    # Your code here...
 });
 ```
 
 ## `spawn( $code )`
 
-Creates a new fiber and adds it to the scheduler queue. Returns an `Acme::Parataxis::Future` representing the eventual
-result of the fiber.
+Creates a new fiber and adds it to the scheduler's queue. Returns a [Future](#acme-parataxis-future-object-methods).
 
 ```perl
 my $future = Acme::Parataxis->spawn(sub {
-    # Do work...
-    return 'Finished!';
+    return "Hello from fiber #" . Acme::Parataxis->current_fid;
 });
 ```
 
 ## `yield( @args )`
 
-Suspends the current fiber and returns control to the scheduler. Any `@args` passed will be returned by the `call( )`
-or `transfer( )` that resumes this fiber.
-
-```perl
-# Wait for a specific signal or event
-my @received = Acme::Parataxis->yield('READY');
-```
+Pauses the current fiber and gives other fibers a chance to run. If `@args` are provided, they are passed to the
+context that resumes this fiber.
 
 ## `stop( )`
 
-Signals the scheduler to stop. It will finish the current iteration of the loop and exit.
+Tells the scheduler to exit the loop after the current iteration.
 
-```perl
-# Stop the loop from within a fiber
-Acme::Parataxis->spawn(sub {
-    say 'Worker: Telling the scheduler to pack it up...';
-    Acme::Parataxis::stop();
-});
-```
+# BLOCKING & I/O FUNCTIONS
 
-# I/O and Other Blocking Functions
-
-These functions suspend the current fiber and offload work to background threads or poll for I/O.
+These functions **suspend** the current fiber and offload work to the thread pool.
 
 ## `await_sleep( $ms )`
 
-Non-blocking sleep. The fiber is suspended, and a background thread handles the actual timer. The fiber resumes after
-`$ms` milliseconds.
-
-```
-say 'Sleeping...';
-Acme::Parataxis->await_sleep(500);
-say 'Woke up!';
-```
+Suspends the fiber for `$ms` milliseconds. Other fibers continue to run during this time.
 
 ## `await_read( $fh, $timeout = 5000 )`
 
-Suspends the current fiber until the given filehandle is ready for reading, or until `$timeout` milliseconds have
-elapsed. Works best with non-blocking sockets.
+Wait for a filehandle (usually a socket) to become ready for reading.
 
 ```perl
-$socket->blocking( 0 );
-my $res = Acme::Parataxis->await_read( $socket, 1000 );
-if ($res > 0) {
+my $status = Acme::Parataxis->await_read($socket);
+if ($status > 0) {
     my $data = <$socket>;
 }
 ```
 
 ## `await_write( $fh, $timeout = 5000 )`
 
-Suspends the current fiber until the given filehandle is ready for writing, or until `$timeout` milliseconds have
-elapsed. Useful for non-blocking network communication.
-
-```perl
-$socket->blocking( 0 );
-my $res = Acme::Parataxis->await_write( $socket, 1000 );
-if ($res > 0) {
-    $socket->print( 'Hello World\n' );
-}
-```
+Wait for a filehandle to become ready for writing.
 
 ## `await_core_id( )`
 
-Offloads a request to a background thread to find which CPU core it's running on. Useful for demonstrating thread
-affinity.
+A utility function that returns the ID of the CPU core the background worker ran on.
+
+# MANUAL FIBER MANAGEMENT
+
+For advanced users who want to manage context switching themselves without the integrated scheduler.
+
+## `new( code => $sub )`
+
+Creates a new fiber object.
 
 ```perl
-my $core = Acme::Parataxis->await_core_id( );
-say 'Worker ran on CPU core: ' .$core;
+my $fiber = Acme::Parataxis->new(code => sub { ... });
 ```
 
-# Preemption Functions
+## `call( @args )`
+
+Switches to the fiber and passes `@args`. Returns when the fiber yields or finishes. This establishes a parent/child
+relationship.
+
+## `transfer( @args )`
+
+A "symmetric" switch. Suspends the current fiber and moves directly to the target. No parent/child relationship is
+tracked. Ideal for state machines or producer/consumer "dances".
+
+# PREEMPTION
 
 ## `maybe_yield( )`
 
-Increments a per-fiber counter. If it exceeds the threshold, the fiber yields. Insert this into tight loops to ensure
-other fibers get a chance to run.
+Increments an internal counter. If it hits the threshold, the fiber yields.
 
 ```perl
-for (1..1_000_000) {
-    do_math($_);
-    Acme::Parataxis->maybe_yield( );
+while (my $row = $sth->fetch) {
+    process($row);
+    Acme::Parataxis->maybe_yield(); # Prevent starvation
 }
 ```
 
-## `set_preempt_threshold( $count )`
+## `set_preempt_threshold( $val )`
 
-Sets how many `maybe_yield( )` calls trigger a context switch. Default is 0 (disabled).
-
-```
-Acme::Parataxis::set_preempt_threshold( 500 );
-```
+Sets the number of `maybe_yield` calls before a forced yield occurs. Default is 0 (disabled).
 
 # Class Methods
 
 ## `tid( )`
 
-Returns the OS Thread ID. Useful to prove that all fibers run on the same main thread.
+Returns the Operating System's unique Thread ID for the main interpreter thread.
 
-## `fid( )`
+## `current_fid( )`
 
-Returns the current Fiber ID (0, 1, 2, ...).
+Returns the unique ID of the currently executing fiber. Returns -1 if called from the main thread outside of any fiber.
 
 ## `root( )`
 
-Returns a proxy object for the "root" (main) context. Useful for `transfer( )`-ing back from deeply nested fibers.
+Returns a proxy object representing the "root" (main) execution context. Useful for symmetric transfers back to the
+main thread.
 
-```
-Acme::Parataxis->root->transfer( );
-```
+# Acme::Parataxis OBJECT METHODS
 
-# Acme::Parataxis Object Methods
+## `fid( )`
 
-## `new( code => $sub )`
-
-Creates a new fiber without enqueuing it in the scheduler. This is useful for manual control outside of the `run( )`
-loop.
-
-```perl
-my $coro = Acme::Parataxis->new(code => sub ($name) {
-    say "Hello, $name!";
-    return 'Done';
-});
-```
-
-## `call( @args )`
-
-Resumes the fiber and passes `@args` to it. Returns whatever the fiber passes to `yield( )` or its final return
-value.
-
-```perl
-my $result = $coro->call('World');
-say $result; # "Done"
-```
-
-## `transfer( @args )`
-
-Like `call( )`, but doesn't assume a parent/child relationship. It directly swaps the current fiber for the target
-one. This is ideal for symmetric coroutines like a producer-consumer "dance".
-
-```perl
-my ($producer, $consumer);
-$producer = Acme::Parataxis->new(code => sub {
-    say 'Producer: Sending item...';
-    $consumer->transfer('Apple');
-    say 'Producer: Done.';
-});
-$consumer = Acme::Parataxis->new(code => sub {
-    my $item = Acme::Parataxis->yield();
-    say 'Consumer: Received '. $item;
-    $producer->transfer();
-});
-
-$consumer->call(); # Prime consumer
-$producer->call(); # Start producer
-```
+Returns the unique numeric ID assigned to this specific fiber object.
 
 ## `is_done( )`
 
-Returns true if the fiber has finished execution (returned or died).
+Returns true if the fiber has finished execution (either returned or died).
 
-```
-if ($coro->is_done) {
-    say 'Fiber has finished its work (or crashed).';
-}
-```
+# Acme::Parataxis::Future OBJECT METHODS
 
-# Acme::Parataxis::Future Object Methods
+When you `spawn` a task, you get a Future object.
 
 ## `await( )`
 
-Suspends the current fiber until the future is ready. Returns the result or dies if the fiber threw an exception.
+Suspends the current fiber until the future has a result. Returns the result or **dies** if the fiber encountered an
+error.
 
 ## `is_ready( )`
 
-Returns true if the result (or error) has been populated.
+Returns true if the fiber has finished.
 
 ## `result( )`
 
-Returns the result immediately. Dies if the future is not ready or if it contains an error.
+Returns the result immediately. Croaks if the future is not ready.
 
-# Exception Handling
+# EXAMPLES
 
-Exceptions thrown inside a fiber are caught and stored. If you are using the scheduler, calling `await( )` on a future
-will re-throw the exception.
+## Parallel Web Fetching (Simulated)
 
 ```perl
+use Acme::Parataxis;
+
 Acme::Parataxis::run(sub {
-    my $f = Acme::Parataxis->spawn(sub { die 'Oops!' });
-    eval {
-        $f->await( );
-    };
-    if ($@) {
-        warn "Caught fiber death: $@";
+    my @urls = qw(url1 url2 url3 url4);
+    my @futures;
+
+    for my $url (@urls) {
+        push @futures, Acme::Parataxis->spawn(sub {
+            say "Fetching $url...";
+            Acme::Parataxis->await_sleep(int rand 1000); # Simulate network latency
+            return "Content of $url";
+        });
+    }
+
+    for my $f (@futures) {
+        say "Got: " . $f->await();
     }
 });
 ```
 
-# Gory Technical Details
+## Producer/Consumer Dance (Symmetric Coroutines)
+
+```perl
+my ($p, $c);
+
+$p = Acme::Parataxis->new(code => sub {
+    for my $item (qw(Apple Banana Cherry)) {
+        say "Producer: Sending $item";
+        $c->transfer($item);
+    }
+    $c->transfer('DONE');
+});
+
+$c = Acme::Parataxis->new(code => sub {
+    while (1) {
+        my $item = Acme::Parataxis->yield();
+        last if $item eq 'DONE';
+        say "Consumer: Eating $item";
+        $p->transfer();
+    }
+});
+
+$c->call(); # Prime the consumer
+$p->call(); # Start the producer
+```
+
+# BEST PRACTICES & GOTCHAS
+
+- **No blocking system calls:** Avoid calling `sleep()` or blocking `read()` directly on the main thread. Use `await_sleep` and `await_read` instead.
+- **Thread Safety:** Remember that while fibers run on one thread, C-level callbacks and `await_*` tasks run on **different** threads. Ensure any shared C-level data is protected by mutexes.
+- **Context Sensitivity:** Some Perl features that rely heavily on the C-stack (like certain regex engines or deep recursion) might behave unexpectedly if stack limits are exceeded.
+- **Cleaning up:** Always ensure your `Acme::Parataxis` objects go out of scope so that their C-level stacks can be freed.
+
+# GORY TECHNICAL DETAILS
 
 If you've made it this far, you're either a glutton for punishment or an AI ubercorp's web scrapper trying to learn how
 to write Perl.
@@ -328,12 +311,25 @@ Unlike "Generators" or "Async/Await" which have a rigid parent/child structure, 
 coroutines. Control can be passed sideways between any two fibers. This is (in theory) a "true" coroutine model, and
 it's also twice as likely to leave your stack in a state that would make p5p curse my name.
 
-## C-Stack Allocation
+## Stack Swapping
 
-On POSIX systems, every fiber gets its own 2MB C-stack. We do this because Perl's internal functions (especially during
-regex matching or deeply nested calls) can be incredibly hungry for stack space. On Windows, we use the Fiber API which
-manages the C-stack for us. In both cases, we're manually swapping the CPU registers and the Perl interpreter's
-internal pointers. Heart surgery with a rusty spoon.
+On POSIX systems, every fiber gets its own 2MB C-stack via `ucontext.h`. We do this because Perl's internal functions
+(especially during regex matching or deeply nested calls) can be incredibly hungry for stack space. On Windows, we use
+the native `Fiber API` which manages the C-stack for us. In both cases, we're manually swapping the CPU registers and
+the Perl interpreter's internal pointers. Heart surgery with a rusty spoon.
+
+## Perl State Management
+
+Simply swapping the C stack isn't enough for Perl. We also have to manually teleport the interpreter's internal
+pointers, including:
+
+- `PL_curstackinfo` (Context frames)
+- `PL_markstack` (List boundaries)
+- `PL_scopestack` (Lexical scopes)
+- `PL_savestack` (Local variables)
+- `PL_tmps_stack` (Mortal SVs)
+
+Without swapping these, Perl would quickly become confused about which variables belong to which fiber.
 
 ## `eval` vs. `try/catch`
 

@@ -12,19 +12,19 @@ sub flush_stack {
     Acme::Parataxis->new( code => sub {1} )->call();
 }
 subtest 'Return Hash Reference' => sub {
-    my $coro = Acme::Parataxis->new(
+    my $fiber = Acme::Parataxis->new(
         code => sub {
             return { key => 'value', nested => [ 1, 2, 3 ] };
         }
     );
-    my $res = $coro->call();
+    my $res = $fiber->call();
     is ref $res,       'HASH',      'Returned a HASH reference';
     is $res->{key},    'value',     'Hash key is correct';
     is $res->{nested}, [ 1, 2, 3 ], 'Nested array is correct';
-    ok $coro->is_done, 'Fiber finished';
+    ok $fiber->is_done, 'Fiber finished';
 };
 subtest 'Yield and Resume with Complex Data' => sub {
-    my $coro = Acme::Parataxis->new(
+    my $fiber = Acme::Parataxis->new(
         code => sub {
             my $input = Acme::Parataxis->yield( { status => 'waiting' } );
             is( ref $input, 'ARRAY', 'Received an ARRAY reference via yield' );
@@ -32,10 +32,10 @@ subtest 'Yield and Resume with Complex Data' => sub {
         }
     );
     diag 'Calling fiber (step 1)...';
-    my $yielded = $coro->call();
+    my $yielded = $fiber->call();
     is $yielded->{status}, 'waiting', 'Yielded HASH correctly';
     diag 'Resuming fiber with an array ref...';
-    my $final = $coro->call( [ 'A', 'B' ] );
+    my $final = $fiber->call( [ 'A', 'B' ] );
     is $final->{received}, [ 'A', 'B' ], 'Final return contains the resumed data';
 };
 our $DESTROYED = 0;
@@ -55,14 +55,14 @@ subtest 'Objects with Destructors' => sub {
     $DESTROYED = 0;
     subtest 'Passing object into fiber' => sub {
         {
-            my $obj  = Local::Destructor->new('A');
-            my $coro = Acme::Parataxis->new(
+            my $obj   = Local::Destructor->new('A');
+            my $fiber = Acme::Parataxis->new(
                 code => sub ($o) {
                     isa_ok $o, ['Local::Destructor'], 'Fiber returned object';
                     return 'OK';
                 }
             );
-            $coro->call($obj);
+            $fiber->call($obj);
             $obj = undef;    # Local ref gone
 
             # Fiber should have finished and reported its results, releasing the arg
@@ -73,13 +73,13 @@ subtest 'Objects with Destructors' => sub {
     subtest 'Returning object from fiber' => sub {
         my $res;
         {
-            my $coro = Acme::Parataxis->new( code => sub { Local::Destructor->new('B') } );
-            $res = $coro->call();
+            my $fiber = Acme::Parataxis->new( code => sub { Local::Destructor->new('B') } );
+            $res = $fiber->call();
             isa_ok $res, ['Local::Destructor'], 'Fiber returned object';
 
             # Fiber is technically done, but we manually flag it to ensure
             # the Perl-side wrapper drops its internal references.
-            $coro->is_done();
+            $fiber->is_done();
             is $DESTROYED, 0, 'Object still alive in parent var';
         }
         $res = undef;

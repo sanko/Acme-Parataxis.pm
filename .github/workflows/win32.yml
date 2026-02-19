@@ -18,11 +18,11 @@ jobs:
       - name: Run tests
         run: |
           perl -V
-
+          
           perl Build.PL
           ./Build
           ./Build test --v
-
+          
           if ($LASTEXITCODE -eq 0) {
             perl -V > test-output-${{ inputs.os }}-${{ inputs.perl }}${{ inputs.flags }}.txt
           } else {
