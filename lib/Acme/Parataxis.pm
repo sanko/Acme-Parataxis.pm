@@ -1,4 +1,4 @@
-package Acme::Parataxis v0.0.7 {
+package Acme::Parataxis v0.0.8 {
     use v5.40;
     use experimental qw[class try];
     use Affix;
