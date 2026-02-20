@@ -759,8 +759,7 @@ void init_perl_stacks(para_fiber_t * c) {
     // Link the SI to the AV. Perl uses this linkage during stack unwinding/garbage collection.
     c->si->si_stack = c->curstack;
 
-    // Allocate Control Stacks
-    I32 sz = 2048;  // Depth of 2048 to support Test2::Vx and, well, unknown depth recursions in general
+    I32 sz = 4096;
 
     Newx(c->markstack, sz, I32);
     c->markstack_ptr = c->markstack;
