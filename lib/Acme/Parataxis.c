@@ -294,7 +294,7 @@ typedef struct {
 // Global Registry and State
 
 /** @brief Maximum number of concurrent fibers allowed */
-#define MAX_FIBERS 128
+#define MAX_FIBERS 1024
 /** @brief Array of active fiber structures */
 static para_fiber_t * fibers[MAX_FIBERS];
 /** @brief The context representing the main Perl thread */
