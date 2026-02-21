@@ -37,8 +37,8 @@ The classic way (as I write this, Acme::Parataxis is 5 days old and already has 
             );
 
             # Block current fiber until results are ready (without blocking the thread)
-            say 'Result 1: ' . $f1->await();
-            say 'Result 2: ' . $f2->await();
+            say 'Result 1: ' . $f1->await( );
+            say 'Result 2: ' . $f2->await( );
         }
     );
 
@@ -72,13 +72,13 @@ Or do things the more modern way:
 =head1 DESCRIPTION
 
 C<Acme::Parataxis> implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the
-L<Wren|https://wren.io/concurrency.html> programming scripting language. It combines cooperative multitasking (fibers)
-with a preemptive native thread pool.
+L<Wren|https://wren.io/concurrency.html> programming language. It combines cooperative multitasking (fibers) with a
+preemptive native thread pool.
 
 Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
 While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
-concurrency deterministic and easier to reason about. You don't have to worry about random context switches clobbering
-your data.
+concurrency deterministic and easier to reason about. You (probably) don't have to worry about random context switches
+clobbering your data.
 
 Fibers are incredibly lightweight. Each one has its own stack and context, but they don't use OS thread resources. You
 can easily create thousands of them without stalling your system.
@@ -87,7 +87,7 @@ can easily create thousands of them without stalling your system.
 
 I had this idea while writing cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
 for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
-attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of
+attempt at combining cooperative multitasking (green threads or fibers or whatever they're called in the latest edit of
 Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
 
 This module is experimental and resides in the C<Acme::> namespace for a reason. It manually manipulates Perl's
@@ -104,8 +104,8 @@ C<:all> tag) that provide a more modern, concise way to write concurrent code.
 
 =head2 C<async { ... }>
 
-A convenience wrapper around C<run()>. It starts the scheduler, executes the provided block as the main fiber, and
-automatically calls C<stop()> when the block completes.
+A convenience wrapper around C<run( )>. It starts the scheduler, executes the provided block as the main fiber, and
+automatically calls C<stop( )> when the block completes.
 
     async {
         say "The scheduler is running!";
@@ -113,7 +113,7 @@ automatically calls C<stop()> when the block completes.
 
 =head2 C<fiber { ... }>
 
-An alias for C<spawn()>. It creates a new fiber and returns a L<Future|/"Acme::Parataxis::Future OBJECT METHODS">.
+An alias for C<spawn( )>. It creates a new fiber and returns a L<Future|/"Acme::Parataxis::Future OBJECT METHODS">.
 
     my $f = fiber {
         say "Hello from fiber!";
@@ -162,7 +162,7 @@ Returns the ID of the CPU core currently executing the background task. This is 
 the request to the thread pool and suspends the fiber until the result is ready.
 
     async {
-        my $core = await_core_id();
+        my $core = await_core_id( );
         say "Background task handled by CPU core: $core";
     };
 
@@ -183,7 +183,7 @@ Creating a fiber does not run it immediately. It simply prepares the context and
 
 To run a fiber, you "call" it. This suspends the current fiber and executes the called one until it finishes or yields.
 
-    $fiber->call();
+    $fiber->call( );
 
 When the called fiber finishes, control returns to the fiber that called it. It is an error to call a fiber that is
 already done.
@@ -195,7 +195,7 @@ Yielding is the "secret sauce" of fibers.
 A yielded fiber passes control back to its caller but remembers its exact state including all variables and the current
 instruction pointer. The next time it's called, it resumes exactly where it left off.
 
-    Acme::Parataxis->yield();
+    Acme::Parataxis->yield( );
 
 =head2 Communication (Passing Values)
 
@@ -203,27 +203,27 @@ Fibers can pass data back and forth through C<call> and C<yield>:
 
 =over
 
-=item * B<Resuming with a value>: Arguments passed to C<$fiber-E<gt>call(@args)> are returned by the C<yield()> call that
+=item * B<Resuming with a value>: Arguments passed to C<$fiber-E<gt>call(@args)> are returned by the C<yield( )> call that
 suspended the fiber.
 
 =item * B<Yielding with a value>: Arguments passed to C<Acme::Parataxis-E<gt>yield(@args)> are returned to the caller by
-the C<call()> that resumed the fiber.
+the C<call( )> that resumed the fiber.
 
 =back
 
 =head2 Full Coroutines
 
 Fibers in Parataxis are "full coroutines." This means they can suspend from anywhere in the callstack. You can call
-C<yield()> from deeply nested functions, and the entire fiber stack will be suspended until the fiber is resumed.
+C<yield( )> from deeply nested functions, and the entire fiber stack will be suspended until the fiber is resumed.
 
 =head2 Transferring Control
 
-While C<call()> and C<yield()> manage a stack-like chain of execution, C<transfer()> provides an unstructured way to
+While C<call( )> and C<yield( )> manage a stack-like chain of execution, C<transfer( )> provides an unstructured way to
 switch between fibers. When you transfer to a fiber, the current one is suspended, and the target fiber resumes. Unlike
-C<call()>, transferring does not establish a parent/child relationship. It's more like a C<goto> for execution
+C<call( )>, transferring does not establish a parent/child relationship. It's more like a C<goto> for execution
 contexts.
 
-    $other_fiber->transfer();
+    $other_fiber->transfer( );
 
 =head2 Fibers vs. Threads
 
@@ -274,7 +274,7 @@ Sets the maximum number of worker threads the pool is allowed to spawn. By defau
 logical CPU cores detected on your system (up to a hard limit of 64).
 
     # Limit the pool to 4 threads
-    Acme::Parataxis->set_max_threads(4);
+    set_max_threads(4);
 
 =head2 C<max_threads( )>
 
@@ -338,7 +338,7 @@ C<set_preempt_threshold>, the fiber automatically yields.
 
     while (my $row = $sth->fetch) {
         process($row);
-        Acme::Parataxis->maybe_yield(); # Cooperatively prevent starvation
+        Acme::Parataxis->maybe_yield( ); # Cooperatively prevent starvation
     }
 
 =head2 C<set_preempt_threshold( $val )>
@@ -427,12 +427,12 @@ underlying I/O is ready.
         sub _do_timeout {
             my ($self, $type, $timeout) = @_;
             $timeout //= $self->{timeout} // 60;
-            my $start = time();
+            my $start = time;
             while (1) {
                 # Check for readiness NOW (0 timeout)
                 return 1 if $self->SUPER::_do_timeout($type, 0);
                 # Check for overall timeout
-                my $elapsed = time() - $start;
+                my $elapsed = time - $start;
                 return 0 if $elapsed > $timeout;
                 # Suspend fiber and wait for background I/O check
                 my $wait = ($timeout - $elapsed) > 0.5 ? 0.5 : ($timeout - $elapsed);
@@ -465,7 +465,7 @@ This example demonstrates how to perform multiple HTTP requests concurrently on 
         } @urls;
 
         # Collect results as they become ready
-        say "Status for $urls[$_]: " . $futures[$_]->await() for 0..$#urls;
+        say "Status for $urls[$_]: " . $futures[$_]->await( ) for 0..$#urls;
     });
 
 =head2 Symmetric Producer/Consumer
@@ -483,22 +483,22 @@ A low-level example of Passing control sideways between fibers.
     });
 
     $c = Acme::Parataxis->new(code => sub {
-        my $item = Acme::Parataxis->yield(); # Initial wait
+        my $item = Acme::Parataxis->yield( ); # Initial wait
         while (1) {
             last if $item eq 'DONE';
             say "Consumer: Eating $item";
-            $item = $p->transfer();
+            $item = $p->transfer( );
         }
     });
 
-    $c->call(); # Prime consumer
-    $p->call(); # Start producer
+    $c->call( ); # Prime consumer
+    $p->call( ); # Start producer
 
 =head1 BEST PRACTICES & GOTCHAS
 
 =over
 
-=item * B<Avoid blocking syscalls:> Never call blocking C<sleep()> or C<sysread()> on the main interpretation thread.
+=item * B<Avoid blocking syscalls:> Never call blocking C<sleep( )> or C<sysread( )> on the main interpretation thread.
 Always use the C<await_*> equivalents to offload work to the pool.
 
 =item * B<Thread Safety:> While Perl code remains single-threaded, background tasks run on separate OS threads. Shared

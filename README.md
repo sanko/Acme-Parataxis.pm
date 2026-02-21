@@ -4,7 +4,7 @@ Acme::Parataxis - A terrible idea, honestly...
 
 # SYNOPSIS
 
-The classic way (as I write this, Acme::Parataxis is 5 days old and already has a 'classic' API...)
+The classic way:
 
 ```perl
 use v5.40;
@@ -72,12 +72,12 @@ async {
 # DESCRIPTION
 
 `Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the
-[Wren](https://wren.io/concurrency.html) programming scripting language. It combines cooperative multitasking (fibers)
-with a preemptive native thread pool.
+[Wren](https://wren.io/concurrency.html) programming language. It combines cooperative multitasking (fibers) with a
+preemptive native thread pool.
 
 Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
 While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
-concurrency deterministic and easier to reason about. You don't have to worry about random context switches clobbering
+concurrency deterministic and easier to reason about. You (probably) don't have to worry about random context switches clobbering
 your data.
 
 Fibers are incredibly lightweight. Each one has its own stack and context, but they don't use OS thread resources. You
@@ -87,7 +87,7 @@ can easily create thousands of them without stalling your system.
 
 I had this idea while writing cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
 for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
-attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of
+attempt at combining cooperative multitasking (green threads or fibers or whatever they're called in the latest edit of
 Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
 
 This module is experimental and resides in the `Acme::` namespace for a reason. It manually manipulates Perl's
@@ -210,8 +210,8 @@ already done.
 
 Yielding is the "secret sauce" of fibers.
 
-A yielded fiber passes control back to its caller but remembers its exact state including all variables and the current
-instruction pointer. The next time it's called, it resumes exactly where it left off.
+A yielded fiber passes control back to its caller but remembers its exact state including all variables and the
+current instruction pointer. The next time it's called, it resumes exactly where it left off.
 
 ```
 Acme::Parataxis->yield();
@@ -221,7 +221,7 @@ Acme::Parataxis->yield();
 
 Fibers can pass data back and forth through `call` and `yield`:
 
-- **Resuming with a value**: Arguments passed to `$fiber->call(@args)` are returned by the `yield()` call that
+- **Resuming with a value**: Arguments passed to `$fiber->call(@args)` are returned by the `yield( )` call that
 suspended the fiber.
 - **Yielding with a value**: Arguments passed to `Acme::Parataxis->yield(@args)` are returned to the caller by
 the `call()` that resumed the fiber.
@@ -233,7 +233,7 @@ Fibers in Parataxis are "full coroutines." This means they can suspend from anyw
 
 ## Transferring Control
 
-While `call()` and `yield()` manage a stack-like chain of execution, `transfer()` provides an unstructured way to
+While `call()` and `yield()` manage a stack-like chain of execution, `transfer( )` provides an unstructured way to
 switch between fibers. When you transfer to a fiber, the current one is suspended, and the target fiber resumes. Unlike
 `call()`, transferring does not establish a parent/child relationship. It's more like a `goto` for execution
 contexts.
@@ -296,7 +296,7 @@ logical CPU cores detected on your system (up to a hard limit of 64).
 
 ```
 # Limit the pool to 4 threads
-Acme::Parataxis->set_max_threads(4);
+set_max_threads(4);
 ```
 
 ## `max_threads( )`

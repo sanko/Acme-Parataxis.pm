@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This version comes with thread fixes and an improved API.
+This version comes with a dynamic thread pool and an improved API.
 
 ### Added
 - New ergonomic API using exported functions like `async { ... }`, `fiber { ... }`, and `await( $target )`.
