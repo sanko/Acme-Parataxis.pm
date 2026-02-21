@@ -71,8 +71,9 @@ async {
 
 # DESCRIPTION
 
-`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the [Wren](https://wren.io/concurrency.html) programming
-scripting language. It combines cooperative multitasking (fibers) with a preemptive native thread pool.
+`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the
+[Wren](https://wren.io/concurrency.html) programming scripting language. It combines cooperative multitasking (fibers)
+with a preemptive native thread pool.
 
 Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
 While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
@@ -514,8 +515,12 @@ $p->call(); # Start producer
 Always use the `await_*` equivalents to offload work to the pool.
 - **Thread Safety:** While Perl code remains single-threaded, background tasks run on separate OS threads. Shared
 C-level data (if accessed via FFI) must be mutex-protected.
-- **Stack Limits:** Each fiber is allocated a 4MB stack. This is sufficient for most Perl code, but extremely
-deep recursion or massive regex backtracking might hit limits.
+- **Stack Limits:** Each fiber is allocated a 512KB stack by default. This is more than sufficient for most
+Perl code and allows for high concurrency with a small memory footprint. Extremely deep recursion or massive regex
+backtracking might still hit limits.
+- **Efficiency:** The native thread pool is initialized lazily upon the first asynchronous request. Worker
+threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background
+tasks are pending.
 - **Reference Cycles:** Be careful when passing fiber objects into their own closures, as this can create
 memory leaks.
 
