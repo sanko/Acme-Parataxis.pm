@@ -110,7 +110,7 @@ my $future = Acme::Parataxis->spawn(sub {
 ## `yield( @args )`
 
 Pauses the current fiber and gives other fibers a chance to run. If `@args` are provided, they are passed to the
-context that resumes this fiber.
+context that resumes this fiber. Arguments can be of any Perl data type.
 
 ## `stop( )`
 
@@ -157,13 +157,14 @@ my $fiber = Acme::Parataxis->new(code => sub { ... });
 
 ## `call( @args )`
 
-Switches to the fiber and passes `@args`. Returns when the fiber yields or finishes. This establishes a parent/child
-relationship.
+Switches to the fiber and passes `@args`. Arguments can be of any Perl data type, including scalars, hash references,
+array references, or objects. Returns when the fiber yields or finishes. This establishes a parent/child relationship.
 
 ## `transfer( @args )`
 
 A "symmetric" switch. Suspends the current fiber and moves directly to the target. No parent/child relationship is
-tracked. Ideal for state machines or producer/consumer "dances".
+tracked. Ideal for state machines or producer/consumer "dances". Like `call`, it supports passing arbitrary Perl data
+types via `@args`.
 
 # PREEMPTION
 
