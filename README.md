@@ -71,8 +71,8 @@ async {
 
 # DESCRIPTION
 
-`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the **Wren** programming
-language. It combines cooperative multitasking (fibers) with a preemptive native thread pool.
+`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the [Wren](https://wren.io/concurrency.html) programming
+scripting language. It combines cooperative multitasking (fibers) with a preemptive native thread pool.
 
 Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
 While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
@@ -209,9 +209,8 @@ already done.
 
 Yielding is the "secret sauce" of fibers.
 
-A yielded fiber passes control back to its caller but remembers its exact
-state including all variables and the current instruction pointer. The next time it's called, it resumes exactly
-where it left off.
+A yielded fiber passes control back to its caller but remembers its exact state including all variables and the current
+instruction pointer. The next time it's called, it resumes exactly where it left off.
 
 ```
 Acme::Parataxis->yield();
@@ -235,7 +234,8 @@ Fibers in Parataxis are "full coroutines." This means they can suspend from anyw
 
 While `call()` and `yield()` manage a stack-like chain of execution, `transfer()` provides an unstructured way to
 switch between fibers. When you transfer to a fiber, the current one is suspended, and the target fiber resumes. Unlike
-`call()`, transferring does not establish a parent/child relationship. It's more like a `goto` for execution contexts.
+`call()`, transferring does not establish a parent/child relationship. It's more like a `goto` for execution
+contexts.
 
 ```
 $other_fiber->transfer();
