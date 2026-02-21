@@ -29,21 +29,21 @@ if ( !$http_check->get('http://www.google.com')->{success} && !$http_check->get(
     }
 
     sub request {
-        my ($self, $method, $url, $args) = @_;
+        my ( $self, $method, $url, $args ) = @_;
         no warnings 'uninitialized';
         $method //= 'GET';
         my %new_args = %{ $args // {} };
-        my $orig_cb = $new_args{data_callback};
-        my $content = '';
+        my $orig_cb  = $new_args{data_callback};
+        my $content  = '';
         $new_args{data_callback} = sub {
-            my ($data, $response) = @_;
+            my ( $data, $response ) = @_;
             if ($orig_cb) {
-                return $orig_cb->($data, $response);
+                return $orig_cb->( $data, $response );
             }
             $content .= $data;
             return 1;
         };
-        my $res = $self->SUPER::request($method, $url, \%new_args);
+        my $res = $self->SUPER::request( $method, $url, \%new_args );
         $res->{content} = $content unless $orig_cb;
         return $res;
     }

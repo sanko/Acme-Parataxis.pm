@@ -5,6 +5,7 @@ use Acme::Parataxis;
 use HTTP::Tiny;
 use IO::Socket::INET;
 use Time::HiRes qw[time];
+use Socket      qw[SHUT_WR];
 use POSIX       ();
 $|++;
 #
@@ -74,53 +75,74 @@ package Acme::Parataxis::Test::HTTP {
 }
 Acme::Parataxis::run(
     sub {
-        # Start a mock HTTP server in a fiber
-        my $server_port = 0;
-        my $listener    = IO::Socket::INET->new( LocalAddr => '127.0.0.1', Listen => 5, Reuse => 1, Blocking => 0 ) or
-            die 'Could not create listener: ' . $!;
-        $server_port = $listener->sockport;
-        diag "Mock server listening on port $server_port";
+        my $listener = IO::Socket::INET->new(
+            Listen    => 10,
+            LocalAddr => '127.0.0.1',    # Force IPv4
+            LocalPort => 0,
+            Proto     => 'tcp',
+            ReuseAddr => 1,
+            Blocking  => 0
+            ) or
+            die "Could not create listener: $!";
+        my $server_port = $listener->sockport;
+        diag "Mock server listening on 127.0.0.1:$server_port";
+        #
         Acme::Parataxis->spawn(
             sub {
                 while (1) {
 
-                    # Wait for a client connection using non-blocking await
-                    Acme::Parataxis->await_read( $listener, 1000 );
+                    # Wait for a connection
+                    Acme::Parataxis->await_read($listener);
                     my $client = $listener->accept();
                     next unless $client;
                     $client->blocking(0);
 
-                    # Respond with a simple HTTP 200
-                    my $response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nHI";
-
-                    # Cooperative write loop
-                    my $offset = 0;
-                    my $len    = length($response);
-                    while ( $offset < $len ) {
-                        Acme::Parataxis->await_write( $client, 1000 );
-                        my $written = syswrite( $client, $response, $len - $offset, $offset );
-                        if ( defined $written ) {
-                            $offset += $written;
+                    # SPAWN a new fiber per connection for true concurrency
+                    Acme::Parataxis->spawn(
+                        sub {
+                            # Drain the request headers from client
+                            my $buffer = '';
+                            while (1) {
+                                my $bytes = sysread( $client, $buffer, 4096, length($buffer) );
+                                last if $buffer =~ /\r?\n\r?\n/;    # End of headers
+                                if ( !defined $bytes ) {
+                                    last if $! != POSIX::EAGAIN && $! != POSIX::EWOULDBLOCK;
+                                    Acme::Parataxis->await_read( $client, 100 );
+                                }
+                                last if defined $bytes && $bytes == 0;    # EOF
+                            }
+                            #
+                            my $response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nHI";
+                            my $offset   = 0;
+                            my $len      = length($response);
+                            while ( $offset < $len ) {
+                                my $written = syswrite( $client, $response, $len - $offset, $offset );
+                                if ( defined $written ) {
+                                    $offset += $written;
+                                }
+                                elsif ( $! != POSIX::EAGAIN && $! != POSIX::EWOULDBLOCK ) {
+                                    last;
+                                }
+                                else {
+                                    Acme::Parataxis->await_write( $client, 100 );
+                                }
+                            }
+                            $client->shutdown(SHUT_WR);
+                            $client->close();
                         }
-                        elsif ( $! != POSIX::EAGAIN && $! != POSIX::EWOULDBLOCK ) {
-                            last;
-                        }
-                    }
-                    $client->shutdown(1);    # Signal we are done writing
-                    $client->close();
+                    );
                 }
             }
         );
-
-        # Run multiple concurrent clients
-        my $http = Acme::Parataxis::Test::HTTP->new( timeout => 2 );
+        #
         my @urls = ("http://127.0.0.1:$server_port/") x 3;
         my @futures;
         for my $url (@urls) {
             push @futures, Acme::Parataxis->spawn(
                 sub {
-                    my $res = $http->get($url);
-                    return $res;
+                    # Create a new HTTP object per fiber to avoid connection state contention
+                    my $http = Acme::Parataxis::Test::HTTP->new( timeout => 5 );
+                    return $http->get($url);
                 }
             );
         }
@@ -128,11 +150,12 @@ Acme::Parataxis::run(
         # Verify results
         for my $i ( 0 .. $#urls ) {
             my $res = $futures[$i]->await();
-            is( $res->{status},  200,  'Request ' . ( $i + 1 ) . ' status is 200' );
-            is( $res->{content}, 'HI', 'Request ' . ( $i + 1 ) . ' content is correct' );
+            is $res->{status},  200,  "Request " . ( $i + 1 ) . " status is 200";
+            is $res->{content}, 'HI', "Request " . ( $i + 1 ) . " content is correct";
         }
         $listener->close();
         Acme::Parataxis::stop();
     }
 );
+#
 done_testing();

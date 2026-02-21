@@ -28,27 +28,25 @@ if ( !$http_check->get('http://www.google.com')->{success} && !$http_check->get(
         return $handle->connect( $scheme, $host, $port, $peer );
     }
 
-                        sub request {
-                            my ($self, $method, $url, $args) = @_;
-                            no warnings 'uninitialized';
-                            $method //= 'GET';
-                    
-                        my %new_args = %{ $args // {} };
-                        my $orig_cb = $new_args{data_callback};
-                        my $content = '';
-                        $new_args{data_callback} = sub {
-                            my ($data, $response) = @_;
-                            if ($orig_cb) {
-                                return $orig_cb->($data, $response);
-                            }
-                            $content .= $data;
-                            return 1;
-                        };
-                        my $res = $self->SUPER::request($method, $url, \%new_args);
-                        $res->{content} = $content unless $orig_cb;
-                        return $res;
-                    }
-                    
+    sub request {
+        my ( $self, $method, $url, $args ) = @_;
+        no warnings 'uninitialized';
+        $method //= 'GET';
+        my %new_args = %{ $args // {} };
+        my $orig_cb  = $new_args{data_callback};
+        my $content  = '';
+        $new_args{data_callback} = sub {
+            my ( $data, $response ) = @_;
+            if ($orig_cb) {
+                return $orig_cb->( $data, $response );
+            }
+            $content .= $data;
+            return 1;
+        };
+        my $res = $self->SUPER::request( $method, $url, \%new_args );
+        $res->{content} = $content unless $orig_cb;
+        return $res;
+    }
 }
 {
 

@@ -103,6 +103,7 @@ package Acme::Parataxis v0.0.9 {
         method call (@args) {
             croak 'Cannot call a finished fiber' if $is_done;
             my $rv = Acme::Parataxis::coro_call( $fid, \@args );
+            return unless defined $self;
             if ( $self->is_done ) {
                 my $err = $error;
                 $self->_clear_result();
@@ -283,7 +284,7 @@ package Acme::Parataxis v0.0.9 {
                     my $fiber = Acme::Parataxis->by_id( $fid );
                     if ($fiber) {
                         my $yield_val = $fiber->call($res);
-                        if ( !$fiber->is_done ) {
+                        if ( defined $fiber && !$fiber->is_done ) {
 
                             # If it yields WAITING, it might be starting another job immediately
                             # or waiting on another future.
@@ -299,9 +300,10 @@ package Acme::Parataxis v0.0.9 {
                 }
                 if (@SCHEDULER_QUEUE) {
                     my $current = shift @SCHEDULER_QUEUE;
+                    next unless $current;
                     next if $current->is_done;
                     my $res = $current->call();
-                    if ( !$current->is_done ) {
+                    if ( defined $current && !$current->is_done ) {
                         if ( defined $res && $res eq 'WAITING' ) {
 
                             # Waiting
@@ -312,7 +314,7 @@ package Acme::Parataxis v0.0.9 {
                     }
                 }
                 my $active_count = scalar keys %Acme::Parataxis::REGISTRY;
-                if ( $main_fiber->is_done && $active_count == 0 && !@SCHEDULER_QUEUE ) {
+                if ( defined $main_fiber && $main_fiber->is_done && $active_count == 0 && !@SCHEDULER_QUEUE ) {
                     $IS_RUNNING = 0;
                 }
 
