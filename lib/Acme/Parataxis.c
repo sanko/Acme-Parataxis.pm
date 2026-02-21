@@ -494,7 +494,8 @@ void * worker_thread(void * arg) {
 /**
  * @brief Initializes the background thread pool.
  *
- * Automatically detects the CPU count and spawns worker threads.
+ * Automatically detects the CPU count and spawns worker threads. This function
+ * is called automatically by `init_system` and `submit_c_job`.
  */
 DLLEXPORT void init_threads() {
     dTHX;

@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## Added
-- Forgot to include the working example of HTTP::Tiny + Parataxis with the last dist.
-- New more modern API
-- Added a few stress test demos
+This version comes with thread fixes and an improved API.
+
+### Added
+- New ergonomic API using exported functions like `async { ... }`, `fiber { ... }`, and `await( $target )`.
+
+### Changed
+- Refactored native thread pool to use cond vars (`PARA_COND_*`) instead of busy polling, reducing idle CPU usage to near zero.
+- Switched to a global job queue for the thread pool for better load balancing across worker threads.
+- Reduced default fiber stack size from 4MB to 512K.
+- Worker threads are now only spawned when the first asynchronous job is submitted.
+- Increased `MAX_FIBERS` limit to 1024.
+- Expose thread pool config with `set_max_threads` and `max_threads`.
 
 ## [v0.0.9] - 2026-02-21
 
