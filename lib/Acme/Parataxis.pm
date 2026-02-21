@@ -9,12 +9,15 @@ package Acme::Parataxis v0.0.10 {
     use Time::HiRes    qw[usleep];
     use Exporter       qw[import];
     use Carp           qw[croak];
+
     our @EXPORT_OK = qw[
         run spawn yield await stop async fiber
         await_sleep await_read await_write await_core_id
         current_fid tid root maybe_yield
+        set_max_threads max_threads
     ];
     our %EXPORT_TAGS = ( all => \@EXPORT_OK );
+
     #
     our @IPC_BUFFER;
     my $lib;
@@ -39,9 +42,13 @@ package Acme::Parataxis v0.0.10 {
         affix $l, 'get_job_coro_id',                   [Int],                          Int;
         affix $l, 'free_job_slot',                     [Int],                          Void;
         affix $l, 'get_thread_pool_size',              [],                             Int;
+        affix $l, 'get_max_thread_pool_size',          [],                             Int;
+        affix $l, 'set_max_threads',                   [Int],                          Void;
         affix $l, 'set_preempt_threshold',             [LongLong],                     Void;
         affix $l, [ 'maybe_yield' => '_maybe_yield' ], [],                             Pointer [SV];
         affix $l, 'get_preempt_count',                 [],                             LongLong;
+
+        # Capture the main interpreter context eagerly
         init_system();
 
         if ( $^O eq 'MSWin32' ) {
@@ -175,9 +182,12 @@ package Acme::Parataxis v0.0.10 {
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];
     }
+
     sub tid         { get_os_thread_id_export() }
     sub current_fid { get_current_parataxis_id() }
     sub root        { state $root //= Acme::Parataxis::Root->new() }
+
+     sub max_threads ()         { Acme::Parataxis::get_max_thread_pool_size() }
 
     # Scheduler internals
     sub _scheduler_enqueue_by_id ($fid) {
@@ -240,7 +250,9 @@ package Acme::Parataxis v0.0.10 {
             }
         }
     }
+
     sub stop () { $IS_RUNNING = 0 }
+
     class    #
         Acme::Parataxis {
         use Carp qw[croak];
@@ -265,6 +277,7 @@ package Acme::Parataxis v0.0.10 {
             $result = undef;
             $error  = undef;
         }
+
         our %REGISTRY;
         ADJUST {
             Acme::Parataxis::force_depth_zero($code);
@@ -326,9 +339,9 @@ package Acme::Parataxis v0.0.10 {
         }
         sub by_id ( $class, $fid ) { $REGISTRY{$fid} }
     }
+
     class    #
         Acme::Parataxis::Root {
-
         method transfer (@args) {
             my $rv = Acme::Parataxis::coro_transfer( -1, \@args );
             return unless defined $rv;
@@ -336,6 +349,7 @@ package Acme::Parataxis v0.0.10 {
         }
         method fid () {-1}
     }
+
     class    #
         Acme::Parataxis::Future {
         use Carp qw[croak];
@@ -385,6 +399,7 @@ package Acme::Parataxis v0.0.10 {
             $self->result;
         }
     }
+
     END { cleanup() unless ${^GLOBAL_PHASE} eq 'DESTRUCT' }
 }
 1;

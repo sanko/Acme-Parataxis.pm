@@ -71,8 +71,9 @@ async {
 
 # DESCRIPTION
 
-`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the [Wren](https://wren.io/concurrency.html) programming
-scripting language. It combines cooperative multitasking (fibers) with a preemptive native thread pool.
+`Acme::Parataxis` implements a hybrid concurrency model for Perl, greatly inspired by the concurrency system for the
+[Wren](https://wren.io/concurrency.html) programming scripting language. It combines cooperative multitasking (fibers)
+with a preemptive native thread pool.
 
 Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
 While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
@@ -282,6 +283,25 @@ that next resumes this fiber. Arguments can be of any Perl data type.
 
 Tells the scheduler to exit the loop after the current iteration. Note that this does not immediately terminate other
 fibers; it simply prevents the scheduler from starting new ones.
+
+# THREAD POOL CONFIGURATION
+
+`Acme::Parataxis` uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
+tune its behavior using these functions.
+
+## `set_max_threads( $count )`
+
+Sets the maximum number of worker threads the pool is allowed to spawn. By default, this is set to the number of
+logical CPU cores detected on your system (up to a hard limit of 64).
+
+```
+# Limit the pool to 4 threads
+Acme::Parataxis->set_max_threads(4);
+```
+
+## `max_threads( )`
+
+Returns the currently configured maximum thread pool size.
 
 # BLOCKING & I/O FUNCTIONS
 
@@ -514,8 +534,12 @@ $p->call(); # Start producer
 Always use the `await_*` equivalents to offload work to the pool.
 - **Thread Safety:** While Perl code remains single-threaded, background tasks run on separate OS threads. Shared
 C-level data (if accessed via FFI) must be mutex-protected.
-- **Stack Limits:** Each fiber is allocated a 4MB stack. This is sufficient for most Perl code, but extremely
-deep recursion or massive regex backtracking might hit limits.
+- **Stack Limits:** Each fiber is allocated a 512KB stack by default. This is more than sufficient for most
+Perl code and allows for high concurrency with a small memory footprint. Extremely deep recursion or massive regex
+backtracking might still hit limits.
+- **Efficiency:** The native thread pool is initialized dynamically upon the first asynchronous request. It
+starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition
+variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
 - **Reference Cycles:** Be careful when passing fiber objects into their own closures, as this can create
 memory leaks.
 
