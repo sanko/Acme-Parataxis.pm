@@ -1,6 +1,6 @@
 use v5.40;
 use blib;
-use Acme::Parataxis;
+use Acme::Parataxis qw[:all];
 $|++;
 #
 package My::HTTP {
@@ -35,7 +35,8 @@ package My::HTTP {
 #
 package My::HTTP::Handle {
     use parent -norequire, 'HTTP::Tiny::Handle';
-    use Time::HiRes qw[time];
+    use Time::HiRes     qw[time];
+    use Acme::Parataxis qw[await_read await_write];
 
     sub _do_timeout ( $self, $type, $timeout //= $self->{timeout} // 60 ) {
         if ( $self->{fh} ) {
@@ -54,10 +55,10 @@ package My::HTTP::Handle {
                 # to the scheduler while waiting for the socket to be ready.
                 my $wait = ( $timeout - $elapsed ) > 0.5 ? 0.5 : ( $timeout - $elapsed );
                 if ( $type eq 'read' ) {
-                    Acme::Parataxis->await_read( $self->{fh}, int( $wait * 1000 ) );
+                    await_read( $self->{fh}, int( $wait * 1000 ) );
                 }
                 else {
-                    Acme::Parataxis->await_write( $self->{fh}, int( $wait * 1000 ) );
+                    await_write( $self->{fh}, int( $wait * 1000 ) );
                 }
             }
         }
@@ -66,37 +67,32 @@ package My::HTTP::Handle {
 }
 
 # Use the integrated scheduler to run concurrent fetches
-Acme::Parataxis::run(
-    sub {
-        say 'Starting concurrent fetches...';
-        my $http = My::HTTP->new( timeout => 10, verify_SSL => 0 );
-        my @urls = qw[
-            http://www.google.com
-            http://www.example.com
-            https://www.perl.org
-            https://metacpan.org
-        ];
-        my @futures;
+async {
+    say 'Starting concurrent fetches...';
+    my $http = My::HTTP->new( timeout => 10, verify_SSL => 0 );
+    my @urls = qw[
+        http://www.google.com
+        http://www.example.com
+        https://www.perl.org
+        https://metacpan.org
+    ];
+    my @futures;
 
-        for my $url (@urls) {
-            push @futures, Acme::Parataxis->spawn(
-                sub {
-                    my $start = time();
-                    say sprintf '  [Fiber %d] Fetching %s...', Acme::Parataxis->current_fid, $url;
-                    my $res     = $http->get($url);
-                    my $elapsed = time() - $start;
-                    say sprintf '  [Fiber %d] Done %s (Status: %d) in %.2fs', Acme::Parataxis->current_fid, $url, $res->{status}, $elapsed;
-                    return $res;
-                }
-            );
-        }
-
-        # Wait for all fibers to complete and collect results
-        for my $i ( 0 .. $#urls ) {
-            my $res = $futures[$i]->await();
-            say sprintf 'Final Result for %s: %d %s', $urls[$i], $res->{status}, $res->{reason};
-        }
-        say 'All tasks finished.';
-        Acme::Parataxis::stop();
+    for my $url (@urls) {
+        push @futures, fiber {
+            my $start = time();
+            say sprintf '  [Fiber %d] Fetching %s...', current_fid(), $url;
+            my $res     = $http->get($url);
+            my $elapsed = time() - $start;
+            say sprintf '  [Fiber %d] Done %s (Status: %d) in %.2fs', current_fid(), $url, $res->{status}, $elapsed;
+            return $res;
+        };
     }
-);
+
+    # Wait for all fibers to complete and collect results
+    for my $i ( 0 .. $#urls ) {
+        my $res = await $futures[$i];
+        say sprintf 'Final Result for %s: %d %s', $urls[$i], $res->{status}, $res->{reason};
+    }
+    say 'All tasks finished.';
+};
