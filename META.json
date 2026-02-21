@@ -55,6 +55,11 @@
          }
       },
       "test" : {
+         "recommends" : {
+            "IO::Socket::IP" : "0.32",
+            "IO::Socket::SSL" : "1.968",
+            "Net::SSLeay" : "1.49"
+         },
          "requires" : {
             "Test2::V1" : "0"
          }

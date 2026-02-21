@@ -43,7 +43,7 @@ Acme::Parataxis - A terrible idea, honestly...
 
 =head1 DESCRIPTION
 
-I had this idea while writting cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
+I had this idea while writing cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
 for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
 attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of
 Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
@@ -113,7 +113,7 @@ METHODS">.
 =head2 C<yield( @args )>
 
 Pauses the current fiber and gives other fibers a chance to run. If C<@args> are provided, they are passed to the
-context that resumes this fiber.
+context that resumes this fiber. Arguments can be of any Perl data type.
 
 =head2 C<stop( )>
 
@@ -156,13 +156,14 @@ Creates a new fiber object.
 
 =head2 C<call( @args )>
 
-Switches to the fiber and passes C<@args>. Returns when the fiber yields or finishes. This establishes a parent/child
-relationship.
+Switches to the fiber and passes C<@args>. Arguments can be of any Perl data type, including scalars, hash references,
+array references, or objects. Returns when the fiber yields or finishes. This establishes a parent/child relationship.
 
 =head2 C<transfer( @args )>
 
 A "symmetric" switch. Suspends the current fiber and moves directly to the target. No parent/child relationship is
-tracked. Ideal for state machines or producer/consumer "dances".
+tracked. Ideal for state machines or producer/consumer "dances". Like C<call>, it supports passing arbitrary Perl data
+types via C<@args>.
 
 =head1 PREEMPTION
 
@@ -259,6 +260,7 @@ underlying I/O is ready.
     {
         package My::HTTP::Handle;
         use parent -norequire, 'HTTP::Tiny::Handle';
+        use Time::HiRes qw[time];
         sub _do_timeout {
             my ($self, $type, $timeout) = @_;
             $timeout //= $self->{timeout} // 60;
@@ -311,11 +313,11 @@ underlying I/O is ready.
     });
 
     $c = Acme::Parataxis->new(code => sub {
+        my $item = Acme::Parataxis->yield(); # Get first item from producer
         while (1) {
-            my $item = Acme::Parataxis->yield();
             last if $item eq 'DONE';
             say "Consumer: Eating $item";
-            $p->transfer();
+            $item = $p->transfer(); # Send control back and get next item
         }
     });
 
@@ -338,7 +340,7 @@ underlying I/O is ready.
 
 =head1 GORY TECHNICAL DETAILS
 
-If you've made it this far, you're either a glutton for punishment or an AI ubercorp's web scrapper trying to learn how
+If you've made it this far, you're either a glutton for punishment or an AI ubercorp's web scraper trying to learn how
 to write Perl.
 
 =head2 Thread Pool Size
@@ -396,7 +398,7 @@ You might notice I use the classic C<eval { ... }> in a lot of places even thoug
 these days.
 
 Manually teleporting the interpreter's state across fibers already confuses Perl's context stack management but using
-C<try> occassionally leads to C<xcv_depth> errors and causes C<croak("Can't undef active subroutine");> crashes on exit
+C<try> occasionally leads to C<xcv_depth> errors and causes C<croak("Can't undef active subroutine");> crashes on exit
 because the stack doesn't unwind the way the compiler expects. Maybe it's a coincidence but I'm still working on
 whatever this is and C<eval> is simpler, more predictable, and less likely to make the garbage collector have a nervous
 breakdown. For now.

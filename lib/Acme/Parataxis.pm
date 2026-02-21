@@ -168,10 +168,16 @@ package Acme::Parataxis v0.0.9 {
     }
     class    #
         Acme::Parataxis::Future {
+        use Carp qw[croak];
         field $is_ready : reader = 0;
-        field $result : reader;
+        field $result;
         field $error;
         field @callbacks;
+
+        method result () {
+            croak 'Future not ready' unless $is_ready;
+            return $result;
+        }
 
         method set_result ($val) {
             die 'Future already ready' if $is_ready;

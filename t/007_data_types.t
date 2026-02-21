@@ -11,6 +11,31 @@ $|++;
 sub flush_stack {
     Acme::Parataxis->new( code => sub {1} )->call();
 }
+subtest 'Multiple Complex Arguments' => sub {
+    my $fiber = Acme::Parataxis->new(
+        code => sub ( $hash, $array, $scalar ) {
+            is ref $hash,   'HASH',  'Arg 1 is HASH';
+            is ref $array,  'ARRAY', 'Arg 2 is ARRAY';
+            is ref $scalar, '',      'Arg 3 is SCALAR';
+            return { result => [ $scalar, $array, $hash ] };
+        }
+    );
+    my $input_h = { a => 1 };
+    my $input_a = [ 2, 3 ];
+    my $input_s = "four";
+    my $res     = $fiber->call( $input_h, $input_a, $input_s );
+    is $res->{result}, [ $input_s, $input_a, $input_h ], 'Returned re-ordered arguments correctly';
+};
+subtest 'Deeply Nested Structure' => sub {
+    my $deep  = { level1 => { level2 => [ { val => 42 }, { val => 43 } ] } };
+    my $fiber = Acme::Parataxis->new(
+        code => sub ($data) {
+            return $data->{level1}{level2}[1];
+        }
+    );
+    my $res = $fiber->call($deep);
+    is $res, { val => 43 }, 'Extracted data from deep structure correctly';
+};
 subtest 'Return Hash Reference' => sub {
     my $fiber = Acme::Parataxis->new(
         code => sub {

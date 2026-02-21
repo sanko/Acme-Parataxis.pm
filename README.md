@@ -41,7 +41,7 @@ Acme::Parataxis::run(
 
 # DESCRIPTION
 
-I had this idea while writting cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
+I had this idea while writing cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
 for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
 attempt at combining cooperative multitasking (green threads or fibers or whatever it's called in the last edit of
 Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
@@ -205,7 +205,8 @@ Returns the unique numeric ID assigned to this specific fiber object.
 
 ## `is_done( )`
 
-Returns true if the fiber has finished execution (either returned or died).
+Returns true if the fiber has finished execution (either returned or died). Note that once a fiber is done and
+recognized as such by the scheduler or manual `is_done` call, its internal `FID` is released.
 
 # Acme::Parataxis::Future OBJECT METHODS
 
@@ -224,28 +225,84 @@ Returns true if the fiber has finished.
 
 Returns the result immediately. Croaks if the future is not ready.
 
+# INTEGRATING SYNCHRONOUS MODULES
+
+To use synchronous modules (like `HTTP::Tiny`) in a non-blocking way, you can subclass their handle or transport
+methods and use a `while` loop combined with `yield('WAITING')`. This ensures the fiber yields control until the
+underlying I/O is ready.
+
+```perl
+# Example: A cooperative HTTP::Tiny subclass
+{
+    package My::HTTP;
+    use parent 'HTTP::Tiny';
+    sub _open_handle {
+        my ($self, $request, $scheme, $host, $port, $peer) = @_;
+        return My::HTTP::Handle->new(
+            timeout            => $self->{timeout},
+            keep_alive         => $self->{keep_alive},
+            keep_alive_timeout => $self->{keep_alive_timeout}
+        )->connect($scheme, $host, $port, $peer);
+    }
+    sub request {
+        my ($self, $method, $url, $args) = @_;
+        my %new_args = %{ $args // {} };
+        my $orig_cb = $new_args{data_callback};
+        my $content = '';
+        $new_args{data_callback} = sub {
+            my ($data, $response) = @_;
+            if ($orig_cb) { return $orig_cb->($data, $response) }
+            $content .= $data;
+            return 1;
+        };
+        my $res = $self->SUPER::request($method, $url, \%new_args);
+        $res->{content} = $content unless $orig_cb;
+        return $res;
+    }
+}
+{
+    package My::HTTP::Handle;
+    use parent -norequire, 'HTTP::Tiny::Handle';
+    use Time::HiRes qw[time];
+    sub _do_timeout {
+        my ($self, $type, $timeout) = @_;
+        $timeout //= $self->{timeout} // 60;
+        my $start = time();
+        while (1) {
+            # Check for readiness NOW (0 timeout)
+            return 1 if $self->SUPER::_do_timeout($type, 0);
+            # Check for overall timeout
+            my $elapsed = time() - $start;
+            return 0 if $elapsed > $timeout;
+            # Suspend fiber and wait for background I/O check
+            my $wait = ($timeout - $elapsed) > 0.5 ? 0.5 : ($timeout - $elapsed);
+            if ($type eq 'read') {
+                Acme::Parataxis->await_read($self->{fh}, int($wait * 1000));
+            } else {
+                Acme::Parataxis->await_write($self->{fh}, int($wait * 1000));
+            }
+        }
+    }
+}
+```
+
 # EXAMPLES
 
-## Parallel Web Fetching (Simulated)
+## Parallel Web Fetching
 
 ```perl
 use Acme::Parataxis;
+# ... (Include My::HTTP from above) ...
 
 Acme::Parataxis::run(sub {
-    my @urls = qw(url1 url2 url3 url4);
-    my @futures;
+    my $http = My::HTTP->new(verify_SSL => 0);
+    my @urls = qw[http://example.com http://perl.org];
+    my @futures = map {
+        my $url = $_;
+        Acme::Parataxis->spawn(sub { $http->get($url)->{status} })
+    } @urls;
 
-    for my $url (@urls) {
-        push @futures, Acme::Parataxis->spawn(sub {
-            say "Fetching $url...";
-            Acme::Parataxis->await_sleep(int rand 1000); # Simulate network latency
-            return "Content of $url";
-        });
-    }
-
-    for my $f (@futures) {
-        say "Got: " . $f->await();
-    }
+    say "Status for $urls[$_]: " . $futures[$_]->await() for 0..$#urls;
 });
 ```
 
@@ -255,7 +312,7 @@ Acme::Parataxis::run(sub {
 my ($p, $c);
 
 $p = Acme::Parataxis->new(code => sub {
-    for my $item (qw(Apple Banana Cherry)) {
+    for my $item (qw[Apple Banana Cherry]) {
         say "Producer: Sending $item";
         $c->transfer($item);
     }
@@ -263,11 +320,11 @@ $p = Acme::Parataxis->new(code => sub {
 });
 
 $c = Acme::Parataxis->new(code => sub {
+    my $item = Acme::Parataxis->yield(); # Get first item from producer
     while (1) {
-        my $item = Acme::Parataxis->yield();
         last if $item eq 'DONE';
         say "Consumer: Eating $item";
-        $p->transfer();
+        $item = $p->transfer(); # Send control back and get next item
     }
 });
 
@@ -284,7 +341,7 @@ $p->call(); # Start the producer
 
 # GORY TECHNICAL DETAILS
 
-If you've made it this far, you're either a glutton for punishment or an AI ubercorp's web scrapper trying to learn how
+If you've made it this far, you're either a glutton for punishment or an AI ubercorp's web scraper trying to learn how
 to write Perl.
 
 ## Thread Pool Size
@@ -313,10 +370,11 @@ it's also twice as likely to leave your stack in a state that would make p5p cur
 
 ## Stack Swapping
 
-On POSIX systems, every fiber gets its own 2MB C-stack via `ucontext.h`. We do this because Perl's internal functions
-(especially during regex matching or deeply nested calls) can be incredibly hungry for stack space. On Windows, we use
-the native `Fiber API` which manages the C-stack for us. In both cases, we're manually swapping the CPU registers and
-the Perl interpreter's internal pointers. Heart surgery with a rusty spoon.
+On Unix-like systems, we use `ucontext.h` to swap the CPU registers and stack pointer. Each fiber is allocated its own
+2MB stack via `ucontext.h`. We do this because Perl's internal functions (especially during regex matching or deeply
+nested calls) can be incredibly hungry for stack space. On Windows, we use the native `Fiber API` which manages the
+C-stack for us. In both cases, we're manually swapping the CPU registers and the Perl interpreter's internal pointers.
+Heart surgery with a rusty spoon.
 
 ## Perl State Management
 
@@ -337,7 +395,7 @@ You might notice I use the classic `eval { ... }` in a lot of places even though
 these days.
 
 Manually teleporting the interpreter's state across fibers already confuses Perl's context stack management but using
-`try` occassionally leads to `xcv_depth` errors and causes `croak("Can't undef active subroutine");` crashes on exit
+`try` occasionally leads to `xcv_depth` errors and causes `croak("Can't undef active subroutine");` crashes on exit
 because the stack doesn't unwind the way the compiler expects. Maybe it's a coincidence but I'm still working on
 whatever this is and `eval` is simpler, more predictable, and less likely to make the garbage collector have a nervous
 breakdown. For now.
