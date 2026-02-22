@@ -9,13 +9,17 @@ package Acme::Parataxis v0.0.10 {
     use Time::HiRes    qw[usleep];
     use Exporter       qw[import];
     use Carp           qw[croak];
-    our @EXPORT_OK = qw[
-        run spawn yield await stop async fiber
-        await_sleep await_read await_write await_core_id
-        current_fid tid root maybe_yield
-        set_max_threads max_threads
-    ];
-    our %EXPORT_TAGS = ( all => \@EXPORT_OK );
+    our %EXPORT_TAGS = (
+        all => [
+            our @EXPORT_OK
+                = qw[
+                run spawn yield await stop async fiber
+                await_sleep await_read await_write await_core_id
+                current_fid tid root maybe_yield
+                set_max_threads max_threads
+                ]
+        ]
+    );
     #
     our @IPC_BUFFER;
     my $lib;

@@ -75,8 +75,8 @@ C<Acme::Parataxis> implements a hybrid concurrency model for Perl, greatly inspi
 L<Wren|https://wren.io/concurrency.html> programming language. It combines cooperative multitasking (fibers) with a
 preemptive native thread pool.
 
-Fibers are a mechanism for lightweight concurrency. They are similar to threads, but they are cooperatively scheduled.
-While the OS may switch between threads at any time, a fiber only passes control when explicitly told to. This makes
+Fibers are a mechanism for lightweight concurrency. They are similar to threads but are cooperatively scheduled. While
+the OS may switch between threads at any time, a fiber only passes control when explicitly told to do so. This makes
 concurrency deterministic and easier to reason about. You (probably) don't have to worry about random context switches
 clobbering your data.
 
