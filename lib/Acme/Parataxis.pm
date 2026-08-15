@@ -24,6 +24,7 @@ package Acme::Parataxis v0.0.10 {
     our @IPC_BUFFER;
     my $lib;
     my @SCHEDULER_QUEUE;
+    my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
 
     sub _bind_functions ($l) {
@@ -126,7 +127,7 @@ package Acme::Parataxis v0.0.10 {
         }
         my $future = Acme::Parataxis::Future->new();
         my $fiber  = Acme::Parataxis->new( code => $code, future => $future );
-        push @SCHEDULER_QUEUE, $fiber;
+        _handle_run( $fiber, run_fiber_checked( $fiber->fid, undef ) );
         return $future;
     }
 
@@ -200,7 +201,9 @@ package Acme::Parataxis v0.0.10 {
 
     # Scheduler internals
     sub _scheduler_enqueue_by_id ($fid) {
+        return if $SCHEDULER_QUEUED{$fid};
         if ( my $fiber = Acme::Parataxis->by_id($fid) ) {
+            $SCHEDULER_QUEUED{$fid} = 1;
             push @SCHEDULER_QUEUE, $fiber;
         }
     }
@@ -225,14 +228,19 @@ package Acme::Parataxis v0.0.10 {
             die $err if defined $err;
             return 1;
         }
-        push @SCHEDULER_QUEUE, $fiber if $status == 0;
+        if ( $status == 0 ) {
+            $SCHEDULER_QUEUED{ $fiber->fid } = 1;
+            push @SCHEDULER_QUEUE, $fiber;
+        }
         return $status;
     }
 
     sub run ($code) {
         @SCHEDULER_QUEUE = ();
-        $IS_RUNNING      = 1;
+        %SCHEDULER_QUEUED = ();
+        $IS_RUNNING       = 1;
         my $main_fiber = Acme::Parataxis->new( code => $code );
+        $SCHEDULER_QUEUED{ $main_fiber->fid } = 1;
         push @SCHEDULER_QUEUE, $main_fiber;
         while ($IS_RUNNING) {
             my @ready;
@@ -252,9 +260,13 @@ package Acme::Parataxis v0.0.10 {
                 }
             }
             if (@SCHEDULER_QUEUE) {
-                my $current = shift @SCHEDULER_QUEUE;
-                next unless $current;
-                _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
+                my @work = @SCHEDULER_QUEUE;
+                @SCHEDULER_QUEUE = ();
+                %SCHEDULER_QUEUED = ();
+                for my $current (@work) {
+                    next unless $current;
+                    _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
+                }
             }
             my $active_count = scalar keys %Acme::Parataxis::REGISTRY;
             if ( defined $main_fiber && !@SCHEDULER_QUEUE && $active_count == 0 && $main_fiber->is_done ) {
@@ -376,6 +388,7 @@ package Acme::Parataxis v0.0.10 {
         field $result;
         field $error;
         field @callbacks;
+        field $waiter;
 
         method result () {
             croak 'Future not ready' unless $is_ready;
@@ -408,14 +421,16 @@ package Acme::Parataxis v0.0.10 {
 
         method await () {
             return $self->result if $is_ready;
-            my $fid = Acme::Parataxis->current_fid;
-            $self->on_ready(
-                sub ($f) {
-                    Acme::Parataxis::_scheduler_enqueue_by_id($fid);
-                }
-            );
+            $waiter = Acme::Parataxis->current_fid;
+            $self->on_ready( \&_wake_waiter );
             Acme::Parataxis->yield('WAITING');
             $self->result;
+        }
+
+        method _wake_waiter () {
+            return unless defined $waiter;
+            Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
+            $waiter = undef;
         }
     }
     END { cleanup() unless ${^GLOBAL_PHASE} eq 'DESTRUCT' }

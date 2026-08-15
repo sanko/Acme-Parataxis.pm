@@ -1221,13 +1221,14 @@ DLLEXPORT int init_system() {
  *
  * @param target_id ID of the target fiber (-1 for Main).
  */
-void perform_switch(int target_id) {
+void perform_switch(int target_id, int set_last_sender) {
     dTHX;
     if (target_id == current_fiber_id)
         return;
     para_fiber_t * from = (current_fiber_id == -1) ? &main_context : fibers[current_fiber_id];
     para_fiber_t * to = (target_id == -1) ? &main_context : fibers[target_id];
-    to->last_sender = current_fiber_id;
+    if (set_last_sender)
+        to->last_sender = current_fiber_id;
     current_fiber_id = target_id;
     swap_perl_state(from, to);
 #ifdef _WIN32
@@ -1274,7 +1275,7 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
             SvREFCNT_inc(ret_val);
     }
 
-    perform_switch(parent);
+    perform_switch(parent, 0);
 
     /* Retrieve value passed back during resume */
     SV * res = self->transfer_data;
@@ -1543,7 +1544,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
             SvREFCNT_inc(args);
     }
     fibers[fiber_id]->parent_id = current_fiber_id;
-    perform_switch(fiber_id);
+    perform_switch(fiber_id, 1);
     if (fibers[fiber_id] && fibers[fiber_id]->finished) {
         if (fibers[fiber_id]->transfer_data && fibers[fiber_id]->transfer_data != &PL_sv_undef) {
             SvREFCNT_dec(fibers[fiber_id]->transfer_data);
@@ -1649,7 +1650,7 @@ DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
         if (args && args != &PL_sv_undef)
             SvREFCNT_inc(args);
     }
-    perform_switch(target_id);
+    perform_switch(target_id, 1);
     if (target_id >= 0 && fibers[target_id] && fibers[target_id]->finished) {
         if (fibers[target_id]->transfer_data && fibers[target_id]->transfer_data != &PL_sv_undef) {
             SvREFCNT_dec(fibers[target_id]->transfer_data);
