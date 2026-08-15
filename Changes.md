@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
+
+### Changed
+
+- Spawned fibers run inline at spawn time: a body that completes without yielding never touches the scheduler queue at all.
+- The fiber registry is replaced bye strong references to each fiber object in C.
+- Fiber completion moved from a Perl method into C: the entry point writes state directly into the object's slots with `av_store`, and only dispatches callbacks when callbacks were actually registered.
+- `spawn` now performs the whole create+run sequence in a single FFI call (`spawn_fiber`) instead of two FFI boundary crossings and builds the fiber object in C.
+- Fiber objects are incrementally-filled arrayrefs instead of hashrefs, indexed via the `F_*` slot constants (cheaper to build and to index).
+- On x86_64 ELF, context switching uses a hand written trampoline that only saves the callee-saved registers and stack pointer, avoiding `swapcontext`'s signal-mask syscall.
+- `spawn` and `await` hot paths flattened by inlining helpers.
+
+### Fixed
+
+- A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
+
+### Added
+
+- Unit tests ported from Coro's own suite, as a demonstration of utility: joining spawned fibers and collecting results (`t/016_coro_join.t`, from Coro `t/08_join.t`), eval/cede inside fibers (`t/017_coro_eval.t`, from Coro `t/07_eval.t`), a producer/consumer bounded channel built from fibers (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), and a counting semaphore with guards (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
+- Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
+
 ## [v0.0.10] - 2026-02-22
 
 This version comes with a dynamic thread pool and an improved API.
