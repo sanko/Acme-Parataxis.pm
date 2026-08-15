@@ -96,6 +96,73 @@ DLLEXPORT SV * coro_yield(SV * ret_val);
 DLLEXPORT SV * coro_transfer(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
 
+/*
+ * Assembly-based coroutine context switching.
+ *
+ * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on
+ * every context switch which dominates the cost of fiber switches.  On
+ * x86_64 we instead switch with a tiny assembly routine that only saves the
+ * callee-saved registers and the stack pointer, avoiding the syscall
+ * entirely.  All other platforms keep the portable ucontext path.
+ */
+#if defined(__x86_64__) && !defined(_WIN32) && defined(__ELF__)
+#define USE_ASM_CORO 1
+#endif
+
+typedef struct para_fiber_t para_fiber_t;
+
+/* C-level entry point invoked when a freshly created fiber starts running. */
+void para_entry_point(para_fiber_t * c);
+
+#if defined(USE_ASM_CORO)
+/**
+ * @brief Raw register-only context switch.
+ *
+ * Saves the callee-saved registers and the current stack pointer into
+ * *from, restores them from *to, then returns (popping the return address
+ * off the target stack).  A freshly created fiber's stack is pre-arranged
+ * so that the return address lands in para_trampoline.
+ *
+ * @param from Pointer to the storage slot holding the current stack pointer.
+ * @param to   Pointer to the storage slot holding the target stack pointer.
+ */
+extern void para_coro_switch(void ** from, void ** to);
+/** @brief Initial jump target for brand-new fiber stacks. */
+extern void para_trampoline(void);
+
+__asm__(
+    ".text\n"
+    ".p2align 4\n"
+    ".globl para_coro_switch\n"
+    ".type para_coro_switch, @function\n"
+    "para_coro_switch:\n"
+    "    pushq %rbx\n"
+    "    pushq %rbp\n"
+    "    pushq %r12\n"
+    "    pushq %r13\n"
+    "    pushq %r14\n"
+    "    pushq %r15\n"
+    "    movq %rsp, (%rdi)\n"
+    "    movq (%rsi), %rsp\n"
+    "    popq %r15\n"
+    "    popq %r14\n"
+    "    popq %r13\n"
+    "    popq %r12\n"
+    "    popq %rbp\n"
+    "    popq %rbx\n"
+    "    ret\n"
+    ".size para_coro_switch, .-para_coro_switch\n"
+    ".p2align 4\n"
+    ".globl para_trampoline\n"
+    ".type para_trampoline, @function\n"
+    "para_trampoline:\n"
+    "    popq %rdi\n"
+    "    call para_entry_point\n"
+    "    ud2\n"
+    ".size para_trampoline, .-para_trampoline\n"
+);
+#endif /* USE_ASM_CORO */
+
 /**
  * @brief Get the Operating System's unique Thread ID.
  *
@@ -188,13 +255,19 @@ int get_cpu_count() {
  * and the entire internal state of the Perl interpreter required to pause
  * and resume execution of Perl code.
  */
-typedef struct {
+typedef struct para_fiber_t {
     coro_handle_t context; /**< OS-specific context handle */
 
 #ifndef _WIN32
     void * stack_p;  /**< Pointer to dynamically allocated fiber stack (Unix only) */
     size_t stack_sz; /**< Size of the allocated stack (Unix only) */
+#ifdef USE_ASM_CORO
+    void * rsp;      /**< Saved stack pointer for the assembly switch (Unix x86_64) */
 #endif
+#endif
+
+    void * _stacks_block; /**< Single allocation holding the Perl control stacks */
+
 
     /*
      * Perl Interpreter State Pointers.
@@ -308,6 +381,46 @@ static int current_fiber_id = -1;
 static job_t job_slots[MAX_JOBS];
 /** @brief Mutex protecting access to the job queue */
 static para_mutex_t queue_lock;
+
+/*
+ * Completed-job notification ring.
+ *
+ * Workers push the index of every finished job into this ring so that
+ * check_for_completion() can find completed work in O(1) instead of
+ * scanning all MAX_JOBS slots under the lock on every scheduler tick.
+ */
+static int done_queue[MAX_JOBS + 1];
+static int done_head = 0;
+static int done_tail = 0;
+
+/*
+ * Number of jobs that have been submitted but not yet reclaimed by the
+ * main thread via free_job_slot().  Only touched by the main thread, so it
+ * needs no lock.  The scheduler uses it to skip polling entirely when no
+ * background work is in flight.
+ */
+static int outstanding_jobs = 0;
+
+#ifdef _WIN32
+/** @brief Reuse cache for freed fiber stacks (Windows fibers allocate nothing) */
+#define MAX_CACHED_STACKS 0
+/** @brief Maximum number of fiber objects to park for reuse */
+#define MAX_FIBER_CACHE 64
+#else
+/** @brief Maximum number of fiber stacks to keep around for reuse */
+#define MAX_CACHED_STACKS 64
+/** @brief LIFO cache of free fiber stack allocations */
+static void * stack_cache[MAX_CACHED_STACKS];
+/** @brief Number of stacks currently in the cache */
+static int stack_cache_count = 0;
+
+/** @brief Maximum number of whole fiber contexts to park for reuse */
+#define MAX_FIBER_CACHE 64
+/** @brief LIFO cache of idle fiber contexts (Perl stacks + OS stack included) */
+static para_fiber_t * fiber_cache[MAX_FIBER_CACHE];
+/** @brief Number of fiber contexts currently in the cache */
+static int fiber_cache_count = 0;
+#endif
 
 #ifdef _WIN32
 static CONDITION_VARIABLE queue_cond;
@@ -478,6 +591,8 @@ void * worker_thread(void * arg) {
 
             LOCK(queue_lock);
             job->status = JOB_DONE;
+            done_queue[done_tail] = found_idx;
+            done_tail = (done_tail + 1) % (MAX_JOBS + 1);
             UNLOCK(queue_lock);
         }
         else {
@@ -552,6 +667,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].input.i = arg;
         job_slots[idx].timeout_ms = timeout_ms;
         job_slots[idx].status = JOB_NEW;
+        outstanding_jobs++;
         PARA_COND_SIGNAL(queue_cond);
     }
     UNLOCK(queue_lock);
@@ -568,14 +684,24 @@ DLLEXPORT int check_for_completion() {
         init_threads();
     int job_idx = -1;
     LOCK(queue_lock);
-    for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_slots[i].status == JOB_DONE) {
-            job_idx = i;
-            break;
-        }
+    if (done_head != done_tail) {
+        job_idx = done_queue[done_head];
+        done_head = (done_head + 1) % (MAX_JOBS + 1);
     }
     UNLOCK(queue_lock);
     return job_idx;
+}
+
+/**
+ * @brief Returns the number of background jobs not yet reclaimed.
+ *
+ * Only the main thread touches this counter, so it is a plain read.  The
+ * scheduler uses it to skip polling entirely when no work is in flight.
+ *
+ * @return int Number of outstanding jobs.
+ */
+DLLEXPORT int get_outstanding_jobs() {
+    return outstanding_jobs;
 }
 
 /**
@@ -623,6 +749,7 @@ DLLEXPORT void free_job_slot(int idx) {
         return;
     LOCK(queue_lock);
     job_slots[idx].status = JOB_FREE;
+    outstanding_jobs--;
     UNLOCK(queue_lock);
 }
 
@@ -843,61 +970,113 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     _activate_current_depths(aTHX_ to);
 }
 
+/** @brief Number of 16-byte slots in each fiber control stack. */
+#define FIBER_STACK_DEPTH 2048
+
 /**
- * @brief Allocates and initializes new Perl stacks for a fiber.
+ * @brief Lays out a fiber's Perl control stacks inside a single allocation.
  *
- * Each fiber needs a complete set of independent stacks (Argument, Mark,
- * Scope, Save, Mortal) to function as a separate execution thread.
+ * All of the Mark, Scope, Save and Mortal stacks (plus the Stack Info
+ * structure and its context stack) live in one contiguous 16-byte aligned
+ * block so that a fiber only costs one malloc/free pair instead of seven.
  *
  * @param c The fiber context to initialize.
+ * @param block The memory block to carve the stacks out of (may be NULL).
+ * @param block_size Size of the block (out parameter).
  */
-void init_perl_stacks(para_fiber_t * c) {
-    dTHX;
+static void layout_perl_stacks(pTHX_ para_fiber_t * c, void * block, size_t * block_size) {
+    I32 sz = FIBER_STACK_DEPTH;
 
-    // Allocate Stack Info (SI)
-    Newxz(c->si, 1, PERL_SI);
-    c->si->si_cxmax = 64;
+    /* 16-byte aligned segment sizes */
+    size_t si_sz = (sizeof(PERL_SI) + 15) & ~(size_t)15;
+    size_t cx_sz = (sizeof(PERL_CONTEXT) * 64 + 15) & ~(size_t)15;
+    size_t mk_sz = (sizeof(I32) * sz + 15) & ~(size_t)15;
+    size_t sc_sz = (sizeof(I32) * sz + 15) & ~(size_t)15;
+    size_t sv_sz = (sizeof(ANY) * sz + 15) & ~(size_t)15;
+    size_t tm_sz = (sizeof(SV *) * sz + 15) & ~(size_t)15;
 
-    // Use Newxz to ensure the context stack is zeroed.
-    Newxz(c->si->si_cxstack, c->si->si_cxmax, PERL_CONTEXT);
-    c->si->si_cxix = -1;
-    c->si->si_type = PERLSI_MAIN;
+    size_t total = si_sz + cx_sz + mk_sz + sc_sz + sv_sz + tm_sz;
+    if (!block) {
+        *block_size = total;
+        return;
+    }
+    char * p = (char *)block;
 
-    // Allocate Argument Stack (AV)
-    c->curstack = newAV();
-    AvREAL_off(c->curstack);  // Stacks do not 'own' their elements in the refcnt sense
-    av_extend(c->curstack, 128);
+    /* Only the SI header needs zeroing; the control stacks are managed
+     * through their own ix/count fields and never read beyond them. */
+    memset(block, 0, si_sz);
 
-    // Initialize stack with a dummy undef at index 0, matching Perl's main stack
-    AvARRAY(c->curstack)[0] = &PL_sv_undef;
-    AvFILLp(c->curstack) = 0;
+    PERL_SI * si   = (PERL_SI *)(void *)p;                p += si_sz;
+    PERL_CONTEXT * ctx_stack = (PERL_CONTEXT *)(void *)p;     p += cx_sz;
+    I32 * markstack = (I32 *)(void *)p;                       p += mk_sz;
+    I32 * scopestack = (I32 *)(void *)p;                      p += sc_sz;
+    ANY * savestack = (ANY *)(void *)p;                       p += sv_sz;
+    SV ** tmps_stack = (SV **)(void *)p;                      p += tm_sz;
+
+    si->si_cxmax = 64;
+    si->si_cxstack = ctx_stack;
+    si->si_cxix = -1;
+    si->si_type = PERLSI_MAIN;
+
+    c->si = si;
+    c->markstack = markstack;
+    c->scopestack = scopestack;
+    c->savestack = savestack;
+    c->tmps_stack = tmps_stack;
+    c->_stacks_block = block;
+}
+
+/**
+ * @brief Resets a fiber's Perl control stacks back to their initial state.
+ *
+ * Called when a fiber is destroyed and its memory parked in the reuse
+ * cache.  The single allocation block is kept and simply re-initialized.
+ *
+ * @param c The fiber context to reset.
+ */
+static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
+    I32 sz = FIBER_STACK_DEPTH;
+    PERL_SI * si = c->si;
+
+    /* Release any mortal SVs still parked on the tmps stack */
+    if (c->tmps_stack) {
+        for (I32 i = 0; i <= c->tmps_ix; i++) {
+            SV * sv = c->tmps_stack[i];
+            if (sv && sv != &PL_sv_undef)
+                SvREFCNT_dec(sv);
+        }
+    }
+
+    if (c->curstack) {
+        /* Do NOT av_clear the fiber's argument stack here.  Slots below the
+         * last-saved stack pointer may already have been popped and freed
+         * during earlier resume/yield cycles, so clearing them would
+         * double-decrement live SVs.  The AV is reused verbatim; new pushes
+         * overwrite the stale slots before they are ever read. */
+        AvARRAY(c->curstack)[0] = &PL_sv_undef;
+        AvFILLp(c->curstack) = 0;
+    }
     c->stack_sp_offset = 0;
+    if (si) {
+        si->si_cxix = -1;
+        si->si_stack = c->curstack;
+    }
 
-    // Link the SI to the AV. Perl uses this linkage during stack unwinding.
-    c->si->si_stack = c->curstack;
-
-    // Allocate Control Stacks
-    I32 sz = 2048; /* Recursion depth support */
-
-    Newx(c->markstack, sz, I32);
     c->markstack_ptr = c->markstack;
     *c->markstack_ptr = 0;
     c->markstack_max = c->markstack + sz - 1;
 
-    Newx(c->scopestack, sz, I32);
     c->scopestack_ix = 0;
     c->scopestack_max = sz;
 
-    Newx(c->savestack, sz, ANY);
     c->savestack_ix = 0;
     c->savestack_max = sz;
 
-    Newx(c->tmps_stack, sz, SV *);
     c->tmps_ix = -1;
     c->tmps_floor = -1;
     c->tmps_max = sz;
 
-    // Inherit initial globals from current interpreter state
+    /* Inherit globals from the current interpreter state */
     c->curcop = PL_curcop;
     c->op = PL_op;
     c->top_env = PL_top_env;
@@ -913,10 +1092,64 @@ void init_perl_stacks(para_fiber_t * c) {
     c->curstash = PL_curstash;
     c->defstash = PL_defstash;
     c->errors = PL_errors;
-
-    // Start with fresh pads to avoid interfering with caller.
     c->comppad = NULL;
     c->curpad = NULL;
+}
+
+/**
+ * @brief Allocates and initializes new Perl stacks for a fiber.
+ *
+ * Each fiber needs a complete set of independent stacks (Argument, Mark,
+ * Scope, Save, Mortal) to function as a separate execution thread.  The
+ * control stacks share a single allocation block for speed.
+ *
+ * @param c The fiber context to initialize.
+ */
+void init_perl_stacks(para_fiber_t * c) {
+    dTHX;
+
+    size_t block_size = 0;
+    layout_perl_stacks(aTHX_ c, NULL, &block_size);
+    void * block = malloc(block_size);
+    if (!block) {
+        c->_stacks_block = NULL;
+        return;
+    }
+    layout_perl_stacks(aTHX_ c, block, &block_size);
+
+    // Allocate Argument Stack (AV)
+    c->curstack = newAV();
+    AvREAL_off(c->curstack);  // Stacks do not 'own' their elements in the refcnt sense
+    av_extend(c->curstack, 128);
+
+    /* The block is uninitialized beyond the SI header, so mark the tmps
+     * stack empty before reset runs its release loop. */
+    c->tmps_ix = -1;
+    c->tmps_floor = -1;
+
+    reset_perl_stacks(aTHX_ c);
+}
+
+/**
+ * @brief Frees the Perl stacks and the single allocation block.
+ *
+ * @param c The fiber context whose stacks should be released.
+ */
+static void free_perl_stacks(pTHX_ para_fiber_t * c) {
+    if (c->curstack) {
+        /* Skip av_clear: stale slots may already be freed (see reset_perl_stacks). */
+        SvREFCNT_dec((SV *)c->curstack);
+        c->curstack = NULL;
+    }
+    if (c->_stacks_block) {
+        free(c->_stacks_block);
+        c->_stacks_block = NULL;
+    }
+    c->si = NULL;
+    c->markstack = NULL;
+    c->scopestack = NULL;
+    c->savestack = NULL;
+    c->tmps_stack = NULL;
 }
 
 /**
@@ -990,6 +1223,8 @@ void perform_switch(int target_id) {
         SwitchToFiber(main_fiber_handle);
     else
         SwitchToFiber(to->context);
+#elif defined(USE_ASM_CORO)
+    para_coro_switch(&from->rsp, &to->rsp);
 #else
     swapcontext(&from->context, &to->context);
 #endif
@@ -1046,7 +1281,7 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
  *
  * @param c Pointer to the fiber context being started.
  */
-static void entry_point(para_fiber_t * c) {
+void para_entry_point(para_fiber_t * c) {
     dTHX;
     ENTER;
     SAVETMPS;
@@ -1119,11 +1354,74 @@ static void entry_point(para_fiber_t * c) {
 
 #ifdef _WIN32
 /** @brief Windows fiber callback wrapper. */
-static void WINAPI fiber_entry(void * param) { entry_point((para_fiber_t *)param); }
+static void WINAPI fiber_entry(void * param) { para_entry_point((para_fiber_t *)param); }
 #else
 /** @brief POSIX makecontext callback wrapper. */
-static void posix_entry(int fiber_id) { entry_point(fibers[fiber_id]); }
+static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
 #endif
+
+#ifndef _WIN32
+/**
+ * @brief Obtains a fiber stack, reusing one from the cache when possible.
+ *
+ * @param sz Required stack size in bytes.
+ * @return void* Pointer to a 16-byte aligned stack, or NULL on failure.
+ */
+static void * alloc_fiber_stack(size_t sz) {
+    if (stack_cache_count > 0)
+        return stack_cache[--stack_cache_count];
+    void * p = NULL;
+    if (posix_memalign(&p, 16, sz) != 0)
+        return NULL;
+    return p;
+}
+
+/** @brief Returns a fiber stack to the reuse cache or frees it. */
+static void free_fiber_stack(void * p) {
+    if (stack_cache_count < MAX_CACHED_STACKS)
+        stack_cache[stack_cache_count++] = p;
+    else
+        free(p);
+}
+#endif
+
+/**
+ * @brief Arms the OS-level context for a (possibly recycled) fiber.
+ *
+ * Installs the entry trampoline on the fiber's stack so that the next
+ * context switch resumes the fiber from scratch.
+ *
+ * @param c The fiber context to arm.
+ * @param idx The fiber ID (used by the ucontext makecontext path).
+ */
+static void arm_fiber_context(para_fiber_t * c, int idx) {
+#ifdef _WIN32
+    c->context = CreateFiber(0, fiber_entry, c);
+#else
+#ifdef USE_ASM_CORO
+    /*
+     * Lay out the fresh stack for the assembly switch.  When the switch
+     * routine resumes this context it first pops the six dummy saved
+     * registers, then "returns" into para_trampoline.  The trampoline pops
+     * the fiber pointer and tail-calls para_entry_point with the correct
+     * ABI stack alignment.
+     */
+    void ** slot = (void **)((char *)c->stack_p + c->stack_sz);
+    slot -= 8;  /* 6 saved regs + return address + fiber pointer */
+    for (int i = 0; i < 6; i++)
+        slot[i] = NULL;
+    slot[6] = (void *)&para_trampoline;
+    slot[7] = c;
+    c->rsp = slot;
+#else
+    getcontext(&c->context);
+    c->context.uc_stack.ss_sp = c->stack_p;
+    c->context.uc_stack.ss_size = c->stack_sz;
+    c->context.uc_link = &main_context.context;
+    makecontext(&c->context, (void (*)())posix_entry, 1, idx);
+#endif
+#endif
+}
 
 /**
  * @brief Allocates and prepares a new Fiber context.
@@ -1143,10 +1441,44 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     }
     if (idx == -1)
         return -2;
-    para_fiber_t * c = (para_fiber_t *)malloc(sizeof(para_fiber_t));
-    if (!c)
-        return -3;
-    memset(c, 0, sizeof(para_fiber_t));
+
+    para_fiber_t * c = NULL;
+#ifndef _WIN32
+    if (fiber_cache_count > 0)
+        c = fiber_cache[--fiber_cache_count];
+#endif
+    if (c) {
+        /* Recycle a parked fiber context: re-inherit globals, clear pads */
+        reset_perl_stacks(aTHX_ c);
+    }
+    else {
+        c = (para_fiber_t *)malloc(sizeof(para_fiber_t));
+        if (!c)
+            return -3;
+        memset(c, 0, sizeof(para_fiber_t));
+        /* Initialize Perl stacks */
+        init_perl_stacks(c);
+        if (!c->_stacks_block) {
+            free(c);
+            return -3;
+        }
+#ifndef _WIN32
+        c->stack_sz = 512 * 1024;  // 512KB is plenty for Perl fibers
+        c->stack_p = alloc_fiber_stack(c->stack_sz);
+        if (!c->stack_p) {
+            free_perl_stacks(aTHX_ c);
+            free(c);
+            return -3;
+        }
+#else
+        c->context = NULL;
+#endif
+    }
+
+    /* Reset the coderef's call depth so the fiber starts clean */
+    if (user_code && user_code != &PL_sv_undef)
+        force_depth_zero(user_code);
+
     c->user_cv = user_code;
     if (user_code && user_code != &PL_sv_undef)
         SvREFCNT_inc(user_code);
@@ -1156,26 +1488,11 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     c->id = idx;
     c->parent_id = -1;
     c->last_sender = -1;
+    c->finished = 0;
     c->transfer_data = &PL_sv_undef;
     fibers[idx] = c;
 
-    /* Initialize Perl stacks */
-    init_perl_stacks(c);
-
-#ifdef _WIN32
-    c->context = CreateFiber(0, fiber_entry, c);
-#else
-    c->stack_sz = 512 * 1024;  // 512KB is plenty for Perl fibers
-    if (posix_memalign(&c->stack_p, 16, c->stack_sz) != 0) {
-        destroy_coro(idx);
-        return -3;
-    }
-    getcontext(&c->context);
-    c->context.uc_stack.ss_sp = c->stack_p;
-    c->context.uc_stack.ss_size = c->stack_sz;
-    c->context.uc_link = &main_context.context;
-    makecontext(&c->context, (void (*)())posix_entry, 1, c->id);
-#endif
+    arm_fiber_context(c, idx);
     return idx;
 }
 
@@ -1214,6 +1531,73 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     if (res && res != &PL_sv_undef)
         sv_2mortal(res);
     return res;
+}
+
+/**
+ * @brief Runs a fiber to its next suspension point and cleans it up.
+ *
+ * Combines the scheduler's per-fiber work (resume, finish detection and
+ * destruction) into a single call so the FFI overhead is paid once per
+ * fiber instead of four times.
+ *
+ * @param fiber_id Fiber to resume.
+ * @param args Argument arrayref to pass to the fiber, or NULL for none.
+ * @return int -1 fiber not found, 0 still running (re-enqueue),
+ *              1 finished and destroyed, 3 yielded 'WAITING'.
+ */
+DLLEXPORT int run_fiber_checked(int fiber_id, SV * args) {
+    dTHX;
+    if (fiber_id < 0 || fiber_id >= MAX_FIBERS || !fibers[fiber_id])
+        return -1;
+    para_fiber_t * c = fibers[fiber_id];
+    if (c->finished) {
+        destroy_coro(fiber_id);
+        return 1;
+    }
+    SV * ret = coro_call(fiber_id, args);
+    if (!fibers[fiber_id] || fibers[fiber_id]->finished) {
+        destroy_coro(fiber_id);
+        return 1;
+    }
+    if (ret && SvROK(ret) && SvTYPE(SvRV(ret)) == SVt_PVAV) {
+        AV * av = (AV *)SvRV(ret);
+        if (av_len(av) == 0) {
+            SV ** svp = av_fetch(av, 0, 0);
+            if (svp && *svp && SvPOK(*svp) && strEQ(SvPVX(*svp), "WAITING"))
+                return 3;
+        }
+    }
+    return 0;
+}
+
+/**
+ * @brief Reclaims all completed background jobs in a single call.
+ *
+ * Returns an arrayref of [fiber_id, result] pairs for every finished job,
+ * freeing the job slots as it goes.
+ *
+ * @return SV* Arrayref of completed jobs (may be empty).
+ */
+DLLEXPORT void drain_jobs(SV * out_ref) {
+    dTHX;
+    if (!out_ref || !SvROK(out_ref) || SvTYPE(SvRV(out_ref)) != SVt_PVAV)
+        return;
+    AV * out = (AV *)SvRV(out_ref);
+    av_clear(out);
+    while (1) {
+        int job_idx = check_for_completion();
+        if (job_idx == -1)
+            break;
+        AV * pair = newAV();
+        av_push(pair, newSViv(get_job_coro_id(job_idx)));
+        SV * res = get_job_result(job_idx);
+        /* get_job_result returns a mortal parked on the caller's tmps stack;
+         * copy it so the pair owns its own SV instead of double-decrementing
+         * the mortal when both the pair and FREETMPS release it. */
+        av_push(pair, (res && res != &PL_sv_undef) ? newSVsv(res) : &PL_sv_undef);
+        av_push(out, newRV_noinc((SV *)pair));
+        free_job_slot(job_idx);
+    }
 }
 
 /**
@@ -1343,6 +1727,7 @@ DLLEXPORT void destroy_coro(int fiber_id) {
         if (c->stack_p)
             free(c->stack_p);
 #endif
+        free_perl_stacks(aTHX_ c);
         free(c);
         return;
     }
@@ -1351,35 +1736,19 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     if (c->context)
         DeleteFiber(c->context);
 #else
-    if (c->stack_p)
-        free(c->stack_p);
+    /* Park the whole context (Perl stacks + OS stack) for reuse */
+    if (fiber_cache_count < MAX_FIBER_CACHE) {
+        reset_perl_stacks(aTHX_ c);
+        fiber_cache[fiber_cache_count++] = c;
+        return;
+    }
+    if (c->stack_p) {
+        free_fiber_stack(c->stack_p);
+        c->stack_p = NULL;
+    }
 #endif
 
-    /* Safely free Perl-allocated stacks */
-    if (c->si) {
-        if (c->si->si_cxstack)
-            Safefree(c->si->si_cxstack);
-        Safefree(c->si);
-    }
-    if (c->curstack) {
-        av_clear(c->curstack);
-        SvREFCNT_dec((SV *)c->curstack);
-        c->curstack = NULL;
-    }
-    if (c->markstack)
-        Safefree(c->markstack);
-    if (c->scopestack)
-        Safefree(c->scopestack);
-    if (c->savestack)
-        Safefree(c->savestack);
-    if (c->tmps_stack) {
-        for (I32 i = 0; i <= c->tmps_ix; i++) {
-            SV * sv = c->tmps_stack[i];
-            if (sv && sv != &PL_sv_undef)
-                SvREFCNT_dec(sv);
-        }
-        Safefree(c->tmps_stack);
-    }
+    free_perl_stacks(aTHX_ c);
     free(c);
 }
 
@@ -1419,6 +1788,10 @@ DLLEXPORT void cleanup() {
     for (int i = 0; i < MAX_FIBERS; i++)
         if (fibers[i])
             destroy_coro(i);
+#ifndef _WIN32
+    while (stack_cache_count > 0)
+        free(stack_cache[--stack_cache_count]);
+#endif
     if (main_context.transfer_data && main_context.transfer_data != &PL_sv_undef) {
         SvREFCNT_dec(main_context.transfer_data);
         main_context.transfer_data = &PL_sv_undef;

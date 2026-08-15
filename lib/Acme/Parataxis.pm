@@ -30,6 +30,7 @@ package Acme::Parataxis v0.0.10 {
         affix $l, 'init_system',                       [],                             Int;
         affix $l, 'create_fiber',                      [ Pointer [SV], Pointer [SV] ], Int;
         affix $l, 'coro_call',                         [ Int, Pointer [SV] ],          Pointer [SV];
+        affix $l, 'run_fiber_checked',                 [ Int, Pointer [SV] ],          Int;
         affix $l, 'coro_transfer',                     [ Int, Pointer [SV] ],          Pointer [SV];
         affix $l, 'coro_yield',                        [ Pointer [SV] ],               Pointer [SV];
         affix $l, 'is_finished',                       [Int],                          Int;
@@ -39,7 +40,9 @@ package Acme::Parataxis v0.0.10 {
         affix $l, 'get_os_thread_id_export',           [],                             Int;
         affix $l, 'get_current_parataxis_id',          [],                             Int;
         affix $l, 'submit_c_job',                      [ Int, LongLong, Int ],         Int;
+        affix $l, 'drain_jobs',                        [ Pointer [SV] ],                Void;
         affix $l, 'check_for_completion',              [],                             Int;
+        affix $l, 'get_outstanding_jobs',              [],                             Int;
         affix $l, 'get_job_result',                    [Int],                          Pointer [SV];
         affix $l, 'get_job_coro_id',                   [Int],                          Int;
         affix $l, 'free_job_slot',                     [Int],                          Void;
@@ -127,13 +130,20 @@ package Acme::Parataxis v0.0.10 {
         return $future;
     }
 
+    my $PENDING_JOBS = 0;
+    sub _submit_job ( $type, $arg, $timeout ) {
+        return -1 if submit_c_job( $type, $arg, $timeout ) < 0;
+        $PENDING_JOBS++;
+        return 0;
+    }
+
     sub await_sleep {
         my $invocant = shift;
         if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my $ms = shift // 0;
-        return 'Queue Full' if submit_c_job( 0, $ms, 0 ) < 0;
+        return 'Queue Full' if _submit_job( 0, $ms, 0 ) < 0;
         return yield('WAITING');
     }
 
@@ -142,7 +152,7 @@ package Acme::Parataxis v0.0.10 {
         if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
             unshift @_, $invocant if defined $invocant;
         }
-        return 'Queue Full' if submit_c_job( 1, 0, 0 ) < 0;
+        return 'Queue Full' if _submit_job( 1, 0, 0 ) < 0;
         return yield('WAITING');
     }
 
@@ -156,7 +166,7 @@ package Acme::Parataxis v0.0.10 {
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-        return 'Queue Full' if submit_c_job( 2, $handle, $timeout ) < 0;
+        return 'Queue Full' if _submit_job( 2, $handle, $timeout ) < 0;
         return yield('WAITING');
     }
 
@@ -170,7 +180,7 @@ package Acme::Parataxis v0.0.10 {
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-        return 'Queue Full' if submit_c_job( 3, $handle, $timeout ) < 0;
+        return 'Queue Full' if _submit_job( 3, $handle, $timeout ) < 0;
         return yield('WAITING');
     }
 
@@ -208,40 +218,46 @@ package Acme::Parataxis v0.0.10 {
         return @ready;
     }
 
+    sub _handle_run ($fiber, $status) {
+        if ( $status == 1 ) {
+            $fiber->_mark_done;
+            my $err = $fiber->error;
+            die $err if defined $err;
+            return 1;
+        }
+        push @SCHEDULER_QUEUE, $fiber if $status == 0;
+        return $status;
+    }
+
     sub run ($code) {
         @SCHEDULER_QUEUE = ();
         $IS_RUNNING      = 1;
         my $main_fiber = Acme::Parataxis->new( code => $code );
         push @SCHEDULER_QUEUE, $main_fiber;
         while ($IS_RUNNING) {
-            my @ready = poll_io();
+            my @ready;
+            if ($PENDING_JOBS) {
+                my $out = [];
+                drain_jobs($out);
+                @ready = @$out;
+                $PENDING_JOBS -= @ready;
+            }
             for my $ready (@ready) {
                 my ( $fid, $res ) = @$ready;
                 my $fiber = Acme::Parataxis->by_id($fid);
-                if ($fiber) {
-                    my $yield_val = $fiber->call($res);
-                    if ( defined $fiber && !$fiber->is_done ) {
-                        if ( defined $yield_val && $yield_val eq 'WAITING' ) { }
-                        else {
-                            push @SCHEDULER_QUEUE, $fiber;
-                        }
-                    }
+                next unless $fiber;
+                my $yield_val = $fiber->call($res);
+                if ( defined $fiber && !$fiber->is_done ) {
+                    push @SCHEDULER_QUEUE, $fiber unless defined $yield_val && $yield_val eq 'WAITING';
                 }
             }
             if (@SCHEDULER_QUEUE) {
                 my $current = shift @SCHEDULER_QUEUE;
                 next unless $current;
-                next if $current->is_done;
-                my $res = $current->call();
-                if ( defined $current && !$current->is_done ) {
-                    if ( defined $res && $res eq 'WAITING' ) { }
-                    else {
-                        push @SCHEDULER_QUEUE, $current;
-                    }
-                }
+                _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
             }
             my $active_count = scalar keys %Acme::Parataxis::REGISTRY;
-            if ( defined $main_fiber && $main_fiber->is_done && $active_count == 0 && !@SCHEDULER_QUEUE ) {
+            if ( defined $main_fiber && !@SCHEDULER_QUEUE && $active_count == 0 && $main_fiber->is_done ) {
                 $IS_RUNNING = 0;
             }
             if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
@@ -275,8 +291,16 @@ package Acme::Parataxis v0.0.10 {
             $error  = undef;
         }
         our %REGISTRY;
+        method _mark_done () {
+            return if $is_done;
+            $is_done = 1;
+            if ( defined $fid && $fid >= 0 ) {
+                delete $REGISTRY{$fid};
+                $fid = -1;
+            }
+        }
+
         ADJUST {
-            Acme::Parataxis::force_depth_zero($code);
             $fid = Acme::Parataxis::create_fiber( $code, $self );
             $REGISTRY{$fid} = $self;
             builtin::weaken $REGISTRY{$fid};
