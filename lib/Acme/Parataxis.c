@@ -370,6 +370,12 @@ typedef struct {
 #define MAX_FIBERS 1024
 /** @brief Array of active fiber structures */
 static para_fiber_t * fibers[MAX_FIBERS];
+/** @brief LIFO of free fiber slot indexes (O(1) allocation) */
+static int free_slots[MAX_FIBERS];
+/** @brief Number of free slots currently on the free list */
+static int free_slot_count = 0;
+/** @brief Tracks whether the free list has been seeded with all slots */
+static int free_slots_seeded = 0;
 /** @brief The context representing the main Perl thread */
 static para_fiber_t main_context;
 /** @brief ID of the currently executing fiber (-1 for Main) */
@@ -1164,6 +1170,12 @@ DLLEXPORT int init_system() {
     dTHX;
     if (system_initialized)
         return 0;
+    if (!free_slots_seeded) {
+        for (int i = 0; i < MAX_FIBERS; i++)
+            free_slots[i] = MAX_FIBERS - 1 - i;
+        free_slot_count = MAX_FIBERS;
+        free_slots_seeded = 1;
+    }
     if (max_thread_pool_size == 0) {
         max_thread_pool_size = get_cpu_count();
         if (max_thread_pool_size > MAX_THREADS)
@@ -1432,11 +1444,24 @@ static void arm_fiber_context(para_fiber_t * c, int idx) {
  */
 DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     dTHX;
-    int idx = -1;
-    for (int i = 0; i < MAX_FIBERS; i++) {
-        if (fibers[i] == NULL) {
-            idx = i;
-            break;
+    if (!free_slots_seeded) {
+        for (int i = 0; i < MAX_FIBERS; i++)
+            free_slots[i] = MAX_FIBERS - 1 - i;
+        free_slot_count = MAX_FIBERS;
+        free_slots_seeded = 1;
+    }
+    int idx;
+    if (free_slot_count > 0) {
+        idx = free_slots[--free_slot_count];
+    }
+    else {
+        /* Safety net: scan for a slot if the free list is ever exhausted. */
+        idx = -1;
+        for (int i = 0; i < MAX_FIBERS; i++) {
+            if (fibers[i] == NULL) {
+                idx = i;
+                break;
+            }
         }
     }
     if (idx == -1)
@@ -1702,6 +1727,8 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     if (!c)
         return;
     fibers[fiber_id] = NULL;
+    if (free_slot_count < MAX_FIBERS)
+        free_slots[free_slot_count++] = fiber_id;
 
     /* Unwind pads */
     if (c->si)

@@ -109,7 +109,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub yield {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
             $invocant = 'Acme::Parataxis';
         }
@@ -139,7 +139,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub await_sleep {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my $ms = shift // 0;
@@ -149,7 +149,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub await_core_id {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         return 'Queue Full' if _submit_job( 1, 0, 0 ) < 0;
@@ -158,7 +158,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub await_read {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my ( $fh, $timeout ) = @_;
@@ -172,7 +172,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub await_write {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my ( $fh, $timeout ) = @_;
@@ -186,7 +186,7 @@ package Acme::Parataxis v0.0.10 {
 
     sub maybe_yield {
         my $invocant = shift;
-        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !eval { $invocant->isa('Acme::Parataxis') } ) ) {
+        if ( !defined $invocant || ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my $result = Acme::Parataxis::_maybe_yield();
