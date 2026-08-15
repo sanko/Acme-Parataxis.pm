@@ -1638,9 +1638,14 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
     if (!user_code || user_code == &PL_sv_undef || !class || class == &PL_sv_undef)
         return &PL_sv_undef;
     char * cls = SvPV_nolen(class);
+    static HV * own_stash = NULL;
+    if (!own_stash)
+        own_stash = gv_stashpv("Acme::Parataxis", GV_ADD);
+    HV * stash = strEQ(cls, "Acme::Parataxis") ? own_stash : gv_stashpv(cls, GV_ADD);
     AV * obj = newAV();
+    av_extend(obj, 8);  /* pre-size to fit every F_* slot in one allocation */
     SV * objrv = newRV_noinc((SV *)obj);
-    sv_bless(objrv, gv_stashpv(cls, GV_ADD));
+    sv_bless(objrv, stash);
     av_store(obj, 0, SvREFCNT_inc(user_code));  /* F_CODE */
     int fid = create_fiber(user_code, objrv);
     if (fid < 0) {

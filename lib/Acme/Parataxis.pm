@@ -412,13 +412,15 @@ package Acme::Parataxis v0.0.10 {
     }
 
     sub await {
-        my ($self) = @_;
-        if ( !$self->[F_IS_READY] ) {
+        my $self  = shift;
+        my $ready = $self->[F_IS_READY];
+        if ( !$ready ) {
             $self->[F_WAITER] = Acme::Parataxis->current_fid;
             $self->on_ready( \&_wake_waiter );
             Acme::Parataxis->yield('WAITING');
+            $ready = $self->[F_IS_READY];
         }
-        croak 'Future not ready' unless $self->[F_IS_READY];
+        croak 'Future not ready' unless $ready;
         return $self->[F_RESULT];
     }
 
