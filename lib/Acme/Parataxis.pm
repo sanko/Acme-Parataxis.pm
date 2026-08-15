@@ -37,12 +37,14 @@ package Acme::Parataxis v0.0.10 {
         F_FID       => 4,
         F_IS_READY  => 5,
         F_CALLBACKS => 6,
-        F_WAITER    => 7
+        F_WAITER    => 7,
+        F_LAST_STATUS => 8
     };
 
     sub _bind_functions ($l) {
         affix $l, 'init_system',                       [],                             Int;
         affix $l, 'create_fiber',                      [ Pointer [SV], Pointer [SV] ], Int;
+        affix $l, 'spawn_fiber',                       [ Pointer [SV], Pointer [SV] ], Pointer [SV];
         affix $l, 'coro_call',                         [ Int, Pointer [SV] ],          Pointer [SV];
         affix $l, 'run_fiber_checked',                 [ Int, Pointer [SV] ],          Int;
         affix $l, 'coro_transfer',                     [ Int, Pointer [SV] ],          Pointer [SV];
@@ -140,17 +142,14 @@ package Acme::Parataxis v0.0.10 {
             $code  = $class;
             $class = 'Acme::Parataxis';
         }
-        my $fiber = bless [], $class;
-        $fiber->[F_CODE] = $code;
-        my $fid   = Acme::Parataxis::create_fiber( $code, $fiber );
-        $fiber->[F_FID] = $fid;
-        my $status = Acme::Parataxis::run_fiber_checked( $fid, undef );
+        my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
+        my $status = $fiber->[F_LAST_STATUS];
         if ( $status == 1 ) {
             my $err = $fiber->[F_ERROR];
             die $err if defined $err;
         }
         elsif ( $status == 0 ) {
-            $SCHEDULER_QUEUED{$fid} = 1;
+            $SCHEDULER_QUEUED{ $fiber->[F_FID] } = 1;
             push @SCHEDULER_QUEUE, $fiber;
         }
         return $fiber;

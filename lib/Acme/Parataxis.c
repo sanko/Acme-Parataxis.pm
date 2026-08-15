@@ -1622,6 +1622,38 @@ DLLEXPORT int run_fiber_checked(int fiber_id, SV * args) {
 }
 
 /**
+ * @brief Creates a fiber object, its C context, and runs it inline.
+ *
+ * Merges the Perl-side spawn sequence (bless, create_fiber, run_fiber_checked)
+ * into a single FFI call.  Returns the blessed fiber object with the run
+ * status stored at object slot 8 (F_LAST_STATUS):
+ *   1 finished, 0 yielded (re-enqueue), 3 yielded 'WAITING', -1 not found.
+ *
+ * @param user_code Coderef to run as the fiber body.
+ * @param class     Class name to bless the fiber object into.
+ * @return SV* The blessed fiber object, or &PL_sv_undef on failure.
+ */
+DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
+    dTHX;
+    if (!user_code || user_code == &PL_sv_undef || !class || class == &PL_sv_undef)
+        return &PL_sv_undef;
+    char * cls = SvPV_nolen(class);
+    AV * obj = newAV();
+    SV * objrv = newRV_noinc((SV *)obj);
+    sv_bless(objrv, gv_stashpv(cls, GV_ADD));
+    av_store(obj, 0, SvREFCNT_inc(user_code));  /* F_CODE */
+    int fid = create_fiber(user_code, objrv);
+    if (fid < 0) {
+        SvREFCNT_dec(objrv);
+        return &PL_sv_undef;
+    }
+    av_store(obj, 4, newSViv(fid));             /* F_FID */
+    int st = run_fiber_checked(fid, &PL_sv_undef);
+    av_store(obj, 8, newSViv(st));              /* F_LAST_STATUS */
+    return objrv;
+}
+
+/**
  * @brief Reclaims all completed background jobs in a single call.
  *
  * Returns an arrayref of [fiber_id, result] pairs for every finished job,
