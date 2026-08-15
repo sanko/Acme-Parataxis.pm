@@ -1334,25 +1334,49 @@ void para_entry_point(para_fiber_t * c) {
         c->transfer_data = ret_val;
     }
 
-    /* Update the Perl-level Acme::Parataxis object */
+    /* Update the Perl-level Acme::Parataxis object.
+     *
+     * The object is a blessed flat arrayref; slot layout mirrors the
+     * Perl-side constants F_ERROR=2, F_RESULT=3, F_IS_READY=5,
+     * F_CALLBACKS=6.  Writing the result/error slots directly avoids a
+     * method dispatch per fiber completion; the callback dispatch sub is
+     * only invoked when callbacks were actually registered. */
     if (c->self_ref && SvROK(c->self_ref)) {
-        dSP;
-        ENTER;
-        SAVETMPS;
-        PUSHMARK(SP);
-        XPUSHs(c->self_ref);
-        if (SvTRUE(ERRSV)) {
-            XPUSHs(ERRSV);
-            PUTBACK;
-            call_method("set_error", G_DISCARD);
+        AV * obj = (AV *)SvRV(c->self_ref);
+        SV ** ready = av_fetch(obj, 5, 0);
+        if (!(ready && *ready && SvTRUE(*ready))) {
+            if (SvTRUE(ERRSV)) {
+                av_store(obj, 2, newSVsv(ERRSV));
+                av_store(obj, 5, &PL_sv_yes);
+            }
+            else {
+                if (ret_val != &PL_sv_undef)
+                    av_store(obj, 3, SvREFCNT_inc(ret_val));
+                av_store(obj, 5, &PL_sv_yes);
+            }
+            /* F_IS_DONE=1, F_FID=-1: the fiber is finished, so the object
+             * is marked done and must not touch the (already recycled)
+             * C context from DESTROY/is_done. */
+            av_store(obj, 1, &PL_sv_yes);
+            SV ** fp = av_fetch(obj, 4, 0);
+            if (fp && *fp)
+                sv_setiv(*fp, -1);
+            SV ** cbs = av_fetch(obj, 6, 0);
+            if (cbs && *cbs && SvROK(*cbs) && SvTYPE(SvRV(*cbs)) == SVt_PVAV) {
+                AV * cbav = (AV *)SvRV(*cbs);
+                if (av_len(cbav) >= 0) {
+                    dSP;
+                    ENTER;
+                    SAVETMPS;
+                    PUSHMARK(SP);
+                    XPUSHs(c->self_ref);
+                    PUTBACK;
+                    call_method("_dispatch_callbacks", G_DISCARD);
+                    FREETMPS;
+                    LEAVE;
+                }
+            }
         }
-        else {
-            XPUSHs(ret_val);
-            PUTBACK;
-            call_method("set_result", G_DISCARD);
-        }
-        FREETMPS;
-        LEAVE;
     }
     FREETMPS;
     LEAVE;
@@ -1550,6 +1574,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
             SvREFCNT_dec(fibers[fiber_id]->transfer_data);
             fibers[fiber_id]->transfer_data = &PL_sv_undef;
         }
+        destroy_coro(fiber_id);
     }
     para_fiber_t * me = (current_fiber_id == -1) ? &main_context : fibers[current_fiber_id];
     SV * res = me->transfer_data;
@@ -1656,6 +1681,7 @@ DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
             SvREFCNT_dec(fibers[target_id]->transfer_data);
             fibers[target_id]->transfer_data = &PL_sv_undef;
         }
+        destroy_coro(target_id);
     }
     para_fiber_t * me = (current_fiber_id == -1) ? &main_context : fibers[current_fiber_id];
     SV * res = me->transfer_data;
@@ -1670,6 +1696,36 @@ DLLEXPORT int is_finished(int fiber_id) {
     if (fiber_id < 0)
         return 0;
     return (fibers[fiber_id] && fibers[fiber_id]->finished) ? 1 : 0;
+}
+
+/**
+ * @brief Returns the Perl object bound to a live fiber, if any.
+ *
+ * Replaces the Perl-level %REGISTRY lookup: the C context already owns a
+ * strong reference to the object via self_ref, so no separate registry or
+ * weak-reference bookkeeping is needed on the Perl side.
+ *
+ * @param fiber_id The fiber ID to look up.
+ * @return SV* The blessed fiber object (mortalized), or &PL_sv_undef.
+ */
+DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
+    dTHX;
+    if (fiber_id < 0 || fiber_id >= MAX_FIBERS || !fibers[fiber_id])
+        return &PL_sv_undef;
+    SV * self_ref = fibers[fiber_id]->self_ref;
+    if (!self_ref || self_ref == &PL_sv_undef)
+        return &PL_sv_undef;
+    SvREFCNT_inc(self_ref);
+    return sv_2mortal(self_ref);
+}
+
+/** @brief Returns the number of currently live (non-destroyed) fibers. */
+DLLEXPORT int get_live_fiber_count(void) {
+    int count = 0;
+    for (int i = 0; i < MAX_FIBERS; i++)
+        if (fibers[i])
+            count++;
+    return count;
 }
 
 /** @brief Internal helper to reset subroutine depth for cleanup. */

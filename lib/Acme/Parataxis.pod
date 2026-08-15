@@ -113,7 +113,8 @@ automatically calls C<stop( )> when the block completes.
 
 =head2 C<fiber { ... }>
 
-An alias for C<spawn( )>. It creates a new fiber and returns a L<Future|/"Acme::Parataxis::Future OBJECT METHODS">.
+An alias for C<spawn( )>. It creates a new fiber and returns an C<Acme::Parataxis> fiber object that can be awaited
+with C<await( )> or C<< ->await( ) >>, and also provides Future-style methods (C<result>, C<on_ready>).
 
     my $f = fiber {
         say "Hello from fiber!";
@@ -246,8 +247,8 @@ fibers or pending background tasks.
 
 =head2 C<spawn( $code )>
 
-Creates a new fiber and adds it to the scheduler's queue. Returns a L<Future|/"Acme::Parataxis::Future OBJECT METHODS">
-that will eventually contain the fiber's return value.
+Creates a new fiber and runs it. Returns an C<Acme::Parataxis> fiber object that can be awaited with C<await( )> or
+C<< ->await( ) >> and will eventually contain the fiber's return value.
 
     my $future = Acme::Parataxis->spawn(sub {
         return "Hello from fiber #" . Acme::Parataxis->current_fid;
