@@ -30,16 +30,29 @@ package Acme::Parataxis v0.0.10 {
     # Fiber object layout: a flat arrayref of slots (array access is much
     # cheaper than hash lookup on the hot spawn/await path).
     use constant {
-        F_CODE      => 0,
-        F_IS_DONE   => 1,
-        F_ERROR     => 2,
-        F_RESULT    => 3,
-        F_FID       => 4,
-        F_IS_READY  => 5,
-        F_CALLBACKS => 6,
-        F_WAITER    => 7,
-        F_LAST_STATUS => 8
+        F_CODE        => 0,
+        F_IS_DONE     => 1,
+        F_ERROR       => 2,
+        F_RESULT      => 3,
+        F_FID         => 4,
+        F_IS_READY    => 5,
+        F_CALLBACKS   => 6,
+        F_WAITER      => 7,
+        F_LAST_STATUS => 8,
+        F_PRIORITY    => 9
     };
+
+    # Scheduler run queue.  Kept sorted by descending priority (stable for
+    # equal priorities, so a group of same-priority fibers stays FIFO).
+    sub _enqueue ($fiber) {
+        my $fid = $fiber->[F_FID];
+        return if $SCHEDULER_QUEUED{$fid};
+        $SCHEDULER_QUEUED{$fid} = 1;
+        my $prio = $fiber->[F_PRIORITY] // 0;
+        my $i    = 0;
+        $i++ while $i < @SCHEDULER_QUEUE && ( $SCHEDULER_QUEUE[$i]->[F_PRIORITY] // 0 ) >= $prio;
+        splice @SCHEDULER_QUEUE, $i, 0, $fiber;
+    }
 
     sub _bind_functions ($l) {
         affix $l, 'init_system',                       [],                             Int;
@@ -138,8 +151,8 @@ package Acme::Parataxis v0.0.10 {
             die $err if defined $err;
         }
         elsif ( $status == 0 ) {
-            $SCHEDULER_QUEUED{ $fiber->[F_FID] } = 1;
-            push @SCHEDULER_QUEUE, $fiber;
+            $fiber->[F_PRIORITY] //= 0;
+            _enqueue($fiber);
         }
         return $fiber;
     }
@@ -216,8 +229,7 @@ package Acme::Parataxis v0.0.10 {
     sub _scheduler_enqueue_by_id ($fid) {
         return if $SCHEDULER_QUEUED{$fid};
         if ( my $fiber = Acme::Parataxis->by_id($fid) ) {
-            $SCHEDULER_QUEUED{$fid} = 1;
-            push @SCHEDULER_QUEUE, $fiber;
+            _enqueue($fiber);
         }
     }
     sub poll_io {
@@ -241,8 +253,8 @@ package Acme::Parataxis v0.0.10 {
             return 1;
         }
         if ( $status == 0 ) {
-            $SCHEDULER_QUEUED{ $fiber->[F_FID] } = 1;
-            push @SCHEDULER_QUEUE, $fiber;
+            $fiber->[F_PRIORITY] //= 0;
+            _enqueue($fiber);
         }
         return $status;
     }
@@ -253,16 +265,14 @@ package Acme::Parataxis v0.0.10 {
             # loop (one global scheduler, like Coro). Queue a fresh fiber for
             # the block and park the current fiber until it completes.
             my $fiber = Acme::Parataxis::_new( 'Acme::Parataxis', $code );
-            $SCHEDULER_QUEUED{ $fiber->fid } = 1;
-            push @SCHEDULER_QUEUE, $fiber;
+            _enqueue($fiber);
             return $fiber->await;
         }
         @SCHEDULER_QUEUE  = ();
         %SCHEDULER_QUEUED = ();
         $IS_RUNNING        = 1;
         my $main_fiber = Acme::Parataxis->new( code => $code );
-        $SCHEDULER_QUEUED{ $main_fiber->fid } = 1;
-        push @SCHEDULER_QUEUE, $main_fiber;
+        _enqueue($main_fiber);
         while ($IS_RUNNING) {
             my @ready;
             if ($PENDING_JOBS) {
@@ -277,7 +287,7 @@ package Acme::Parataxis v0.0.10 {
                 next unless $fiber;
                 my $yield_val = $fiber->call($res);
                 if ( defined $fiber && !$fiber->is_done ) {
-                    push @SCHEDULER_QUEUE, $fiber unless defined $yield_val && $yield_val eq 'WAITING';
+                    _enqueue($fiber) unless defined $yield_val && $yield_val eq 'WAITING';
                 }
             }
             if (@SCHEDULER_QUEUE) {
@@ -301,7 +311,7 @@ package Acme::Parataxis v0.0.10 {
     }
     sub stop () { $IS_RUNNING = 0 }
     sub _new ( $class, $code ) {
-        my $self  = bless [ $code, 0, undef, undef, undef, 0, undef, undef ], $class;
+        my $self = bless [ $code, 0, undef, undef, undef, 0, undef, undef, undef, 0 ], $class;
         $self->[F_FID] = Acme::Parataxis::create_fiber( $code, $self );
         return $self;
     }
@@ -314,6 +324,22 @@ package Acme::Parataxis v0.0.10 {
     sub fid      ($self) { $self->[F_FID] }
     sub code     ($self) { $self->[F_CODE] }
     sub error    ($self) { $self->[F_ERROR] }
+
+    # Coro-compatible scheduler priority.  Higher numbers run first; ties
+    # keep the FIFO order they were enqueued in.  The default is 0.
+    sub priority {
+        my $self = shift;
+        my $prio = $self->[F_PRIORITY] // 0;
+        return $prio unless @_;
+        my $n = shift;
+        $self->[F_PRIORITY] = $n;
+        my $fid = $self->[F_FID];
+        if ( delete $SCHEDULER_QUEUED{$fid} ) {
+            @SCHEDULER_QUEUE = grep { $_->[F_FID] != $fid } @SCHEDULER_QUEUE;
+            _enqueue($self);
+        }
+        return $n;
+    }
     sub is_ready ($self) { $self->[F_IS_READY] }
 
     sub set_result {

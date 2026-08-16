@@ -259,10 +259,21 @@ C<< ->await( ) >> and will eventually contain the fiber's return value.
 Pauses the current fiber and returns control to the scheduler. If C<@args> are provided, they are passed to the context
 that next resumes this fiber. Arguments can be of any Perl data type.
 
+=head2 C<< $fiber->priority( [ $prio ] ) >>
+
+Get or set the scheduler priority of a fiber, Coro-style. Higher numbers are resumed first; fibers with equal priority
+keep the FIFO order they were enqueued in. The default priority is 0. Setting the priority of a fiber that is already
+queued immediately moves it to its new position in the run queue.
+
+    my $fast = Acme::Parataxis->spawn(sub { ... });
+    $fast->priority(10);   # runs before any priority-0 fiber
+
 =head2 C<stop( )>
 
 Tells the scheduler to exit the loop after the current iteration. Note that this does not immediately terminate other
 fibers; it simply prevents the scheduler from starting new ones.
+
+=cut
 
 =head1 THREAD POOL CONFIGURATION
 
