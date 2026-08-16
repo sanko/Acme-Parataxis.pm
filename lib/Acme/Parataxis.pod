@@ -546,6 +546,25 @@ C<shutdown> is called:
         say $q->get while 1;                          # consumer
     };
 
+=head2 C<Acme::Parataxis::Signal>
+
+A Coro::Signal-style binary semaphore / event flag: C<new>, C<wait>
+(with optional callback), C<send>, C<broadcast> and C<awaited>.
+C<send> wakes up I<one> waiter or remembers the signal if nobody is
+waiting; C<broadcast> wakes up I<all> waiters or loses the signal;
+C<wait> consumes a remembered signal or parks until one arrives.  A
+callback passed to C<wait> is invoked in the sending fiber's context:
+
+    use Acme::Parataxis;
+    use Acme::Parataxis::Signal;
+
+    my $sig = Acme::Parataxis::Signal->new;
+
+    async {
+        fiber { $sig->wait; say 'go!' };
+        $sig->send;
+    };
+
 B<Note:> both modules park fibers while blocked, so they behave like the
 C<await_*> functions.  Avoid ceding to the scheduler (C<yield>) from
 inside a C<guard> critical section: with all permits held and the holder

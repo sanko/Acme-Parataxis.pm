@@ -30,7 +30,8 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 
 - `Acme::Parataxis::Channel` - Coro::Channel-style message queues built on counting semaphores: `new`, `put`, `get`, `shutdown`, `size` (and the undocumented `adjust`). Writers park while the queue is full, readers park while it is empty, and a size-`1` channel is a rendezvous point.
 - `Acme::Parataxis::Semaphore` - Coro::Semaphore-style counting semaphores: `new`, `_alloc`, `count`, `down`, `up`, `try`, `adjust`, `wait`, `waiters`, `guard`. Blocked fibers park (no busy-waiting) and are resumed in FIFO order as permits become available.
-- Unit tests ported from Coro's own suite, now running on the real modules: a producer/consumer bounded channel (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`) and a counting semaphore with guards, parking, `try`, `adjust`, `wait` and `shutdown` (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
+- `Acme::Parataxis::Signal` - Coro::Signal-style binary semaphores / event flags: `new`, `wait` (with optional callback), `send`, `broadcast`, `awaited`. `send` wakes one waiter or remembers the signal; `broadcast` wakes everyone or loses it; a `wait` callback fires in the sending fiber's context.
+- Unit tests ported from Coro's own suite, now running on the real modules: a producer/consumer bounded channel (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), a counting semaphore with guards, parking, `try`, `adjust`, `wait` and `shutdown` (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`), and signals (`t/025_coro_signal.t`, from Coro `t/16_signal.t`).
 - Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
 
 ## [v0.0.10] - 2026-02-22
