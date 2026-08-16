@@ -35,7 +35,8 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 
 ### Fixed
 
-- The exit-code subtests in `t/021_exit.t` no longer fail on Windows perl builds that cannot report a spawned child's status (`Can't spawn ... : No error`, reading 255; see perl5 GH #20081). The subtests now skip when a 255 status arrives without a panic message, while a genuine wrong-pool panic still fails the assertions.
+- `exit()` inside a fiber now works on Windows x64. The CRT cannot `longjmp` across stacks, so a fiber's exit previously crashed the process with `0xC0000028` (`STATUS_BAD_STACK`, reported as status 40). The exit is now captured on the fiber stack by a fiber-aware `pp_exit`, recorded, and re-raised on the caller's stack where perl's whole JMPENV chain lives on one stack; nested fiber exits unwind one stack level at a time to the main stack.
+- The exit-code subtests in `t/021_exit.t` now genuinely pass on Windows (previously they skipped when a Windows perl could not report a spawned child's status, and the child code now runs from a temp `.pl` file because `cmd.exe` mangles nested quotes in an inline `-e` command line). See perl5 GH #20081 for the broken spawn status reporting that motivated the `!errorlevel!` path.
 - Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
 
 ## [v0.0.10] - 2026-02-22

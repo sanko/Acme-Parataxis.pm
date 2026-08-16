@@ -331,6 +331,16 @@ typedef struct para_fiber_t {
     int started;     /**< Flag: 1 once the fiber has actually begun running */
     int parent_id;   /**< ID of the fiber that 'called' this one (asymmetric) */
     int last_sender; /**< ID of the fiber that last switched control to this one */
+
+#ifdef _WIN32
+    /* exit() interception (x64 Windows only).  The CRT longjmp cannot cross
+     * stacks, so an exit() thrown on a fiber stack must be captured there and
+     * re-raised on the caller's stack (see parataxis_pp_exit / para_entry_point
+     * / coro_call).  exit_pending is set when exit() was called by this fiber
+     * or a fiber it called; exit_status carries the requested exit code. */
+    int exit_pending;
+    int exit_status;
+#endif
 } para_fiber_t;
 
 /** @name Job Status Constants */
@@ -1281,6 +1291,52 @@ static void free_perl_stacks(pTHX_ para_fiber_t * c) {
     c->tmps_stack = NULL;
 }
 
+#ifdef _WIN32
+/** @brief Original perl OP_EXIT handler, saved when parataxis_pp_exit installs. */
+static Perl_ppaddr_t parataxis_saved_pp_exit = NULL;
+
+/**
+ * @brief Windows replacement for perl's pp_exit (OP_EXIT).
+ *
+ * perl's exit() longjmps up the JMPENV chain.  On x64 Windows the CRT
+ * longjmp unwinds the stack (SEH) and cannot jump from a fiber stack to a
+ * setjmp that is live on the caller's stack: the process dies with
+ * 0xC0000028 (STATUS_BAD_STACK).  To keep exit() working inside fibers we
+ * capture the exit code at the opcode, record it on the current fiber, and
+ * hand control back to perl's exit machinery on the caller's stack (see
+ * para_entry_point / coro_call).
+ *
+ * Outside of a running fiber this delegates to the original pp_exit, so
+ * normal program exits are byte-for-byte unchanged.
+ */
+static OP * parataxis_pp_exit(pTHX) {
+    if (current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
+        !fibers[current_fiber_id]) {
+        return parataxis_saved_pp_exit(aTHX);
+    }
+    dSP;
+    I32 anum;
+    if (MAXARG < 1)
+        anum = 0;
+    else if (!TOPs) {
+        anum = 0;
+        (void)POPs;
+    }
+    else {
+        anum = SvIVx(POPs);
+    }
+    PL_exit_flags |= PERL_EXIT_EXPECTED;
+    para_fiber_t * c = fibers[current_fiber_id];
+    c->exit_pending = 1;
+    c->exit_status = (int)anum;
+    /* Same as pp_exit: rethrow the exit within this fiber's own stack, so
+     * the JMPENV pushed by para_entry_point catches it. */
+    my_exit((U32)anum);
+    /* NOTREACHED */
+    return 0;
+}
+#endif
+
 /**
  * @brief Initializes the fiber system and converts the main thread.
  *
@@ -1323,6 +1379,16 @@ DLLEXPORT int init_system() {
     main_context.defstash = PL_defstash;
     main_context.errors = PL_errors;
     system_initialized = 1;
+#ifdef _WIN32
+    /* Route exit() through our fiber-aware handler.  Perl dispatches the pp
+     * table through per-op pointers (op->op_ppaddr) captured at compile
+     * time, and init_system runs at BEGIN, so every op compiled after this
+     * module loads already points at parataxis_pp_exit. */
+    if (!parataxis_saved_pp_exit) {
+        parataxis_saved_pp_exit = PL_ppaddr[OP_EXIT];
+        PL_ppaddr[OP_EXIT] = parataxis_pp_exit;
+    }
+#endif
 #ifdef __linux__
     install_stack_guard();
 #endif
@@ -1427,6 +1493,9 @@ void para_entry_point(para_fiber_t * c) {
     ENTER;
     SAVETMPS;
     dSP;
+#ifdef _WIN32
+    dJMPENV;
+#endif
     PUSHMARK(SP);
 
     /* Unpack arguments passed during coro_call */
@@ -1441,8 +1510,57 @@ void para_entry_point(para_fiber_t * c) {
     }
     PUTBACK;
 
-    /* Execute the Perl sub */
+#ifdef _WIN32
+    int count;
+    {
+        int volatile ret;
+        JMPENV_PUSH(ret);
+        if (ret == 2) {
+            /* exit() landed here.  On x64 Windows the CRT cannot longjmp
+             * across stacks (0xC0000028 / STATUS_BAD_STACK), so we must NOT
+             * rethrow from this fiber stack.  Record that this fiber's
+             * subtree asked to exit, mark it finished, and switch back to
+             * whoever called it.  coro_call sees exit_pending and re-enters
+             * perl's exit machinery on the caller's stack, where the whole
+             * JMPENV chain lives on one stack. */
+            int fid = current_fiber_id;
+            if (fid >= 0 && fid < MAX_FIBERS && fibers[fid])
+                fibers[fid]->exit_pending = 1;
+            JMPENV_POP;
+            para_fiber_t * fc = (fid >= 0 && fid < MAX_FIBERS) ? fibers[fid] : c;
+            if (fc) {
+                fc->finished = true;
+                int parent = fc->parent_id;
+                if (parent != -1 && (!fibers[parent] || fibers[parent]->finished))
+                    parent = -1;
+                perform_switch(parent, 0);
+            }
+            while (1)
+                coro_yield(&PL_sv_undef);
+        }
+        else if (ret != 0) {
+            /* A non-exit longjmp (die) that escaped the body's G_EVAL.  This
+             * should not normally happen; finish the fiber with whatever is
+             * in $@ and hand control back to the caller. */
+            JMPENV_POP;
+            para_fiber_t * fc = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
+                                ? fibers[current_fiber_id] : c;
+            if (fc) {
+                fc->finished = true;
+                int parent = fc->parent_id;
+                if (parent != -1 && (!fibers[parent] || fibers[parent]->finished))
+                    parent = -1;
+                perform_switch(parent, 0);
+            }
+            while (1)
+                coro_yield(&PL_sv_undef);
+        }
+        count = call_sv(c->user_cv, G_SCALAR | G_EVAL);
+        JMPENV_POP;
+    }
+#else
     int count = call_sv(c->user_cv, G_SCALAR | G_EVAL);
+#endif
 
     SPAGAIN;
     SV * ret_val = &PL_sv_undef;
@@ -1786,6 +1904,10 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     c->last_sender = -1;
     c->finished = 0;
     c->started = 0;
+#ifdef _WIN32
+    c->exit_pending = 0;
+    c->exit_status = 0;
+#endif
     c->transfer_data = &PL_sv_undef;
     fibers[idx] = c;
 
@@ -1849,12 +1971,38 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
             current_fiber_id = -1;
             restore_perl_state(&main_context);
         }
+#ifdef _WIN32
+        /* Propagate an exit() pending in the (sub)fiber we were resuming to
+         * the fiber that called us.  Nested fiber exits then keep unwinding
+         * one stack level at a time and only re-enter perl's exit machinery
+         * on the main stack. */
+        if (fibers[fiber_id] && fibers[fiber_id]->exit_pending && current_fiber_id >= 0) {
+            para_fiber_t * caller = fibers[current_fiber_id];
+            if (caller) {
+                caller->exit_pending = 1;
+                caller->exit_status = fibers[fiber_id]->exit_status;
+            }
+        }
+#endif
         JMPENV_JUMP(ret);
     }
     if (!fibers[fiber_id]->started)
         fibers[fiber_id]->top_env = &cur_env;
     perform_switch(fiber_id, 1);
     JMPENV_POP;
+#ifdef _WIN32
+    if (fibers[fiber_id] && fibers[fiber_id]->exit_pending) {
+        /* The fiber's exit() was caught on the fiber stack (see
+         * para_entry_point).  We are back on the caller's stack, so perl's
+         * exit machinery -- which longjmps up the JMPENV chain -- is safe
+         * here: every env it will hit lives on this same stack. */
+        int exit_status = fibers[fiber_id]->exit_status;
+        fibers[fiber_id]->exit_pending = 0;
+        fibers[fiber_id]->exit_status = 0;
+        my_exit((U32)exit_status);
+        /* NOTREACHED */
+    }
+#endif
     if (fibers[fiber_id] && fibers[fiber_id]->finished) {
         if (fibers[fiber_id]->transfer_data && fibers[fiber_id]->transfer_data != &PL_sv_undef) {
             SvREFCNT_dec(fibers[fiber_id]->transfer_data);
@@ -2167,6 +2315,12 @@ DLLEXPORT void destroy_coro(int fiber_id) {
  */
 DLLEXPORT void cleanup() {
     dTHX;
+#ifdef _WIN32
+    /* Restore the original exit op so any exit() during global destruction
+     * (after this DLL could be unmapped) behaves like a plain perl exit. */
+    if (parataxis_saved_pp_exit && PL_ppaddr[OP_EXIT] == parataxis_pp_exit)
+        PL_ppaddr[OP_EXIT] = parataxis_saved_pp_exit;
+#endif
     if (threads_initialized) {
         LOCK(queue_lock);
         threads_keep_running = 0;
