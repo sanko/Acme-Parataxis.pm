@@ -159,8 +159,7 @@ __asm__(
     "    popq %rdi\n"
     "    call para_entry_point\n"
     "    ud2\n"
-    ".size para_trampoline, .-para_trampoline\n"
-);
+    ".size para_trampoline, .-para_trampoline\n");
 #endif /* USE_ASM_CORO */
 
 /**
@@ -262,7 +261,7 @@ typedef struct para_fiber_t {
     void * stack_p;  /**< Pointer to dynamically allocated fiber stack (Unix only) */
     size_t stack_sz; /**< Size of the allocated stack (Unix only) */
 #ifdef USE_ASM_CORO
-    void * rsp;      /**< Saved stack pointer for the assembly switch (Unix x86_64) */
+    void * rsp; /**< Saved stack pointer for the assembly switch (Unix x86_64) */
 #endif
 #endif
 
@@ -275,6 +274,7 @@ typedef struct para_fiber_t {
      */
     PERL_SI * si;            /**< Current Stack Info (tracks recursion and eval frames) */
     AV * curstack;           /**< The active Argument Stack (AV*) */
+    SV * mainstack;          /**< Main argument stack target for exit()/POPSTACK_TO (per-fiber) */
     SSize_t stack_sp_offset; /**< Stack Pointer offset from stack base */
 
     I32 * markstack;     /**< Base of the Mark Stack (tracks list start points) */
@@ -707,9 +707,7 @@ DLLEXPORT int check_for_completion() {
  *
  * @return int Number of outstanding jobs.
  */
-DLLEXPORT int get_outstanding_jobs() {
-    return outstanding_jobs;
-}
+DLLEXPORT int get_outstanding_jobs() { return outstanding_jobs; }
 
 /**
  * @brief Retrieves the result of a completed job as a Perl SV.
@@ -880,6 +878,7 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
 
     // The Argument Stack (Main Perl stack)
     from->curstack = PL_curstack;
+    from->mainstack = PL_mainstack;
     from->stack_sp_offset = PL_stack_sp - PL_stack_base;
 
     // The Mark Stack (Tracks where lists begin on the argument stack)
@@ -927,6 +926,7 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     /* Load target state from 'to' context */
     PL_curstackinfo = to->si;
     PL_curstack = to->curstack;
+    PL_mainstack = to->mainstack;
 
     // Re-calculate stack bounds based on the new array (AV)
     PL_stack_base = AvARRAY(PL_curstack);
@@ -977,6 +977,70 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     _activate_current_depths(aTHX_ to);
 }
 
+/**
+ * @brief Restores a context's saved Perl interpreter state in-place.
+ *
+ * Loads every saved interpreter global from @p to without performing an
+ * OS context switch.  Used when a fiber longjmps out of the system (e.g.
+ * via exit()) so that the top-level main context's perl-owned stacks are
+ * current again before the jump propagates to perl_run/perl_destruct.
+ *
+ * Unlike swap_perl_state this deliberately leaves PL_top_env alone: the
+ * caller manages the jump environment so the rethrow continues past the
+ * wrapper that caught the exit.
+ *
+ * @param to The context whose saved state should become current.
+ */
+void restore_perl_state(para_fiber_t * to) {
+    dTHX;
+    PL_curstackinfo = to->si;
+    PL_curstack = to->curstack;
+    PL_mainstack = to->mainstack;
+
+    PL_stack_base = AvARRAY(PL_curstack);
+    PL_stack_max = PL_stack_base + AvMAX(PL_curstack);
+    PL_stack_sp = PL_stack_base + to->stack_sp_offset;
+    AvFILLp(PL_curstack) = to->stack_sp_offset;
+
+    PL_markstack = to->markstack;
+    PL_markstack_ptr = to->markstack_ptr;
+    PL_markstack_max = to->markstack_max;
+
+    PL_scopestack = to->scopestack;
+    PL_scopestack_ix = to->scopestack_ix;
+    PL_scopestack_max = to->scopestack_max;
+
+    PL_savestack = to->savestack;
+    PL_savestack_ix = to->savestack_ix;
+    PL_savestack_max = to->savestack_max;
+
+    PL_tmps_stack = to->tmps_stack;
+    PL_tmps_ix = to->tmps_ix;
+    PL_tmps_floor = to->tmps_floor;
+    PL_tmps_max = to->tmps_max;
+
+    PL_curcop = to->curcop;
+    PL_op = to->op;
+    PL_comppad = to->comppad;
+    PL_curpm = to->curpm;
+    PL_curpm_under = to->curpm_under;
+    PL_reg_curpm = to->reg_curpm;
+    PL_defgv = to->defgv;
+    PL_last_in_gv = to->last_in_gv;
+    PL_rs = to->rs;
+    PL_ofsgv = to->ofsgv;
+    PL_ors_sv = to->ors_sv;
+    PL_defoutgv = to->defoutgv;
+    PL_curstash = to->curstash;
+    PL_defstash = to->defstash;
+    PL_errors = to->errors;
+
+    if (PL_comppad)
+        PL_curpad = AvARRAY(PL_comppad);
+    else
+        PL_curpad = to->curpad;
+}
+
 /** @brief Number of 16-byte slots in each fiber control stack. */
 #define FIBER_STACK_DEPTH 2048
 
@@ -1013,17 +1077,36 @@ static void layout_perl_stacks(pTHX_ para_fiber_t * c, void * block, size_t * bl
      * through their own ix/count fields and never read beyond them. */
     memset(block, 0, si_sz);
 
-    PERL_SI * si   = (PERL_SI *)(void *)p;                p += si_sz;
-    PERL_CONTEXT * ctx_stack = (PERL_CONTEXT *)(void *)p;     p += cx_sz;
-    I32 * markstack = (I32 *)(void *)p;                       p += mk_sz;
-    I32 * scopestack = (I32 *)(void *)p;                      p += sc_sz;
-    ANY * savestack = (ANY *)(void *)p;                       p += sv_sz;
-    SV ** tmps_stack = (SV **)(void *)p;                      p += tm_sz;
+    PERL_SI * si = (PERL_SI *)(void *)p;
+    p += si_sz;
+    PERL_CONTEXT * ctx_stack = (PERL_CONTEXT *)(void *)p;
+    p += cx_sz;
+    I32 * markstack = (I32 *)(void *)p;
+    p += mk_sz;
+    I32 * scopestack = (I32 *)(void *)p;
+    p += sc_sz;
+    ANY * savestack = (ANY *)(void *)p;
+    p += sv_sz;
+    SV ** tmps_stack = (SV **)(void *)p;
+    p += tm_sz;
 
     si->si_cxmax = 64;
     si->si_cxstack = ctx_stack;
     si->si_cxix = -1;
     si->si_type = PERLSI_MAIN;
+
+    /* Link this fiber's stackinfo back to the permanent main stackinfo so
+     * that perl's POPSTACK_TO(PL_mainstack) (run on exit()) can pop out of
+     * the fiber and land on the main argument stack.  pop_stackinfo panics
+     * ("panic: POPSTACK") and recurses via croak->my_exit if si_prev is NULL.
+     * We walk to the root rather than using the immediate current stackinfo
+     * so the chain never dangles after an intermediate fiber is destroyed. */
+    {
+        PERL_SI * root = PL_curstackinfo;
+        while (root->si_prev)
+            root = root->si_prev;
+        si->si_prev = root;
+    }
 
     c->si = si;
     c->markstack = markstack;
@@ -1068,6 +1151,10 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
         si->si_cxix = -1;
         si->si_stack = c->curstack;
     }
+    /* exit()/POPSTACK_TO(PL_mainstack) inside this fiber must stop at the
+     * fiber's own argument stack instead of unwinding the shared main
+     * contexts whose pads are not current while a fiber runs. */
+    c->mainstack = (SV *)c->curstack;
 
     c->markstack_ptr = c->markstack;
     *c->markstack_ptr = 0;
@@ -1183,6 +1270,7 @@ DLLEXPORT int init_system() {
             max_thread_pool_size = MAX_THREADS;
     }
     main_context.si = PL_curstackinfo;
+    main_context.mainstack = PL_mainstack;
     main_context.transfer_data = &PL_sv_undef;
     main_context.id = -1;
     main_context.finished = 0;
@@ -1446,7 +1534,7 @@ static void arm_fiber_context(para_fiber_t * c, int idx) {
      * ABI stack alignment.
      */
     void ** slot = (void **)((char *)c->stack_p + c->stack_sz);
-    slot -= 8;  /* 6 saved regs + return address + fiber pointer */
+    slot -= 8; /* 6 saved regs + return address + fiber pointer */
     for (int i = 0; i < 6; i++)
         slot[i] = NULL;
     slot[6] = (void *)&para_trampoline;
@@ -1571,7 +1659,46 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
             SvREFCNT_inc(args);
     }
     fibers[fiber_id]->parent_id = current_fiber_id;
+
+    /* Guard the fiber run with our own jump environment.  When the fiber
+     * longjmps out of the system (exit(), or a die that escapes the body's
+     * G_EVAL), perl never pops back into the scheduler: it unwinds the
+     * fiber's own contexts and jumps to the innermost env.  That env chain
+     * is anchored here, so we can restore the perl state of whoever called
+     * coro_call (perl-owned stacks only) before rethrowing.
+     *
+     * The caller of this coro_call is the parent fiber (or main, for the
+     * top-level call).  Restoring the PARENT's perl state matters: the next
+     * env on the chain is the parent's G_EVAL, and its case-2 cleanup runs
+     * `my_exit_jump()` which dounwinds the *current* savestack.  If we left
+     * main's perl state current here, that dounwind would pop main's
+     * savestack entries (e.g. the scheduler's run_fiber_checked XSUB arena
+     * destructors) and perl_run's later LEAVE loop would free the same
+     * arenas a second time -> Affix "free from wrong pool" panic.  Restoring
+     * the parent's own state makes the dounwind pop the parent's savestack
+     * (freed exactly once there, or leaked harmlessly if the parent's XSUB
+     * scopes were abandoned by the jump).  Only the top-level wrapper
+     * (parent == main) restores main's state, so perl_run/perl_destruct
+     * finish on the main context. */
+    dJMPENV;
+    int volatile ret;
+    JMPENV_PUSH(ret);
+    if (ret) {
+        JMPENV_POP;
+        int parent = (fibers[fiber_id] ? fibers[fiber_id]->parent_id : -1);
+        if (parent >= 0 && parent < MAX_FIBERS && fibers[parent]) {
+            current_fiber_id = parent;
+            restore_perl_state(fibers[parent]);
+        } else {
+            current_fiber_id = -1;
+            restore_perl_state(&main_context);
+        }
+        JMPENV_JUMP(ret);
+    }
+    if (!fibers[fiber_id]->started)
+        fibers[fiber_id]->top_env = &cur_env;
     perform_switch(fiber_id, 1);
+    JMPENV_POP;
     if (fibers[fiber_id] && fibers[fiber_id]->finished) {
         if (fibers[fiber_id]->transfer_data && fibers[fiber_id]->transfer_data != &PL_sv_undef) {
             SvREFCNT_dec(fibers[fiber_id]->transfer_data);
@@ -1646,18 +1773,18 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
         own_stash = gv_stashpv("Acme::Parataxis", GV_ADD);
     HV * stash = strEQ(cls, "Acme::Parataxis") ? own_stash : gv_stashpv(cls, GV_ADD);
     AV * obj = newAV();
-    av_extend(obj, 8);  /* pre-size to fit every F_* slot in one allocation */
+    av_extend(obj, 8); /* pre-size to fit every F_* slot in one allocation */
     SV * objrv = newRV_noinc((SV *)obj);
     sv_bless(objrv, stash);
-    av_store(obj, 0, SvREFCNT_inc(user_code));  /* F_CODE */
+    av_store(obj, 0, SvREFCNT_inc(user_code)); /* F_CODE */
     int fid = create_fiber(user_code, objrv);
     if (fid < 0) {
         SvREFCNT_dec(objrv);
         return &PL_sv_undef;
     }
-    av_store(obj, 4, newSViv(fid));             /* F_FID */
+    av_store(obj, 4, newSViv(fid)); /* F_FID */
     int st = run_fiber_checked(fid, &PL_sv_undef);
-    av_store(obj, 8, newSViv(st));              /* F_LAST_STATUS */
+    av_store(obj, 8, newSViv(st)); /* F_LAST_STATUS */
     return objrv;
 }
 
