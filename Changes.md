@@ -32,6 +32,10 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 - `Acme::Parataxis::Semaphore` - Coro::Semaphore-style counting semaphores: `new`, `_alloc`, `count`, `down`, `up`, `try`, `adjust`, `wait`, `waiters`, `guard`. Blocked fibers park (no busy-waiting) and are resumed in FIFO order as permits become available.
 - `Acme::Parataxis::Signal` - Coro::Signal-style binary semaphores / event flags: `new`, `wait` (with optional callback), `send`, `broadcast`, `awaited`. `send` wakes one waiter or remembers the signal; `broadcast` wakes everyone or loses it; a `wait` callback fires in the sending fiber's context.
 - Unit tests ported from Coro's own suite, now running on the real modules: a producer/consumer bounded channel (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), a counting semaphore with guards, parking, `try`, `adjust`, `wait` and `shutdown` (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`), and signals (`t/025_coro_signal.t`, from Coro `t/16_signal.t`).
+
+### Fixed
+
+- The exit-code subtests in `t/021_exit.t` no longer fail on Windows perl builds that cannot report a spawned child's status (`Can't spawn ... : No error`, reading 255; see perl5 GH #20081). The subtests now skip when a 255 status arrives without a panic message, while a genuine wrong-pool panic still fails the assertions.
 - Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
 
 ## [v0.0.10] - 2026-02-22
