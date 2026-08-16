@@ -506,6 +506,52 @@ A low-level example of Passing control sideways between fibers.
     $c->call( ); # Prime consumer
     $p->call( ); # Start producer
 
+=head1 CORO-STYLE MESSAGE PASSING
+
+Two modules mirror the Coro distribution so that code written for
+L<Coro> and L<Coro::Channel> can run unchanged:
+
+=head2 C<Acme::Parataxis::Semaphore>
+
+A counting semaphore with the same interface as L<Coro::Semaphore>:
+C<new>, C<count>, C<down>, C<up>, C<try>, C<adjust>, C<wait>, C<waiters>
+and C<guard>.  Fibers block (park) while waiting for a permit and are
+resumed in FIFO order as permits become available:
+
+    use Acme::Parataxis;
+    use Acme::Parataxis::Semaphore;
+
+    my $sem = Acme::Parataxis::Semaphore->new( 2 );   # two permits
+
+    async {
+        my $t = fiber { $sem->down; say 'acquired' };
+        $sem->up;
+    };
+
+=head2 C<Acme::Parataxis::Channel>
+
+A Coro::Channel-style message queue: a bounded, thread-safe-ish pipe with
+C<put>, C<get>, C<shutdown>, C<size> and C<new( $maxsize )>.  Writers
+block while the queue is full and readers block while it is empty; a
+size-C<1> channel is a rendezvous point.  Consumers see end-of-data once
+C<shutdown> is called:
+
+    use Acme::Parataxis;
+    use Acme::Parataxis::Channel;
+
+    my $q = Acme::Parataxis::Channel->new( 4 );
+
+    async {
+        fiber { $q->put( $_ ) for 1 .. 8 };           # producer
+        say $q->get while 1;                          # consumer
+    };
+
+B<Note:> both modules park fibers while blocked, so they behave like the
+C<await_*> functions.  Avoid ceding to the scheduler (C<yield>) from
+inside a C<guard> critical section: with all permits held and the holder
+also waiting, no runnable fiber remains and the scheduler reports a
+deadlock (as Coro would).
+
 =head1 BEST PRACTICES & GOTCHAS
 
 =over

@@ -1,38 +1,20 @@
 use v5.40;
 use blib;
 use Acme::Parataxis qw[async fiber yield];
+use Acme::Parataxis::Channel;
 use Test2::V1 -ipP;
 $|++;
 #
-diag 'Ported from Coro t/02_channel.t + eg/prodcons: producer/consumer message queues built on fibers.';
-diag 'A bounded channel: get blocks while empty, put blocks while full - expressed with plain yield.';
+diag 'Ported from Coro t/02_channel.t + eg/prodcons: producer/consumer message queues.';
+diag 'A bounded channel: get blocks while empty, put blocks while full - implemented with';
+diag 'counting semaphores and the same park/wake mechanism as Coro.';
 
-package Acme::Parataxis::Test::Channel {
-    sub new {
-        my ( $class, $cap ) = @_;
-        return bless { buf => [], cap => $cap || 0 }, $class;
-    }
-    sub put {
-        my ( $self, $v ) = @_;
-        while ( $self->{cap} && @{ $self->{buf} } >= $self->{cap} ) {
-            Acme::Parataxis::yield();    # channel full: wait for a consumer
-        }
-        push @{ $self->{buf} }, $v;
-    }
-    sub get {
-        my ($self) = @_;
-        while ( !@{ $self->{buf} } ) {
-            Acme::Parataxis::yield();    # channel empty: wait for a producer
-        }
-        return shift @{ $self->{buf} };
-    }
-    sub size { scalar @{ $_[0]{buf} } }
+sub wait_for_drain {
+    yield while Acme::Parataxis::get_live_fiber_count() > 1;
 }
 
-package main;
-
 subtest 'Single producer, single consumer (capacity 1, rendezvous)' => sub {
-    my $q = Acme::Parataxis::Test::Channel->new(1);
+    my $q = Acme::Parataxis::Channel->new(1);
     my @got;
     async {
         fiber { $q->put($_) for 1 .. 9 };    # producer
@@ -43,24 +25,20 @@ subtest 'Single producer, single consumer (capacity 1, rendezvous)' => sub {
 };
 
 subtest 'Capacity limit blocks the producer' => sub {
-    my $q = Acme::Parataxis::Test::Channel->new(3);
+    my $q = Acme::Parataxis::Channel->new(3);
     my @got;
-    my $max_seen = 0;
+    my $producer_done = 0;
     async {
-        my $p = fiber {
-            for ( 1 .. 10 ) {
-                $q->put($_);
-                $max_seen = $q->size if $q->size > $max_seen;
-            }
-        };
+        my $p = fiber { $q->put($_) for 1 .. 10; $producer_done = 1 };
+        ok( !$producer_done, 'producer blocked on a full channel before the consumer ran' );
         push @got, $q->get for 1 .. 10;
     };
-    is( $max_seen, 3, 'buffer never exceeds capacity' );
+    ok( $producer_done, 'producer finished once the consumer drained the channel' );
     is( join( q{,}, @got ), '1,2,3,4,5,6,7,8,9,10', 'all items delivered' );
 };
 
 subtest 'Multiple producers, one consumer (like eg/prodcons)' => sub {
-    my $q = Acme::Parataxis::Test::Channel->new(4);
+    my $q = Acme::Parataxis::Channel->new(4);
     my @got;
     async {
         fiber { $q->put("p1-$_") for 1 .. 5 };
@@ -71,6 +49,42 @@ subtest 'Multiple producers, one consumer (like eg/prodcons)' => sub {
     is( join( q{,}, sort @got ),
         'p1-1,p1-2,p1-3,p1-4,p1-5,p2-1,p2-2,p2-3,p2-4,p2-5',
         'all messages present, none lost or duplicated'
+    );
+};
+
+subtest 'Shutdown wakes blocked consumers' => sub {
+    my $q = Acme::Parataxis::Channel->new(2);
+    $q->put(1);
+    my @got;
+    async {
+        fiber {
+            while ( defined( my $x = $q->get ) ) {
+                push @got, $x;
+            }
+        };
+        $q->shutdown;
+        yield for 1 .. 10;
+        is( join( q{,}, @got ), '1', 'buffered item consumed, then EOF signalled' );
+    };
+};
+
+subtest 'Prodcons stress (4 producers x 500, 4 consumers x 500, cap 2)' => sub {
+    my $q   = Acme::Parataxis::Channel->new(2);
+    my @got;
+    async {
+        fiber { $q->put("$_") for 1 .. 500 };
+        fiber { $q->put("$_") for 501 .. 1000 };
+        fiber { $q->put("$_") for 1001 .. 1500 };
+        fiber { $q->put("$_") for 1501 .. 2000 };
+        fiber { push @got, $q->get for 1 .. 500 };
+        fiber { push @got, $q->get for 1 .. 500 };
+        fiber { push @got, $q->get for 1 .. 500 };
+        fiber { push @got, $q->get for 1 .. 500 };
+        wait_for_drain();
+    };
+    is( scalar @got, 2000, 'all items consumed' );
+    is( join( q{,}, sort { $a <=> $b } @got ), join( q{,}, 1 .. 2000 ),
+        'no items lost or duplicated'
     );
 };
 done_testing();

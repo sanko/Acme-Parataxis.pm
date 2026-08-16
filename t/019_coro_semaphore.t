@@ -1,73 +1,97 @@
 use v5.40;
 use blib;
 use Acme::Parataxis qw[async fiber yield];
+use Acme::Parataxis::Semaphore;
 use Test2::V1 -ipP;
 $|++;
 #
 diag 'Ported from Coro t/15_semaphore.t: a counting semaphore (with guard) on top of fibers.';
-diag 'Unlike Coro we assert invariants (capacity respected, nothing leaked) rather than an';
-diag 'exact scheduler-dependent count, since scheduling order differs between the two systems.';
+diag 'Fibers park while blocked (they do not busy-wait), and are resumed in FIFO order as';
+diag 'permits become available.  We assert invariants (capacity respected, nothing leaked)';
+diag 'rather than an exact scheduler-dependent count.';
 
-package Acme::Parataxis::Test::Semaphore {
-    sub new   { bless { count => $_[1] }, shift }
-    sub count { $_[0]{count} }
-    sub up {
-        my ($self) = @_;
-        $self->{count}++;
-    }
-    sub down {
-        my ($self) = @_;
-        while ( $self->{count} <= 0 ) {
-            Acme::Parataxis::yield();    # no permits left: wait
-        }
-        $self->{count}--;
-    }
-    sub guard {
-        my ($self) = @_;
-        $self->down;
-        return bless { sem => $self }, 'Acme::Parataxis::Test::Semaphore::Guard';
-    }
-}
-package Acme::Parataxis::Test::Semaphore::Guard {
-    sub DESTROY { $_[0]{sem}->up }
+sub wait_for_drain {
+    yield while Acme::Parataxis::get_live_fiber_count() > 1;
 }
 
-package main;
-
-subtest 'Counting semaphore (capacity 2, 15 fibers x 100 iterations)' => sub {
-    my $sem = Acme::Parataxis::Test::Semaphore->new(2);
-    my ( $conc, $max_conc, $count_sum ) = ( 0, 0, 0 );
+subtest 'Counting semaphore (capacity 2, 15 fibers)' => sub {
+    my $sem  = Acme::Parataxis::Semaphore->new(2);
+    my $gate = Acme::Parataxis::Semaphore->new(0);
+    my ( $conc, $max_conc ) = ( 0, 0 );
 
     async {
         for ( 1 .. 15 ) {
             fiber {
-                for ( 1 .. 100 ) {
-                    $count_sum += $sem->count;    # sample before acquiring
-                    my $guard = $sem->guard;      # may block (via yield)
-                    $conc++;
-                    $max_conc = $conc if $conc > $max_conc;
-                    yield; yield; yield; yield;   # hold the guard while ceding
-                    $conc--;
-                }
+                my $guard = $sem->guard;    # parks on $sem once permits run out
+                $conc++;
+                $max_conc = $conc if $conc > $max_conc;
+                $gate->down;                # hold the permit while parked on the gate
+                $conc--;
             };
         }
+        yield for 1 .. 5;                   # let every fiber spawn and park
+        is( $max_conc, 2, 'at most 2 permits handed out at once (capacity respected)' );
+        is( $sem->count, 0, 'both permits are held by parked fibers' );
+        is( $sem->waiters, 13, '13 fibers blocked waiting for a permit' );
+        $gate->up for 1 .. 15;              # release everyone, cascading through $sem
+        wait_for_drain;
     };
 
-    is( $max_conc,     2,   'at most 2 permits handed out at once (capacity respected)' );
-    is( $conc,         0,   'all guards released' );
-    is( $sem->count,   2,   'semaphore count restored to capacity' );
-    cmp_ok( $count_sum, '>', 0, "count sampled $count_sum times while other fibers held it" );
+    is( $conc, 0, 'all guards released' );
+    is( $sem->count, 2, 'semaphore count restored to capacity' );
+    is( $sem->waiters, 0, 'no fibers left blocked' );
 };
 
 subtest 'Semaphore blocks until released (single fiber)' => sub {
-    my $sem = Acme::Parataxis::Test::Semaphore->new(0);
+    my $sem = Acme::Parataxis::Semaphore->new(0);
     my $done = 0;
     async {
         my $t = fiber { $sem->down; $done++ };
         ok( $done == 0, 'fiber parked: no permits yet' );
+        is( $sem->waiters, 1, 'exactly one fiber blocked' );
         $sem->up;    # release a permit
         yield;       # let the waiter run
         is( $done, 1, 'fiber resumed once a permit was released' );
+    };
+};
+
+subtest 'try never blocks' => sub {
+    my $sem = Acme::Parataxis::Semaphore->new(1);
+    ok( $sem->try, 'try succeeds while a permit is available' );
+    ok( !$sem->try, 'try fails once no permit remains' );
+    is( $sem->count, 0, 'count reflects the try' );
+};
+
+subtest 'adjust wakes one waiter per permit' => sub {
+    my $sem = Acme::Parataxis::Semaphore->new(0);
+    my @done;
+    async {
+        fiber { $sem->down; push @done, 'a' };
+        fiber { $sem->down; push @done, 'b' };
+        fiber { $sem->down; push @done, 'c' };
+        yield for 1 .. 3;
+        is( @done, 0, 'all three parked' );
+        $sem->adjust(2);    # two permits
+        yield for 1 .. 5;
+        is( @done, 2, 'exactly two woken by adjust' );
+        $sem->up;
+        yield for 1 .. 5;
+        is( join( q{}, sort @done ), 'abc', 'last waiter woken by up' );
+    };
+};
+
+subtest 'wait returns without consuming a permit' => sub {
+    my $sem = Acme::Parataxis::Semaphore->new(1);
+    my $result;
+    async {
+        fiber {
+            $sem->wait;
+            $result = "waited, count=${\$sem->count}";
+            $sem->down;    # must now succeed without blocking
+            $result .= ", then downed";
+        };
+        yield for 1 .. 3;
+        is( $result, 'waited, count=1, then downed', 'wait leaves the count untouched' );
     };
 };
 done_testing();

@@ -24,10 +24,13 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 - A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
 - The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
 - `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
+- The scheduler now reports a deadlock instead of spinning forever when every fiber is blocked (parked on a semaphore, channel, or future) and nothing is runnable: `FATAL: deadlock detected, N fibers blocked and nothing runnable`.
 
 ### Added
 
-- Unit tests ported from Coro's own suite, as a demonstration of utility: joining spawned fibers and collecting results (`t/016_coro_join.t`, from Coro `t/08_join.t`), eval/cede inside fibers (`t/017_coro_eval.t`, from Coro `t/07_eval.t`), a producer/consumer bounded channel built from fibers (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), and a counting semaphore with guards (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
+- `Acme::Parataxis::Channel` - Coro::Channel-style message queues built on counting semaphores: `new`, `put`, `get`, `shutdown`, `size` (and the undocumented `adjust`). Writers park while the queue is full, readers park while it is empty, and a size-`1` channel is a rendezvous point.
+- `Acme::Parataxis::Semaphore` - Coro::Semaphore-style counting semaphores: `new`, `_alloc`, `count`, `down`, `up`, `try`, `adjust`, `wait`, `waiters`, `guard`. Blocked fibers park (no busy-waiting) and are resumed in FIFO order as permits become available.
+- Unit tests ported from Coro's own suite, now running on the real modules: a producer/consumer bounded channel (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`) and a counting semaphore with guards, parking, `try`, `adjust`, `wait` and `shutdown` (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
 - Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
 
 ## [v0.0.10] - 2026-02-22

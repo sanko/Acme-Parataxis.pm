@@ -300,11 +300,16 @@ package Acme::Parataxis v0.0.10 {
                 }
             }
             my $active_count = Acme::Parataxis::get_live_fiber_count();
-            if ( defined $main_fiber && !@SCHEDULER_QUEUE && $active_count == 0 && $main_fiber->is_done ) {
-                $IS_RUNNING = 0;
-            }
-            if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
-                usleep(1000);
+            if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready && !$PENDING_JOBS ) {
+                if ( $active_count > 0 ) {
+                    die "FATAL: deadlock detected, $active_count fibers blocked and nothing runnable\n";
+                }
+                if ( defined $main_fiber && $main_fiber->is_done ) {
+                    $IS_RUNNING = 0;
+                }
+                else {
+                    usleep(1000);
+                }
             }
         }
         return $main_fiber->[F_RESULT];
