@@ -62,12 +62,16 @@ typedef CRITICAL_SECTION para_mutex_t;
 #else
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <ucontext.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -95,6 +99,9 @@ typedef pthread_mutex_t para_mutex_t;
 DLLEXPORT SV * coro_yield(SV * ret_val);
 DLLEXPORT SV * coro_transfer(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
+#ifdef __linux__
+static void install_stack_guard(void);
+#endif
 
 /*
  * Assembly-based coroutine context switching.
@@ -265,8 +272,6 @@ typedef struct para_fiber_t {
 #endif
 #endif
 
-    void * _stacks_block; /**< Single allocation holding the Perl control stacks */
-
 
     /*
      * Perl Interpreter State Pointers.
@@ -284,6 +289,9 @@ typedef struct para_fiber_t {
     I32 * scopestack;   /**< Base of the Scope Stack (tracks block nesting) */
     I32 scopestack_ix;  /**< Current index in the Scope Stack */
     I32 scopestack_max; /**< Limit of the Scope Stack */
+#ifdef DEBUGGING
+    const char ** scopestack_name; /**< DEBUGGING-only names parallel to scopestack */
+#endif
 
     ANY * savestack;   /**< Base of the Save Stack (tracks local/my variables for cleanup) */
     I32 savestack_ix;  /**< Current index in the Save Stack */
@@ -414,6 +422,20 @@ static int outstanding_jobs = 0;
 /** @brief Maximum number of fiber objects to park for reuse */
 #define MAX_FIBER_CACHE 64
 #else
+#ifdef __linux__
+/** @brief Red zone protecting the bottom of each fiber stack. */
+#define FIBER_GUARD_SZ 4096
+/**
+ * @brief Virtual size of each fiber stack.
+ *
+ * The full region is mapped with MAP_NORESERVE so physical memory is only
+ * committed for pages the fiber actually touches (the stack grows downward
+ * on demand).  The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them
+ * means genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard
+ * handler reports instead of corrupting the heap.
+ */
+#define FIBER_STACK_SZ (64 * 1024 * 1024)
+#endif
 /** @brief Maximum number of fiber stacks to keep around for reuse */
 #define MAX_CACHED_STACKS 64
 /** @brief LIFO cache of free fiber stack allocations */
@@ -890,6 +912,9 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     from->scopestack = PL_scopestack;
     from->scopestack_ix = PL_scopestack_ix;
     from->scopestack_max = PL_scopestack_max;
+#ifdef DEBUGGING
+    from->scopestack_name = PL_scopestack_name;
+#endif
 
     // The Save Stack (Tracks 'local' variables and destructors)
     from->savestack = PL_savestack;
@@ -941,6 +966,9 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     PL_scopestack = to->scopestack;
     PL_scopestack_ix = to->scopestack_ix;
     PL_scopestack_max = to->scopestack_max;
+#ifdef DEBUGGING
+    PL_scopestack_name = to->scopestack_name;
+#endif
 
     PL_savestack = to->savestack;
     PL_savestack_ix = to->savestack_ix;
@@ -1009,6 +1037,9 @@ void restore_perl_state(para_fiber_t * to) {
     PL_scopestack = to->scopestack;
     PL_scopestack_ix = to->scopestack_ix;
     PL_scopestack_max = to->scopestack_max;
+#ifdef DEBUGGING
+    PL_scopestack_name = to->scopestack_name;
+#endif
 
     PL_savestack = to->savestack;
     PL_savestack_ix = to->savestack_ix;
@@ -1045,54 +1076,59 @@ void restore_perl_state(para_fiber_t * to) {
 #define FIBER_STACK_DEPTH 2048
 
 /**
- * @brief Lays out a fiber's Perl control stacks inside a single allocation.
+ * @brief Allocates a fiber's Perl control stacks.
  *
- * All of the Mark, Scope, Save and Mortal stacks (plus the Stack Info
- * structure and its context stack) live in one contiguous 16-byte aligned
- * block so that a fiber only costs one malloc/free pair instead of seven.
+ * The Mark, Scope, Save and Mortal stacks, plus the Stack Info context
+ * stack, are each allocated independently so perl can grow them in place
+ * with realloc() when deep recursion or heavy scoping overflows the
+ * initial size.  A shared block would crash ("realloc(): invalid pointer")
+ * the moment perl tried to grow an interior pointer.
  *
  * @param c The fiber context to initialize.
- * @param block The memory block to carve the stacks out of (may be NULL).
- * @param block_size Size of the block (out parameter).
  */
-static void layout_perl_stacks(pTHX_ para_fiber_t * c, void * block, size_t * block_size) {
+static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
     I32 sz = FIBER_STACK_DEPTH;
 
-    /* 16-byte aligned segment sizes */
-    size_t si_sz = (sizeof(PERL_SI) + 15) & ~(size_t)15;
-    size_t cx_sz = (sizeof(PERL_CONTEXT) * 64 + 15) & ~(size_t)15;
-    size_t mk_sz = (sizeof(I32) * sz + 15) & ~(size_t)15;
-    size_t sc_sz = (sizeof(I32) * sz + 15) & ~(size_t)15;
-    size_t sv_sz = (sizeof(ANY) * sz + 15) & ~(size_t)15;
-    size_t tm_sz = (sizeof(SV *) * sz + 15) & ~(size_t)15;
-
-    size_t total = si_sz + cx_sz + mk_sz + sc_sz + sv_sz + tm_sz;
-    if (!block) {
-        *block_size = total;
+    /* Use perl's allocator (Newx/Safefree) so that when perl grows these
+     * stacks with Renew()/realloc() it recognizes them as its own memory.
+     * Plain malloc'd memory panics ("realloc ... from wrong pool") in
+     * threaded-DEBUGGING perls that tag allocations per interpreter. */
+    PERL_SI * si = NULL;
+    PERL_CONTEXT * ctx_stack = NULL;
+    Newx(si, 1, PERL_SI);
+    Newx(ctx_stack, 65, PERL_CONTEXT);
+    Newx(c->markstack, sz, I32);
+    Newx(c->scopestack, sz, I32);
+#ifdef DEBUGGING
+    Newx(c->scopestack_name, sz, const char *);
+#endif
+    Newx(c->savestack, sz + SS_MAXPUSH, ANY);
+    Newx(c->tmps_stack, sz, SV *);
+    if (!si || !ctx_stack || !c->markstack || !c->scopestack || !c->savestack || !c->tmps_stack) {
+        Safefree(si);
+        Safefree(ctx_stack);
+        Safefree(c->markstack);
+        Safefree(c->scopestack);
+#ifdef DEBUGGING
+        Safefree(c->scopestack_name);
+#endif
+        Safefree(c->savestack);
+        Safefree(c->tmps_stack);
+        c->markstack = NULL;
+        c->scopestack = NULL;
+        c->savestack = NULL;
+        c->tmps_stack = NULL;
         return;
     }
-    char * p = (char *)block;
 
     /* Only the SI header needs zeroing; the control stacks are managed
      * through their own ix/count fields and never read beyond them. */
-    memset(block, 0, si_sz);
-
-    PERL_SI * si = (PERL_SI *)(void *)p;
-    p += si_sz;
-    PERL_CONTEXT * ctx_stack = (PERL_CONTEXT *)(void *)p;
-    p += cx_sz;
-    I32 * markstack = (I32 *)(void *)p;
-    p += mk_sz;
-    I32 * scopestack = (I32 *)(void *)p;
-    p += sc_sz;
-    ANY * savestack = (ANY *)(void *)p;
-    p += sv_sz;
-    SV ** tmps_stack = (SV **)(void *)p;
-    p += tm_sz;
+    memset(si, 0, sizeof(PERL_SI));
 
     si->si_cxmax = 64;
     si->si_cxstack = ctx_stack;
     si->si_cxix = -1;
+    si->si_cxsubix = -1;
     si->si_type = PERLSI_MAIN;
 
     /* Link this fiber's stackinfo back to the permanent main stackinfo so
@@ -1109,18 +1145,15 @@ static void layout_perl_stacks(pTHX_ para_fiber_t * c, void * block, size_t * bl
     }
 
     c->si = si;
-    c->markstack = markstack;
-    c->scopestack = scopestack;
-    c->savestack = savestack;
-    c->tmps_stack = tmps_stack;
-    c->_stacks_block = block;
 }
 
 /**
  * @brief Resets a fiber's Perl control stacks back to their initial state.
  *
  * Called when a fiber is destroyed and its memory parked in the reuse
- * cache.  The single allocation block is kept and simply re-initialized.
+ * cache.  The stacks keep whatever size they grew to and are simply
+ * re-initialized; resetting the bounds conservatively back to the starting
+ * size just means perl grows them again if a new fiber recurses deep.
  *
  * @param c The fiber context to reset.
  */
@@ -1158,7 +1191,7 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
 
     c->markstack_ptr = c->markstack;
     *c->markstack_ptr = 0;
-    c->markstack_max = c->markstack + sz - 1;
+    c->markstack_max = c->markstack + sz;
 
     c->scopestack_ix = 0;
     c->scopestack_max = sz;
@@ -1202,22 +1235,17 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
 void init_perl_stacks(para_fiber_t * c) {
     dTHX;
 
-    size_t block_size = 0;
-    layout_perl_stacks(aTHX_ c, NULL, &block_size);
-    void * block = malloc(block_size);
-    if (!block) {
-        c->_stacks_block = NULL;
+    alloc_perl_stacks(aTHX_ c);
+    if (!c->si)
         return;
-    }
-    layout_perl_stacks(aTHX_ c, block, &block_size);
 
     // Allocate Argument Stack (AV)
     c->curstack = newAV();
     AvREAL_off(c->curstack);  // Stacks do not 'own' their elements in the refcnt sense
     av_extend(c->curstack, 128);
 
-    /* The block is uninitialized beyond the SI header, so mark the tmps
-     * stack empty before reset runs its release loop. */
+    /* The control stacks are uninitialized beyond the SI header, so mark the
+     * tmps stack empty before reset runs its release loop. */
     c->tmps_ix = -1;
     c->tmps_floor = -1;
 
@@ -1225,7 +1253,7 @@ void init_perl_stacks(para_fiber_t * c) {
 }
 
 /**
- * @brief Frees the Perl stacks and the single allocation block.
+ * @brief Frees the Perl stacks.
  *
  * @param c The fiber context whose stacks should be released.
  */
@@ -1235,11 +1263,18 @@ static void free_perl_stacks(pTHX_ para_fiber_t * c) {
         SvREFCNT_dec((SV *)c->curstack);
         c->curstack = NULL;
     }
-    if (c->_stacks_block) {
-        free(c->_stacks_block);
-        c->_stacks_block = NULL;
+    if (c->si) {
+        Safefree(c->si->si_cxstack);
+        Safefree(c->si);
+        c->si = NULL;
     }
-    c->si = NULL;
+    Safefree(c->markstack);
+    Safefree(c->scopestack);
+#ifdef DEBUGGING
+    Safefree(c->scopestack_name);
+#endif
+    Safefree(c->savestack);
+    Safefree(c->tmps_stack);
     c->markstack = NULL;
     c->scopestack = NULL;
     c->savestack = NULL;
@@ -1288,6 +1323,9 @@ DLLEXPORT int init_system() {
     main_context.defstash = PL_defstash;
     main_context.errors = PL_errors;
     system_initialized = 1;
+#ifdef __linux__
+    install_stack_guard();
+#endif
 #ifdef _WIN32
     /* Convert the main thread into a fiber so it can be switched out */
     if (!main_fiber_handle) {
@@ -1488,6 +1526,118 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
 #endif
 
 #ifndef _WIN32
+#ifdef __linux__
+/**
+ * @brief Allocates a fiber stack backed by a lazily-committed mapping.
+ *
+ * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it.
+ * Because the mapping is created with MAP_NORESERVE, no physical pages are
+ * consumed until the fiber actually uses them, so a 64MB virtual stack is
+ * cheap whether the fiber uses 4KB or 40MB of C stack.
+ *
+ * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
+ * @return void* Pointer to the usable stack (guard page below it), or NULL.
+ */
+static void * alloc_fiber_stack(size_t sz) {
+    (void)sz;
+    if (stack_cache_count > 0)
+        return stack_cache[--stack_cache_count];
+    size_t total = FIBER_STACK_SZ + FIBER_GUARD_SZ;
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (base == MAP_FAILED)
+        return NULL;
+    mprotect(base, FIBER_GUARD_SZ, PROT_NONE);
+    return (char *)base + FIBER_GUARD_SZ;
+}
+
+/** @brief Returns a fiber stack to the reuse cache or unmaps it. */
+static void free_fiber_stack(void * p, size_t sz) {
+    (void)sz;
+    if (p && stack_cache_count < MAX_CACHED_STACKS) {
+        stack_cache[stack_cache_count++] = p;
+        return;
+    }
+    if (p)
+        munmap((char *)p - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
+}
+
+/** @brief Previous SIGSEGV disposition, restored when a fault is not ours. */
+static struct sigaction prev_sigsegv_act;
+/** @brief Alternate signal stack the guard handler runs on. */
+static char * guard_alt_stack;
+/** @brief Thread that owns the fiber scheduler (main thread). */
+static pthread_t guard_owner_thread;
+
+/**
+ * @brief SIGSEGV handler: reports a genuine fiber C-stack overflow.
+ *
+ * Runs on the alternate signal stack.  A fault in the current fiber's guard
+ * page means the fiber used more than FIBER_STACK_SZ of C stack; a clear
+ * message is emitted and the default disposition is restored so the process
+ * aborts (with a core if enabled).  Any other fault is forwarded to the
+ * previously installed handler.
+ */
+static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
+    (void)sig;
+    para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
+                       ? fibers[current_fiber_id] : NULL;
+    if (!pthread_equal(pthread_self(), guard_owner_thread) ||
+        current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
+        !fibers[current_fiber_id]) {
+        if (prev_sigsegv_act.sa_flags & SA_SIGINFO)
+            prev_sigsegv_act.sa_sigaction(sig, si, uc);
+        else if (prev_sigsegv_act.sa_handler == SIG_DFL)
+            signal(SIGSEGV, SIG_DFL);
+        else if (prev_sigsegv_act.sa_handler != SIG_IGN)
+            prev_sigsegv_act.sa_handler(sig);
+        return;
+    }
+    char * guard_base = (char *)c->stack_p - FIBER_GUARD_SZ;
+    char * fault = (char *)si->si_addr;
+    if (c->stack_p == NULL || fault < guard_base || fault >= (char *)c->stack_p) {
+        if (prev_sigsegv_act.sa_flags & SA_SIGINFO)
+            prev_sigsegv_act.sa_sigaction(sig, si, uc);
+        else if (prev_sigsegv_act.sa_handler == SIG_DFL)
+            signal(SIGSEGV, SIG_DFL);
+        else if (prev_sigsegv_act.sa_handler != SIG_IGN)
+            prev_sigsegv_act.sa_handler(sig);
+        return;
+    }
+    static const char msg[] = "Parataxis: fatal: fiber C-stack overflow "
+                              "(> 64MB used); aborting\n";
+    write(2, msg, sizeof(msg) - 1);
+    signal(SIGSEGV, SIG_DFL);
+}
+
+/**
+ * @brief Installs the fiber stack guard handler (Linux only).
+ *
+ * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber
+ * running into its guard page is detected and reported cleanly.
+ */
+static void install_stack_guard(void) {
+    if (guard_alt_stack)
+        return;
+    guard_owner_thread = pthread_self();
+    size_t alt_sz = 256 * 1024;
+    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (guard_alt_stack == MAP_FAILED) {
+        guard_alt_stack = NULL;
+        return;
+    }
+    stack_t ss = { 0 };
+    ss.ss_sp = guard_alt_stack;
+    ss.ss_size = alt_sz;
+    sigaltstack(&ss, NULL);
+    struct sigaction act = { 0 };
+    act.sa_sigaction = stack_guard_handler;
+    act.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    sigemptyset(&act.sa_mask);
+    sigaction(SIGSEGV, &act, &prev_sigsegv_act);
+}
+#else /* !__linux__ */
 /**
  * @brief Obtains a fiber stack, reusing one from the cache when possible.
  *
@@ -1504,12 +1654,14 @@ static void * alloc_fiber_stack(size_t sz) {
 }
 
 /** @brief Returns a fiber stack to the reuse cache or frees it. */
-static void free_fiber_stack(void * p) {
+static void free_fiber_stack(void * p, size_t sz) {
+    (void)sz;
     if (stack_cache_count < MAX_CACHED_STACKS)
         stack_cache[stack_cache_count++] = p;
     else
         free(p);
 }
+#endif /* __linux__ */
 #endif
 
 /**
@@ -1598,12 +1750,16 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
         memset(c, 0, sizeof(para_fiber_t));
         /* Initialize Perl stacks */
         init_perl_stacks(c);
-        if (!c->_stacks_block) {
+        if (!c->si) {
             free(c);
             return -3;
         }
 #ifndef _WIN32
+#ifdef __linux__
+        c->stack_sz = FIBER_STACK_SZ;
+#else
         c->stack_sz = 512 * 1024;  // 512KB is plenty for Perl fibers
+#endif
         c->stack_p = alloc_fiber_stack(c->stack_sz);
         if (!c->stack_p) {
             free_perl_stacks(aTHX_ c);
@@ -1976,7 +2132,7 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     if (PL_dirty) {
 #ifndef _WIN32
         if (c->stack_p)
-            free(c->stack_p);
+            free_fiber_stack(c->stack_p, c->stack_sz);
 #endif
         free_perl_stacks(aTHX_ c);
         free(c);
@@ -1994,7 +2150,7 @@ DLLEXPORT void destroy_coro(int fiber_id) {
         return;
     }
     if (c->stack_p) {
-        free_fiber_stack(c->stack_p);
+        free_fiber_stack(c->stack_p, c->stack_sz);
         c->stack_p = NULL;
     }
 #endif
@@ -2040,8 +2196,14 @@ DLLEXPORT void cleanup() {
         if (fibers[i])
             destroy_coro(i);
 #ifndef _WIN32
+#ifdef __linux__
+    while (stack_cache_count > 0)
+        munmap((char *)stack_cache[--stack_cache_count] - FIBER_GUARD_SZ,
+               FIBER_STACK_SZ + FIBER_GUARD_SZ);
+#else
     while (stack_cache_count > 0)
         free(stack_cache[--stack_cache_count]);
+#endif
 #endif
     if (main_context.transfer_data && main_context.transfer_data != &PL_sv_undef) {
         SvREFCNT_dec(main_context.transfer_data);
