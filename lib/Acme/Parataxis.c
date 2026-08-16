@@ -320,6 +320,7 @@ typedef struct para_fiber_t {
 
     int id;          /**< Numeric ID of this fiber */
     int finished;    /**< Flag: 1 if the fiber has completed its entry_point */
+    int started;     /**< Flag: 1 once the fiber has actually begun running */
     int parent_id;   /**< ID of the fiber that 'called' this one (asymmetric) */
     int last_sender; /**< ID of the fiber that last switched control to this one */
 } para_fiber_t;
@@ -1296,6 +1297,7 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
  */
 void para_entry_point(para_fiber_t * c) {
     dTHX;
+    c->started = 1;
     ENTER;
     SAVETMPS;
     dSP;
@@ -1539,6 +1541,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     c->parent_id = -1;
     c->last_sender = -1;
     c->finished = 0;
+    c->started = 0;
     c->transfer_data = &PL_sv_undef;
     fibers[idx] = c;
 
@@ -1760,7 +1763,7 @@ DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
 DLLEXPORT int get_live_fiber_count(void) {
     int count = 0;
     for (int i = 0; i < MAX_FIBERS; i++)
-        if (fibers[i])
+        if (fibers[i] && fibers[i]->started)
             count++;
     return count;
 }

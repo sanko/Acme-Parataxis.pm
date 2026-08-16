@@ -111,18 +111,7 @@ package Acme::Parataxis v0.0.10 {
     sub fiber : prototype(&) ($code) { spawn( 'Acme::Parataxis', $code ) }
 
     sub async : prototype(&) ($code) {
-        my $ret = run($code);
-        stop();
-        return $ret;
-    }
-
-    sub await {
-        my $thing = shift;
-        if ( builtin::blessed($thing) ) {
-            return $thing->await if $thing->can('await');
-            return $thing->wait  if $thing->can('wait');
-        }
-        croak 'await() requires a Future or Fiber object';
+        return run($code);
     }
 
     sub yield {
@@ -259,9 +248,18 @@ package Acme::Parataxis v0.0.10 {
     }
 
     sub run ($code) {
-        @SCHEDULER_QUEUE = ();
+        if ($IS_RUNNING) {
+            # Nested run/async inside a live scheduler: share the same run
+            # loop (one global scheduler, like Coro). Queue a fresh fiber for
+            # the block and park the current fiber until it completes.
+            my $fiber = Acme::Parataxis::_new( 'Acme::Parataxis', $code );
+            $SCHEDULER_QUEUED{ $fiber->fid } = 1;
+            push @SCHEDULER_QUEUE, $fiber;
+            return $fiber->await;
+        }
+        @SCHEDULER_QUEUE  = ();
         %SCHEDULER_QUEUED = ();
-        $IS_RUNNING       = 1;
+        $IS_RUNNING        = 1;
         my $main_fiber = Acme::Parataxis->new( code => $code );
         $SCHEDULER_QUEUED{ $main_fiber->fid } = 1;
         push @SCHEDULER_QUEUE, $main_fiber;
@@ -299,6 +297,7 @@ package Acme::Parataxis v0.0.10 {
                 usleep(1000);
             }
         }
+        return $main_fiber->[F_RESULT];
     }
     sub stop () { $IS_RUNNING = 0 }
     sub _new ( $class, $code ) {
