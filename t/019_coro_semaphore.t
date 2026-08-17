@@ -1,6 +1,7 @@
 use v5.40;
 use blib;
 use Acme::Parataxis qw[async fiber yield];
+use Acme::Parataxis::Semaphore;
 use Test2::V1 -ipP;
 $|++;
 #

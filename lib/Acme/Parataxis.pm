@@ -27,7 +27,8 @@ package Acme::Parataxis v0.1.0 {
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
 
-# Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than classes and even hash lookup on the hot spawn/await path).
+    # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
+    # classes and even hash lookup on the hot spawn/await path).
     use constant {
         F_CODE        => 0,
         F_IS_DONE     => 1,
@@ -83,7 +84,7 @@ package Acme::Parataxis v0.1.0 {
         affix $l, [ 'maybe_yield' => '_maybe_yield' ], [],                             Pointer [SV];
         affix $l, 'get_preempt_count',                 [],                             LongLong;
 
-        # Capture the main interpreter context eagerly
+        # Capture the main interpreter context
         init_system();
         if ( $^O eq 'MSWin32' ) {
             my $perl_dll = $Config{libperl};
@@ -120,15 +121,15 @@ package Acme::Parataxis v0.1.0 {
     }
 
     # API aliases and wrappers
-    sub fiber : prototype(&) ($code) { spawn( 'Acme::Parataxis', $code ) }
+    sub fiber : prototype(&) ($code) { spawn( __PACKAGE__, $code ) }
     sub async : prototype(&) ($code) { return run($code) }
 
     sub yield {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
-            $invocant = 'Acme::Parataxis';
+            $invocant = __PACKAGE__;
         }
         my $result = coro_yield( \@_ );
         return unless defined $result;
@@ -139,7 +140,7 @@ package Acme::Parataxis v0.1.0 {
         my ( $class, $code ) = @_;
         if ( ref $class eq 'CODE' ) {
             $code  = $class;
-            $class = 'Acme::Parataxis';
+            $class = __PACKAGE__;
         }
         my $fiber  = Acme::Parataxis::spawn_fiber( $code, $class );
         my $status = $fiber->[F_LAST_STATUS];
@@ -164,7 +165,7 @@ package Acme::Parataxis v0.1.0 {
     sub await_sleep {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my $ms = shift // 0;
@@ -175,7 +176,7 @@ package Acme::Parataxis v0.1.0 {
     sub await_core_id {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         return 'Queue Full' if _submit_job( 1, 0, 0 ) < 0;
@@ -185,7 +186,7 @@ package Acme::Parataxis v0.1.0 {
     sub await_read {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my ( $fh, $timeout ) = @_;
@@ -200,7 +201,7 @@ package Acme::Parataxis v0.1.0 {
     sub await_write {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my ( $fh, $timeout ) = @_;
@@ -215,7 +216,7 @@ package Acme::Parataxis v0.1.0 {
     sub maybe_yield {
         my $invocant = shift;
         if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne 'Acme::Parataxis' && !( builtin::blessed($invocant) && $invocant->isa('Acme::Parataxis') ) ) ) {
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
         my $result = Acme::Parataxis::_maybe_yield();
@@ -265,7 +266,8 @@ package Acme::Parataxis v0.1.0 {
     sub run ($code) {
         if ($IS_RUNNING) {
 
-# Nested run/async inside a live scheduler: share the same global scheduler. Queue a fresh fiber for the block and park the current fiber until it completes.
+            # Nested run/async inside a shared global scheduler. Queue a fresh fiber for the block and park the current
+            # fiber until it completes.
             my $fiber = __PACKAGE__->new( code => $code );
             _enqueue($fiber);
             return $fiber->await;
@@ -303,9 +305,7 @@ package Acme::Parataxis v0.1.0 {
             }
             my $active_count = get_live_fiber_count();
             if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready && !$PENDING_JOBS ) {
-                if ( $active_count > 0 ) {
-                    die "FATAL: deadlock detected, $active_count fibers blocked and nothing runnable\n";
-                }
+                die "FATAL: deadlock detected, $active_count fibers blocked and nothing runnable\n" if $active_count > 0;
                 if ( defined $main_fiber && $main_fiber->is_done ) {
                     $IS_RUNNING = 0;
                 }
@@ -431,7 +431,7 @@ package Acme::Parataxis v0.1.0 {
             $ready = $self->[F_IS_READY];
         }
         croak 'Future not ready' unless $ready;
-        return $self->[F_RESULT];
+        $self->[F_RESULT];
     }
 
     sub _wake_waiter ($self) {

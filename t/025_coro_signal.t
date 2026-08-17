@@ -2,6 +2,7 @@ use v5.40;
 use Test2::V0;
 use blib;
 use Acme::Parataxis qw[async fiber yield];
+use Acme::Parataxis::Signal;
 my $sig = Acme::Parataxis::Signal->new;
 my @done;
 async {
@@ -12,8 +13,8 @@ async {
         my $g = $sig->wait;
         note 'wait consumed the remembered signal';
     };
-    is $sig->count,   0, 'wait consumes a remembered signal without parking';
-    is $sig->awaited, 0, 'no waiters after a remembered signal is consumed';
+    is $sig->count,   F(), 'wait consumes a remembered signal without parking';
+    is $sig->awaited, 0,   'no waiters after a remembered signal is consumed';
 
     # send wakes exactly one waiter.
     fiber {
@@ -49,7 +50,7 @@ async {
     };
     yield;    # all three parked
     $sig->broadcast;
-    is $sig->count, 0, 'broadcast never remembers the signal';
+    is $sig->count, F(), 'broadcast never remembers the signal';
     yield;
     is scalar @done,  5, 'broadcast woke every waiter';
     is $sig->awaited, 0, 'nobody left waiting after broadcast';
@@ -65,8 +66,8 @@ async {
     $sig->send;                             # remember again
     is $sig->count, 1, 'send remembered again';
     $sig->wait( sub { $cb_ran += 10 } );    # pending signal: fires before wait returns
-    is $cb_ran,     11, 'wait($cb) with a pending signal fires immediately';
-    is $sig->count, 0,  'pending signal consumed by wait($cb)';
+    is $cb_ran,     11,  'wait($cb) with a pending signal fires immediately';
+    is $sig->count, F(), 'pending signal consumed by wait($cb)';
 
     # stress: 20 workers x 50 waits ping-ponged with 1000 sends.
     my $total   = 0;

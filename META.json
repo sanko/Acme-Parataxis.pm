@@ -69,6 +69,21 @@
       "Acme::Parataxis" : {
          "file" : "lib/Acme/Parataxis.pm",
          "version" : "v0.1.0"
+      },
+      "Acme::Parataxis::Channel" : {
+         "file" : "lib/Acme/Parataxis/Channel.pm"
+      },
+      "Acme::Parataxis::Future" : {
+         "file" : "lib/Acme/Parataxis/Future.pm"
+      },
+      "Acme::Parataxis::Semaphore" : {
+         "file" : "lib/Acme/Parataxis/Semaphore.pm"
+      },
+      "Acme::Parataxis::Semaphore::Guard" : {
+         "file" : "lib/Acme/Parataxis/Semaphore.pm"
+      },
+      "Acme::Parataxis::Signal" : {
+         "file" : "lib/Acme/Parataxis/Signal.pm"
       }
    },
    "release_status" : "testing",
