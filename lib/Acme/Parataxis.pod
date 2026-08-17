@@ -512,7 +512,7 @@ resumed by the scheduler when the signal fires.
 
 =item * B<Thread Safety:> While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
 
-=item * B<Stack Limits:> Each fiber is allocated a 512KB stack by default. This is more than sufficient for most Perl code and allows for high concurrency with a small memory footprint. Extremely deep recursion or massive regex backtracking might still hit limits.
+=item * B<Stack Limits:> Each fiber is allocated a 64MB virtual stack backed by mmap with a guard page. Physical memory is only consumed for pages the fiber actually touches, so this is cheap even for thousands of fibers.
 
 =item * B<Efficiency:> The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
 

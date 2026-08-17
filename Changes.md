@@ -12,6 +12,7 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 ### Fixed
 
 - Fixed crash (double-free / use-after-free) when fibers call Affix FFI functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5.
+- Fixed SIGSEGV on macOS and FreeBSD caused by fiber stacks being only 512KB (via `posix_memalign`). All POSIX platforms now use a 64MB `mmap`-backed stack with a PROT_NONE guard page, matching the Linux path. The SIGSEGV guard handler is also available on macOS/FreeBSD now.
 
 ### Changed
 

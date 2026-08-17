@@ -65,9 +65,7 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <sys/time.h>
 #include <ucontext.h>
 #include <unistd.h>
-#ifdef __linux__
 #include <sys/mman.h>
-#endif
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -95,7 +93,7 @@ typedef pthread_mutex_t para_mutex_t;
 DLLEXPORT SV * coro_yield(SV * ret_val);
 DLLEXPORT SV * coro_transfer(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
-#ifdef __linux__
+#ifndef _WIN32
 static void install_stack_guard(void);
 #endif
 
@@ -422,18 +420,17 @@ static int outstanding_jobs = 0;
 /** @brief Maximum number of fiber objects to park for reuse */
 #define MAX_FIBER_CACHE 64
 #else
-#ifdef __linux__
 /** @brief Red zone protecting the bottom of each fiber stack. */
 #define FIBER_GUARD_SZ 4096
 /**
  * @brief Virtual size of each fiber stack.
  *
- * The full region is mapped with MAP_NORESERVE so physical memory is only committed for pages the fiber actually
- * touches (the stack grows downward on demand). The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them means
- * genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard handler reports instead of corrupting the heap.
+ * The full region is mapped with MAP_NORESERVE on Linux so physical memory is only committed for pages the fiber
+ * actually touches (the stack grows downward on demand). On macOS/FreeBSD the same mmap approach is used without
+ * MAP_NORESERVE (the kernel overcommits by default). The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them
+ * means genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard handler reports instead of corrupting the heap.
  */
 #define FIBER_STACK_SZ (64 * 1024 * 1024)
-#endif
 /** @brief Maximum number of fiber stacks to keep around for reuse */
 #define MAX_CACHED_STACKS 64
 /** @brief LIFO cache of free fiber stack allocations */
@@ -1357,7 +1354,7 @@ DLLEXPORT int init_system() {
         PL_ppaddr[OP_EXIT] = parataxis_pp_exit;
     }
 #endif
-#ifdef __linux__
+#ifndef _WIN32
     install_stack_guard();
 #endif
 #ifdef _WIN32
@@ -1634,6 +1631,39 @@ static void free_fiber_stack(void * p, size_t sz) {
     if (p)
         munmap((char *)p - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
 }
+#else  /* !__linux__ */
+/**
+ * @brief Allocates a fiber stack backed by a lazily-committed mmap mapping.
+ *
+ * Identical to the Linux path: a PROT_NONE guard page sits below the usable stack so overflow is caught cleanly.
+ * macOS and FreeBSD overcommit by default, so a 64 MB virtual mapping is cheap even without MAP_NORESERVE.
+ *
+ * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
+ * @return void* Pointer to the usable stack (guard page below it), or NULL.
+ */
+static void * alloc_fiber_stack(size_t sz) {
+    (void)sz;
+    if (stack_cache_count > 0)
+        return stack_cache[--stack_cache_count];
+    size_t total = FIBER_STACK_SZ + FIBER_GUARD_SZ;
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED)
+        return NULL;
+    mprotect(base, FIBER_GUARD_SZ, PROT_NONE);
+    return (char *)base + FIBER_GUARD_SZ;
+}
+
+/** @brief Returns a fiber stack to the reuse cache or unmaps it. */
+static void free_fiber_stack(void * p, size_t sz) {
+    (void)sz;
+    if (p && stack_cache_count < MAX_CACHED_STACKS) {
+        stack_cache[stack_cache_count++] = p;
+        return;
+    }
+    if (p)
+        munmap((char *)p - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
+}
+#endif /* __linux__ */
 
 /** @brief Previous SIGSEGV disposition, restored when a fault is not ours. */
 static struct sigaction prev_sigsegv_act;
@@ -1679,7 +1709,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
 }
 
 /**
- * @brief Installs the fiber stack guard handler (Linux only).
+ * @brief Installs the fiber stack guard handler (POSIX).
  *
  * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber running into its guard page is detected and
  * reported cleanly.
@@ -1704,32 +1734,7 @@ static void install_stack_guard(void) {
     sigemptyset(&act.sa_mask);
     sigaction(SIGSEGV, &act, &prev_sigsegv_act);
 }
-#else  /* !__linux__ */
-/**
- * @brief Obtains a fiber stack, reusing one from the cache when possible.
- *
- * @param sz Required stack size in bytes.
- * @return void* Pointer to a 16-byte aligned stack, or NULL on failure.
- */
-static void * alloc_fiber_stack(size_t sz) {
-    if (stack_cache_count > 0)
-        return stack_cache[--stack_cache_count];
-    void * p = NULL;
-    if (posix_memalign(&p, 16, sz) != 0)
-        return NULL;
-    return p;
-}
-
-/** @brief Returns a fiber stack to the reuse cache or frees it. */
-static void free_fiber_stack(void * p, size_t sz) {
-    (void)sz;
-    if (stack_cache_count < MAX_CACHED_STACKS)
-        stack_cache[stack_cache_count++] = p;
-    else
-        free(p);
-}
-#endif /* __linux__ */
-#endif
+#endif /* !_WIN32 */
 
 /**
  * @brief Arms the OS-level context for a (possibly recycled) fiber.
@@ -1819,11 +1824,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
             return -3;
         }
 #ifndef _WIN32
-#ifdef __linux__
         c->stack_sz = FIBER_STACK_SZ;
-#else
-        c->stack_sz = 512 * 1024;  // 512KB is plenty for Perl fibers
-#endif
         c->stack_p = alloc_fiber_stack(c->stack_sz);
         if (!c->stack_p) {
             free_perl_stacks(aTHX_ c);
