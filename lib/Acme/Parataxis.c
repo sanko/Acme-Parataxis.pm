@@ -427,7 +427,11 @@ static int outstanding_jobs = 0;
 #define MAX_FIBER_CACHE 64
 #else
 #ifndef MAP_ANONYMOUS
+#ifdef MAP_ANON
 #define MAP_ANONYMOUS MAP_ANON
+#else
+#define MAP_ANONYMOUS 0x1000
+#endif
 #endif
 /**
  * @brief Red zone protecting the bottom of each fiber stack.
