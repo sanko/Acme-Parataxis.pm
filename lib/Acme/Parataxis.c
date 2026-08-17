@@ -426,12 +426,11 @@ static int outstanding_jobs = 0;
 /** @brief Maximum number of fiber objects to park for reuse */
 #define MAX_FIBER_CACHE 64
 #else
-#ifndef MAP_ANONYMOUS
-#ifdef MAP_ANON
-#define MAP_ANONYMOUS MAP_ANON
-#else
-#define MAP_ANONYMOUS 0x1000
+#if !defined(MAP_ANON) && defined(MAP_ANON)
+#define MAP_ANON MAP_ANON
 #endif
+#if !defined(MAP_ANON)
+#define MAP_ANON 0x1000
 #endif
 /**
  * @brief Red zone protecting the bottom of each fiber stack.
@@ -1639,7 +1638,7 @@ static void * alloc_fiber_stack(size_t sz) {
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
     size_t total = FIBER_STACK_SZ + fiber_guard_sz;
-    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
     mprotect(base, fiber_guard_sz, PROT_NONE);
@@ -1672,7 +1671,7 @@ static void * alloc_fiber_stack(size_t sz) {
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
     size_t total = FIBER_STACK_SZ + fiber_guard_sz;
-    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
     mprotect(base, fiber_guard_sz, PROT_NONE);
@@ -1746,7 +1745,7 @@ static void install_stack_guard(void) {
     init_guard_sz();
     guard_owner_thread = pthread_self();
     size_t alt_sz = 256 * 1024;
-    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (guard_alt_stack == MAP_FAILED) {
         guard_alt_stack = NULL;
         return;
