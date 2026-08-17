@@ -420,17 +420,31 @@ static int outstanding_jobs = 0;
 /** @brief Maximum number of fiber objects to park for reuse */
 #define MAX_FIBER_CACHE 64
 #else
-/** @brief Red zone protecting the bottom of each fiber stack. */
-#define FIBER_GUARD_SZ 4096
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+/**
+ * @brief Red zone protecting the bottom of each fiber stack.
+ *
+ * Set at runtime to the system page size (via sysconf) so the PROT_NONE guard
+ * region always covers at least one full page, even on macOS ARM64 where the
+ * page size is 16 KiB.
+ */
+static size_t fiber_guard_sz;
 /**
  * @brief Virtual size of each fiber stack.
  *
  * The full region is mapped with MAP_NORESERVE on Linux so physical memory is only committed for pages the fiber
  * actually touches (the stack grows downward on demand). On macOS/FreeBSD the same mmap approach is used without
- * MAP_NORESERVE (the kernel overcommits by default). The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them
+ * MAP_NORESERVE (the kernel overcommits by default). The bottom fiber_guard_sz bytes are PROT_NONE; hitting them
  * means genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard handler reports instead of corrupting the heap.
  */
 #define FIBER_STACK_SZ (64 * 1024 * 1024)
+/** @brief Lazy-init: set fiber_guard_sz to the system page size. */
+static void init_guard_sz(void) {
+    if (!fiber_guard_sz)
+        fiber_guard_sz = (size_t)sysconf(_SC_PAGESIZE);
+}
 /** @brief Maximum number of fiber stacks to keep around for reuse */
 #define MAX_CACHED_STACKS 64
 /** @brief LIFO cache of free fiber stack allocations */
@@ -1611,14 +1625,15 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
  */
 static void * alloc_fiber_stack(size_t sz) {
     (void)sz;
+    init_guard_sz();
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
-    size_t total = FIBER_STACK_SZ + FIBER_GUARD_SZ;
+    size_t total = FIBER_STACK_SZ + fiber_guard_sz;
     void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
-    mprotect(base, FIBER_GUARD_SZ, PROT_NONE);
-    return (char *)base + FIBER_GUARD_SZ;
+    mprotect(base, fiber_guard_sz, PROT_NONE);
+    return (char *)base + fiber_guard_sz;
 }
 
 /** @brief Returns a fiber stack to the reuse cache or unmaps it. */
@@ -1629,7 +1644,7 @@ static void free_fiber_stack(void * p, size_t sz) {
         return;
     }
     if (p)
-        munmap((char *)p - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
+        munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 }
 #else  /* !__linux__ */
 /**
@@ -1643,14 +1658,15 @@ static void free_fiber_stack(void * p, size_t sz) {
  */
 static void * alloc_fiber_stack(size_t sz) {
     (void)sz;
+    init_guard_sz();
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
-    size_t total = FIBER_STACK_SZ + FIBER_GUARD_SZ;
+    size_t total = FIBER_STACK_SZ + fiber_guard_sz;
     void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
-    mprotect(base, FIBER_GUARD_SZ, PROT_NONE);
-    return (char *)base + FIBER_GUARD_SZ;
+    mprotect(base, fiber_guard_sz, PROT_NONE);
+    return (char *)base + fiber_guard_sz;
 }
 
 /** @brief Returns a fiber stack to the reuse cache or unmaps it. */
@@ -1661,7 +1677,7 @@ static void free_fiber_stack(void * p, size_t sz) {
         return;
     }
     if (p)
-        munmap((char *)p - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
+        munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 }
 #endif /* __linux__ */
 
@@ -1692,7 +1708,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
             prev_sigsegv_act.sa_handler(sig);
         return;
     }
-    char * guard_base = (char *)c->stack_p - FIBER_GUARD_SZ;
+    char * guard_base = (char *)c->stack_p - fiber_guard_sz;
     char * fault = (char *)si->si_addr;
     if (c->stack_p == NULL || fault < guard_base || fault >= (char *)c->stack_p) {
         if (prev_sigsegv_act.sa_flags & SA_SIGINFO)
@@ -1717,6 +1733,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
 static void install_stack_guard(void) {
     if (guard_alt_stack)
         return;
+    init_guard_sz();
     guard_owner_thread = pthread_self();
     size_t alt_sz = 256 * 1024;
     guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -2284,10 +2301,10 @@ DLLEXPORT void cleanup() {
 #ifndef _WIN32
 #ifdef __linux__
     while (stack_cache_count > 0)
-        munmap((char *)stack_cache[--stack_cache_count] - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
+        munmap((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 #else
     while (stack_cache_count > 0)
-        free(stack_cache[--stack_cache_count]);
+        munmap((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 #endif
 #endif
     if (main_context.transfer_data && main_context.transfer_data != &PL_sv_undef) {
