@@ -452,58 +452,6 @@ A low-level example of Passing control sideways between fibers.
 
 The current hotness in lightweight concurrency abstrations.
 
-    class Acme::Parataxis::Future {
-        use Carp qw[croak];
-        field $is_ready : reader = 0;
-        field $result;
-        field $error;
-        field @callbacks;
-        field $waiter;
-
-        method result () { # Returns the task result immediately. Croaks if the future is not yet ready.
-            croak 'Future not ready' unless $is_ready;
-            return $result;
-        }
-
-        method set_result ($val) {
-            die 'Future already ready' if $is_ready;
-            $result   = $val;
-            $is_ready = 1;
-            $_->($self) for @callbacks;
-        }
-
-        method set_error ($err) {
-            die 'Future already ready' if $is_ready;
-            $error    = $err;
-            $is_ready = 1;
-            $_->($self) for @callbacks;
-        }
-
-        method clear_result () {
-            $result = undef;
-            $error  = undef;
-        }
-
-        method on_ready ($cb) {
-            if   ($is_ready) { $cb->($self) }
-            else             { push @callbacks, $cb }
-        }
-
-        method await () {
-            # Suspends the current fiber until the future is ready. Returns the result or dies if the task encountered an error
-            return $self->result if $is_ready;
-            $waiter = Acme::Parataxis->current_fid;
-            $self->on_ready( \&_wake_waiter );
-            Acme::Parataxis->yield('WAITING');
-            $self->result;
-        }
-
-        method _wake_waiter () {
-            return unless defined $waiter;
-            Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
-            $waiter = undef;
-        }
-    }
 
 =head2 Semaphore
 
@@ -521,63 +469,6 @@ like the futures used by C<await>.
     async {
         fiber { $sem->down };   # wait for a signal
         $sem->up;
-    };
-
-Here's the code:
-
-    class Acme::Parataxis::Semaphore {
-        field $count   : reader : param //= 1;
-        field @waiters : reader;    # fiber ids in FIFO order and re-enqueued via the scheduler when woken
-
-        method _block_until_available () {    # Park the current fiber until a permit is available then recheck the count
-            while ( $count <= 0 ) {
-                push @waiters, Acme::Parataxis->current_fid;
-                Acme::Parataxis->yield('WAITING');
-            }
-            1;
-        }
-
-        method down () {
-            $self->_block_until_available;
-            $count--;
-            1;
-        }
-
-        method try () {
-            return 0 if $count <= 0;
-            $count--;
-            1;
-        }
-
-        method up () {
-            $count++;
-            Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) if $count > 0 && @waiters;
-            1;
-        }
-
-        method adjust ($diff) {
-            $count += $diff;
-            my $n       = $count;
-            my $waiting = scalar @waiters;
-            $n = $waiting if $waiting < $n;
-            Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) while $n-- > 0;
-            1;
-        }
-        method wait () { $self->_block_until_available }
-
-        method guard () {
-            $self->down;
-            Acme::Parataxis::Semaphore::Guard->new( semaphore => $self );
-        }
-    };
-
-    class Acme::Parataxis::Semaphore::Guard { # Util
-        field $semaphore : param;
-
-        method DESTROY {
-            return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-            $semaphore->up;
-        }
     };
 
 =head2 Channels
@@ -598,31 +489,6 @@ use size C<2>, and so on.
         say $q->get for 1 .. 8;                  # consumer
     };
 
-A simple concept.
-
-    class Acme::Parataxis::Channel {
-        field $capacity : param //= 2_000_000_000;
-        field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
-        field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity - 1 );
-        field @data : reader;
-
-        method put ($value) {
-            push @data, $value;
-            $sem_get->up;
-            $sem_put->down;
-            1;
-        }
-
-        method get () {
-            $sem_get->down;
-            $sem_put->up;
-            shift @data;
-        }
-        method size ()        { scalar @data }
-        method shutdown ()    { $sem_get->adjust(1_000_000_000); 1 }
-        method adjust ($diff) { $sem_put->adjust($diff) }
-    };
-
 =head2 Signals
 
 An object with a two-state flag and a FIFO queue of waiters. A fiber parked in C<wait> does not busy-wait; it is
@@ -636,53 +502,6 @@ resumed by the scheduler when the signal fires.
     async {
         fiber { $sig->wait; say 'I rise!' };
         $sig->send;
-    };
-
-It's also very simple.
-
-    class Acme::Parataxis::Signal {
-        field $count : reader : param //= true; # true if a send is pending
-        field @waiters;            # fiber ids (integers) or callback coderefs. FIFO
-
-        method _wake_one () {
-            my $waiter = shift @waiters;
-            $count = false;            # a woken waiter consumes the signal
-            if ( ref $waiter eq 'CODE' ) { $waiter->() }
-            else {
-                Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
-            }
-            $waiter;
-        }
-
-        method send () { # Wake up one waiter, or remember the signal if nobody is waiting.
-            if   (@waiters) { $self->_wake_one }
-            else            { $count = true }         # remember the signal
-            return true;
-        }
-
-        method broadcast { # Wake up all waiters.  If nobody is waiting the signal is lost.
-            my $n = scalar @waiters;               # fixed wake budget, like coro_signal_wake
-            $count = false;                        # signal lost if nobody is waiting
-            $self->_wake_one while $n-- > 0 && @waiters;
-            return true;
-        }
-
-        method wait ( $arg //= () ) { # Returns true when at least one fiber is currently waiting on the signal.
-            if ( defined $arg ) {
-                push @waiters, $arg;      # callback form
-                $self->send if $count;    # already signalled: fire now
-                return;
-            }
-            if ($count) {
-                $count = false;           # consume the remembered signal
-                return;
-            }
-            push @waiters, Acme::Parataxis->current_fid;
-            Acme::Parataxis->yield('WAITING');
-            return;
-        }
-
-        method awaited { return scalar @waiters }    # 0 when nobody is waiting
     };
 
 =head1 Best Practices & Gotchas
@@ -751,7 +570,7 @@ collector finally catches up with the object.
 
 =head1 AUTHOR
 
-Sanko Robinson <sanko@cpan.org>
+Sanko Robinson L<https://github.com/sanko>
 
 =head1 LICENSE
 
