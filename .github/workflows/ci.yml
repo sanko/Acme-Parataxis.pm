@@ -19,7 +19,7 @@ jobs:
             pkg: pkg install -y
             version: 14.1
         perl:
-          - 5.40
+          - "5.40"
       max-parallel: 5
     uses: ./.github/workflows/cross.yml
     with:
@@ -47,6 +47,22 @@ jobs:
       flags: '${{ matrix.flags }}'
       os: '${{ matrix.os }}'
       perl: '${{ matrix.perl }}'
+  riscv:
+    name: 'RISC-V/v${{matrix.perl}}'
+    needs:
+      - setup
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ['']
+        perl:
+          - "5.42.0"
+      max-parallel: 2
+    uses: ./.github/workflows/unix.yml
+    with:
+      flags: '${{ matrix.flags }}'
+      os: ubuntu-24.04-riscv
+      perl: '${{ matrix.perl }}'
   macos:
     name: "[${{ matrix.os == 'macos-15-intel' && 'Intel' || 'M1' }}] macOS/v${{matrix.perl}}"
     needs:
@@ -57,6 +73,9 @@ jobs:
         exclude:
           - flags: -Dusequadmath
           - flags: -Dusethreads
+          - flags: -Dusethreads -DDEBUGGING=both
+          - flags: -Dusethreads -Duselongdouble -DDEBUGGING=both
+          - flags: -Dusethreads -Dusequadmath -DDEBUGGING=both
         flags: '${{ fromJSON(needs.setup.outputs.matrix).flags }}'
         os:
           - macos-15-intel
@@ -72,12 +91,13 @@ jobs:
     name: Results
     needs:
       - macos
+      - riscv
       - win32
       - linux
     runs-on: ubuntu-22.04
     steps:
       - name: Download test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           path: artifacts
       - name: Report test results
@@ -114,8 +134,8 @@ jobs:
       - env:
           DATA: |
             {
-              "perl":  ["5.42.0"],
-              "flags": ["", "-Dusethreads", "-Duselongdouble", "-Dusequadmath", "--debug", "-DDEBUGGING=both", "-DDEBUGGING=-g", "-Doptimize=-g", "-DDEBUGGING=none", "-UDEBUGGING"]
+              "perl":  ["5.40.2", "5.42.0"],
+              "flags": ["", "-Dusethreads", "-Duselongdouble", "-Dusequadmath", "--debug", "-DDEBUGGING=both", "-DDEBUGGING=-g", "-Doptimize=-g", "-DDEBUGGING=none", "-UDEBUGGING", "-Dusethreads -DDEBUGGING=both", "-Dusethreads -Duselongdouble -DDEBUGGING=both", "-Dusethreads -Dusequadmath -DDEBUGGING=both"]
             }
         id: matrix
         run: "jq -rn 'env.DATA | fromjson | @json \"matrix=\\(.)\"' > $GITHUB_OUTPUT\n"
