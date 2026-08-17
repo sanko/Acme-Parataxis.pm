@@ -3,26 +3,22 @@
  * @brief Low-level Green Threads (Fibers) and Hybrid Thread Pool for Perl.
  *
  * @section Overview
- * This file implements a cooperative multitasking system (Fibers) integrated
- * with a preemptive native thread pool. It allows Perl to run thousands of
- * user-mode fibers that can offload blocking C-level tasks to background
- * OS threads without stalling the main interpreter.
+ * This file implements a cooperative multitasking system (Fibers) integrated with a preemptive native thread pool. It
+ * allows Perl to run thousands of user-mode fibers that can offload blocking C-level tasks to background OS threads
+ * without stalling the main interpreter.
  *
  * @section Architecture
- * - **Fibers**: The primitive unit of execution. Each fiber has its own OS context
- *   and a complete set of Perl interpreter stacks (Argument, Mark, Scope, Save, Mortal).
- * - **Coroutines**: The execution pattern (yield/call/transfer) used by fibers to
- *   pass control.
- * - **Thread Pool**: A fixed pool of worker threads that poll a job queue for
- *   blocking operations like sleep, I/O, or heavy computation.
- * - **Context Switching**: The `swap_perl_state` function manually saves and restores
- *   the global state of the Perl interpreter (`PL_*` variables) to allow disjoint
- *   execution flows.
+ * - **Fibers**: The primitive unit of execution. Each fiber has its own OS context and a complete set of Perl
+ * interpreter stacks (Argument, Mark, Scope, Save, Mortal).
+ * - **Coroutines**: The execution pattern (yield/call/transfer) used by fibers to pass control.
+ * - **Thread Pool**: A fixed pool of worker threads that poll a job queue for blocking operations like sleep, I/O, or
+ * heavy computation.
+ * - **Context Switching**: The `swap_perl_state` function manually saves and restores the global state of the Perl
+ * interpreter (`PL_*` variables) to allow disjoint execution flows.
  *
  * @section Caveats
- * Shared subroutines (CVs) with re-entrant yielding calls are handled by a
- * specialized pad-clearing mechanism in `_activate_current_depths` to satisfy
- * Perl's internal `AvFILLp` assertions in debug builds.
+ * Shared subroutines (CVs) with re-entrant yielding calls are handled by a specialized pad-clearing mechanism in
+ * `_activate_current_depths` to satisfy Perl's internal `AvFILLp` assertions in debug builds.
  */
 
 #ifdef _WIN32
@@ -106,11 +102,10 @@ static void install_stack_guard(void);
 /*
  * Assembly-based coroutine context switching.
  *
- * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on
- * every context switch which dominates the cost of fiber switches.  On
- * x86_64 we instead switch with a tiny assembly routine that only saves the
- * callee-saved registers and the stack pointer, avoiding the syscall
- * entirely.  All other platforms keep the portable ucontext path.
+ * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on every context switch which dominates the
+ * cost of fiber switches. On x86_64 we instead switch with a tiny assembly routine that only saves the callee-saved
+ * registers and the stack pointer, avoiding the syscall entirely. All other platforms keep the portable ucontext path
+ * for now...
  */
 #if defined(__x86_64__) && !defined(_WIN32) && defined(__ELF__)
 #define USE_ASM_CORO 1
@@ -125,10 +120,9 @@ void para_entry_point(para_fiber_t * c);
 /**
  * @brief Raw register-only context switch.
  *
- * Saves the callee-saved registers and the current stack pointer into
- * *from, restores them from *to, then returns (popping the return address
- * off the target stack).  A freshly created fiber's stack is pre-arranged
- * so that the return address lands in para_trampoline.
+ * Saves the callee-saved registers and the current stack pointer into *from, restores them from *to, then returns
+ * (popping the return address off the target stack). A freshly created fiber's stack is pre-arranged so that the return
+ * address lands in para_trampoline.
  *
  * @param from Pointer to the storage slot holding the current stack pointer.
  * @param to   Pointer to the storage slot holding the target stack pointer.
@@ -172,8 +166,8 @@ __asm__(
 /**
  * @brief Get the Operating System's unique Thread ID.
  *
- * Useful for debugging to prove that background tasks are running on
- * different OS threads than the main Perl interpreter.
+ * Useful for debugging to prove that background tasks are running on different OS threads than the main Perl
+ * interpreter.
  *
  * @return int The TID (Windows) or LWP ID (Linux/BSD/macOS).
  */
@@ -194,8 +188,8 @@ int get_os_thread_id() {
 /**
  * @brief Pin the current thread to a specific CPU core.
  *
- * Used by the Thread Pool to ensure worker threads are distributed
- * across available hardware cores for maximum parallelism.
+ * Used by the Thread Pool to ensure worker threads are distributed across available hardware cores
+ * for maximum parallelism.
  *
  * @param core_id The zero-based index of the CPU core.
  */
@@ -257,9 +251,8 @@ int get_cpu_count() {
  * @struct para_fiber_t
  * @brief The complete execution context of a Perl Fiber.
  *
- * This structure encapsulates both the OS-level register state (via context)
- * and the entire internal state of the Perl interpreter required to pause
- * and resume execution of Perl code.
+ * This structure encapsulates both the OS-level register state (via context) and the entire internal state of the Perl
+ * interpreter required to pause and resume execution of Perl code.
  */
 typedef struct para_fiber_t {
     coro_handle_t context; /**< OS-specific context handle */
@@ -333,11 +326,10 @@ typedef struct para_fiber_t {
     int last_sender; /**< ID of the fiber that last switched control to this one */
 
 #ifdef _WIN32
-    /* exit() interception (x64 Windows only).  The CRT longjmp cannot cross
-     * stacks, so an exit() thrown on a fiber stack must be captured there and
-     * re-raised on the caller's stack (see parataxis_pp_exit / para_entry_point
-     * / coro_call).  exit_pending is set when exit() was called by this fiber
-     * or a fiber it called; exit_status carries the requested exit code. */
+    /* exit() interception (x64 Windows only). The CRT longjmp cannot cross stacks, so an exit() thrown on a fiber stack
+     * must be captured there and re-raised on the caller's stack (see parataxis_pp_exit / para_entry_point /
+     * coro_call). exit_pending is set when exit() was called by this fiber or a fiber it called; exit_status carries
+     * the requested exit code. */
     int exit_pending;
     int exit_status;
 #endif
@@ -410,19 +402,17 @@ static para_mutex_t queue_lock;
 /*
  * Completed-job notification ring.
  *
- * Workers push the index of every finished job into this ring so that
- * check_for_completion() can find completed work in O(1) instead of
- * scanning all MAX_JOBS slots under the lock on every scheduler tick.
+ * Workers push the index of every finished job into this ring so that check_for_completion() can find completed work in
+ * O(1) instead of scanning all MAX_JOBS slots under the lock on every scheduler tick.
  */
 static int done_queue[MAX_JOBS + 1];
 static int done_head = 0;
 static int done_tail = 0;
 
 /*
- * Number of jobs that have been submitted but not yet reclaimed by the
- * main thread via free_job_slot().  Only touched by the main thread, so it
- * needs no lock.  The scheduler uses it to skip polling entirely when no
- * background work is in flight.
+ * Number of jobs that have been submitted but not yet reclaimed by the main thread via free_job_slot(). Only touched by
+ * the main thread, so it needs no lock. The scheduler uses it to skip polling entirely when no background work is in
+ * flight.
  */
 static int outstanding_jobs = 0;
 
@@ -438,11 +428,9 @@ static int outstanding_jobs = 0;
 /**
  * @brief Virtual size of each fiber stack.
  *
- * The full region is mapped with MAP_NORESERVE so physical memory is only
- * committed for pages the fiber actually touches (the stack grows downward
- * on demand).  The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them
- * means genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard
- * handler reports instead of corrupting the heap.
+ * The full region is mapped with MAP_NORESERVE so physical memory is only committed for pages the fiber actually
+ * touches (the stack grows downward on demand). The bottom FIBER_GUARD_SZ bytes are PROT_NONE; hitting them means
+ * genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard handler reports instead of corrupting the heap.
  */
 #define FIBER_STACK_SZ (64 * 1024 * 1024)
 #endif
@@ -648,8 +636,8 @@ void * worker_thread(void * arg) {
 /**
  * @brief Initializes the background thread pool.
  *
- * Automatically detects the CPU count and spawns worker threads. This function
- * is called automatically by `init_system` and `submit_c_job`.
+ * Automatically detects the CPU count and spawns worker threads. This function is called
+ * automatically by `init_system` and `submit_c_job`.
  */
 DLLEXPORT void init_threads() {
     dTHX;
@@ -734,8 +722,8 @@ DLLEXPORT int check_for_completion() {
 /**
  * @brief Returns the number of background jobs not yet reclaimed.
  *
- * Only the main thread touches this counter, so it is a plain read.  The
- * scheduler uses it to skip polling entirely when no work is in flight.
+ * Only the main thread touches this counter, so it is a plain read. The scheduler uses it to skip polling entirely when
+ * no work is in flight.
  *
  * @return int Number of outstanding jobs.
  */
@@ -793,8 +781,7 @@ DLLEXPORT void free_job_slot(int idx) {
 /**
  * @brief Resets the call depth of a Perl CV to zero.
  *
- * Used to ensure that a newly created fiber starts its coderef with a
- * clean execution state.
+ * Used to ensure that a newly created fiber starts its coderef with a clean execution state.
  *
  * @param cv_ref SV reference to the coderef.
  */
@@ -826,8 +813,7 @@ DLLEXPORT int64_t get_preempt_count() { return preempt_count; }
 /**
  * @brief Checks if automatic preemption should occur.
  *
- * Increments the internal counter and triggers a `coro_yield` if the
- * threshold is reached.
+ * Increments the internal counter and triggers a `coro_yield` if the threshold is reached.
  *
  * @return SV* Result of the yield, or undef if no yield occurred.
  */
@@ -844,8 +830,8 @@ DLLEXPORT SV * maybe_yield() {
 /**
  * @brief Restores subroutine call depths and cleans argument pads.
  *
- * This function iterates the context stack and restores CvDEPTH for
- * active subroutines in two passes to safely handle recursive calls.
+ * This function iterates the context stack and restores CvDEPTH for active subroutines in two passes to safely handle
+ * recursive calls.
  *
  * Pass 1: Restores CvDEPTH for all active frames.
  * Pass 2: Surgicaly cleans Slot 0 of the *next* pad depth for each CV.
@@ -896,9 +882,8 @@ static void _activate_current_depths(pTHX_ para_fiber_t * to) {
 /**
  * @brief Swaps the internal Perl Interpreter state pointers.
  *
- * This is the core of the fiber implementation. It manually saves all
- * global pointers that define the "state" of the Perl virtual machine for
- * the current context and restores them for the target context.
+ * This is the core of the fiber implementation. It manually saves all global pointers that define the "state" of the
+ * Perl virtual machine for the current context and restores them for the target context.
  *
  * @param from Context being paused.
  * @param to Context being resumed.
@@ -1018,14 +1003,12 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
 /**
  * @brief Restores a context's saved Perl interpreter state in-place.
  *
- * Loads every saved interpreter global from @p to without performing an
- * OS context switch.  Used when a fiber longjmps out of the system (e.g.
- * via exit()) so that the top-level main context's perl-owned stacks are
- * current again before the jump propagates to perl_run/perl_destruct.
+ * Loads every saved interpreter global from @p to without performing an OS context switch. Used when a fiber longjmps
+ * out of the system (e.g. via exit()) so that the top-level main context's perl-owned stacks are current again before
+ * the jump propagates to perl_run/perl_destruct.
  *
- * Unlike swap_perl_state this deliberately leaves PL_top_env alone: the
- * caller manages the jump environment so the rethrow continues past the
- * wrapper that caught the exit.
+ * Unlike swap_perl_state this deliberately leaves PL_top_env alone: the caller manages the jump environment so the
+ * rethrow continues past the wrapper that caught the exit.
  *
  * @param to The context whose saved state should become current.
  */
@@ -1088,21 +1071,18 @@ void restore_perl_state(para_fiber_t * to) {
 /**
  * @brief Allocates a fiber's Perl control stacks.
  *
- * The Mark, Scope, Save and Mortal stacks, plus the Stack Info context
- * stack, are each allocated independently so perl can grow them in place
- * with realloc() when deep recursion or heavy scoping overflows the
- * initial size.  A shared block would crash ("realloc(): invalid pointer")
- * the moment perl tried to grow an interior pointer.
+ * The Mark, Scope, Save and Mortal stacks, plus the Stack Info context stack, are each allocated independently so perl
+ * can grow them in place with realloc() when deep recursion or heavy scoping overflows the initial size. A shared block
+ * would crash ("realloc(): invalid pointer") the moment perl tried to grow an interior pointer.
  *
  * @param c The fiber context to initialize.
  */
 static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
     I32 sz = FIBER_STACK_DEPTH;
 
-    /* Use perl's allocator (Newx/Safefree) so that when perl grows these
-     * stacks with Renew()/realloc() it recognizes them as its own memory.
-     * Plain malloc'd memory panics ("realloc ... from wrong pool") in
-     * threaded-DEBUGGING perls that tag allocations per interpreter. */
+    /* Use perl's allocator (Newx/Safefree) so that when perl grows these stacks with Renew()/realloc() it recognizes
+     * them as its own memory. Plain malloc'd memory panics ("realloc ... from wrong pool") in threaded-DEBUGGING perls
+     * that tag allocations per interpreter. */
     PERL_SI * si = NULL;
     PERL_CONTEXT * ctx_stack = NULL;
     Newx(si, 1, PERL_SI);
@@ -1131,8 +1111,8 @@ static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
         return;
     }
 
-    /* Only the SI header needs zeroing; the control stacks are managed
-     * through their own ix/count fields and never read beyond them. */
+    /* Only the SI header needs zeroing; the control stacks are managed through their own ix/count fields and never read
+     * beyond them. */
     memset(si, 0, sizeof(PERL_SI));
 
     si->si_cxmax = 64;
@@ -1141,12 +1121,10 @@ static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
     si->si_cxsubix = -1;
     si->si_type = PERLSI_MAIN;
 
-    /* Link this fiber's stackinfo back to the permanent main stackinfo so
-     * that perl's POPSTACK_TO(PL_mainstack) (run on exit()) can pop out of
-     * the fiber and land on the main argument stack.  pop_stackinfo panics
-     * ("panic: POPSTACK") and recurses via croak->my_exit if si_prev is NULL.
-     * We walk to the root rather than using the immediate current stackinfo
-     * so the chain never dangles after an intermediate fiber is destroyed. */
+    /* Link this fiber's stackinfo back to the permanent main stackinfo so that perl's POPSTACK_TO(PL_mainstack) (run on
+     * exit()) can pop out of the fiber and land on the main argument stack. pop_stackinfo panics ("panic: POPSTACK")
+     * and recurses via croak->my_exit if si_prev is NULL. We walk to the root rather than using the immediate current
+     * stackinfo so the chain never dangles after an intermediate fiber is destroyed. */
     {
         PERL_SI * root = PL_curstackinfo;
         while (root->si_prev)
@@ -1160,10 +1138,9 @@ static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
 /**
  * @brief Resets a fiber's Perl control stacks back to their initial state.
  *
- * Called when a fiber is destroyed and its memory parked in the reuse
- * cache.  The stacks keep whatever size they grew to and are simply
- * re-initialized; resetting the bounds conservatively back to the starting
- * size just means perl grows them again if a new fiber recurses deep.
+ * Called when a fiber is destroyed and its memory parked in the reuse cache. The stacks keep whatever size they grew to
+ * and are simply re-initialized; resetting the bounds conservatively back to the starting size just means perl grows
+ * them again if a new fiber recurses deep.
  *
  * @param c The fiber context to reset.
  */
@@ -1181,11 +1158,9 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
     }
 
     if (c->curstack) {
-        /* Do NOT av_clear the fiber's argument stack here.  Slots below the
-         * last-saved stack pointer may already have been popped and freed
-         * during earlier resume/yield cycles, so clearing them would
-         * double-decrement live SVs.  The AV is reused verbatim; new pushes
-         * overwrite the stale slots before they are ever read. */
+        /* Do NOT av_clear the fiber's argument stack here. Slots below the last-saved stack pointer may already have
+         * been popped and freed during earlier resume/yield cycles, so clearing them would double-decrement live SVs.
+         * The AV is reused verbatim; new pushes overwrite the stale slots before they are ever read. */
         AvARRAY(c->curstack)[0] = &PL_sv_undef;
         AvFILLp(c->curstack) = 0;
     }
@@ -1194,9 +1169,8 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
         si->si_cxix = -1;
         si->si_stack = c->curstack;
     }
-    /* exit()/POPSTACK_TO(PL_mainstack) inside this fiber must stop at the
-     * fiber's own argument stack instead of unwinding the shared main
-     * contexts whose pads are not current while a fiber runs. */
+    /* exit()/POPSTACK_TO(PL_mainstack) inside this fiber must stop at the fiber's own argument stack instead of
+     * unwinding the shared main contexts whose pads are not current while a fiber runs. */
     c->mainstack = (SV *)c->curstack;
 
     c->markstack_ptr = c->markstack;
@@ -1236,9 +1210,8 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
 /**
  * @brief Allocates and initializes new Perl stacks for a fiber.
  *
- * Each fiber needs a complete set of independent stacks (Argument, Mark,
- * Scope, Save, Mortal) to function as a separate execution thread.  The
- * control stacks share a single allocation block for speed.
+ * Each fiber needs a complete set of independent stacks (Argument, Mark, Scope, Save, Mortal) to function as a separate
+ * execution thread. The control stacks share a single allocation block for speed.
  *
  * @param c The fiber context to initialize.
  */
@@ -1254,8 +1227,8 @@ void init_perl_stacks(para_fiber_t * c) {
     AvREAL_off(c->curstack);  // Stacks do not 'own' their elements in the refcnt sense
     av_extend(c->curstack, 128);
 
-    /* The control stacks are uninitialized beyond the SI header, so mark the
-     * tmps stack empty before reset runs its release loop. */
+    /* The control stacks are uninitialized beyond the SI header, so mark the tmps stack empty before reset runs its
+     * release loop. */
     c->tmps_ix = -1;
     c->tmps_floor = -1;
 
@@ -1298,22 +1271,18 @@ static Perl_ppaddr_t parataxis_saved_pp_exit = NULL;
 /**
  * @brief Windows replacement for perl's pp_exit (OP_EXIT).
  *
- * perl's exit() longjmps up the JMPENV chain.  On x64 Windows the CRT
- * longjmp unwinds the stack (SEH) and cannot jump from a fiber stack to a
- * setjmp that is live on the caller's stack: the process dies with
- * 0xC0000028 (STATUS_BAD_STACK).  To keep exit() working inside fibers we
- * capture the exit code at the opcode, record it on the current fiber, and
- * hand control back to perl's exit machinery on the caller's stack (see
- * para_entry_point / coro_call).
+ * perl's exit() longjmps up the JMPENV chain. On x64 Windows the CRT longjmp unwinds the stack (SEH) and cannot jump
+ * from a fiber stack to a setjmp that is live on the caller's stack: the process dies with 0xC0000028
+ * (STATUS_BAD_STACK). To keep exit() working inside fibers we capture the exit code at the opcode, record it on the
+ * current fiber, and hand control back to perl's exit machinery on the caller's stack (see para_entry_point /
+ * coro_call).
  *
- * Outside of a running fiber this delegates to the original pp_exit, so
- * normal program exits are byte-for-byte unchanged.
+ * Outside of a running fiber this delegates to the original pp_exit, so normal program exits are byte-for-byte
+ * unchanged.
  */
 static OP * parataxis_pp_exit(pTHX) {
-    if (current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
-        !fibers[current_fiber_id]) {
+    if (current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS || !fibers[current_fiber_id])
         return parataxis_saved_pp_exit(aTHX);
-    }
     dSP;
     I32 anum;
     if (MAXARG < 1)
@@ -1329,8 +1298,8 @@ static OP * parataxis_pp_exit(pTHX) {
     para_fiber_t * c = fibers[current_fiber_id];
     c->exit_pending = 1;
     c->exit_status = (int)anum;
-    /* Same as pp_exit: rethrow the exit within this fiber's own stack, so
-     * the JMPENV pushed by para_entry_point catches it. */
+    /* Same as pp_exit: rethrow the exit within this fiber's own stack, so the JMPENV pushed by para_entry_point catches
+     * it. */
     my_exit((U32)anum);
     /* NOTREACHED */
     return 0;
@@ -1340,8 +1309,8 @@ static OP * parataxis_pp_exit(pTHX) {
 /**
  * @brief Initializes the fiber system and converts the main thread.
  *
- * This function must be called once before any other fiber operations.
- * It captures the state of the main Perl interpreter thread.
+ * This function must be called once before any other fiber operations. It captures the state of the main Perl
+ * interpreter thread.
  *
  * @return int 0 on success.
  */
@@ -1380,10 +1349,9 @@ DLLEXPORT int init_system() {
     main_context.errors = PL_errors;
     system_initialized = 1;
 #ifdef _WIN32
-    /* Route exit() through our fiber-aware handler.  Perl dispatches the pp
-     * table through per-op pointers (op->op_ppaddr) captured at compile
-     * time, and init_system runs at BEGIN, so every op compiled after this
-     * module loads already points at parataxis_pp_exit. */
+    /* Route exit() through our fiber-aware handler. Perl dispatches the pp table through per-op pointers
+     * (op->op_ppaddr) captured at compile time, and init_system runs at BEGIN, so every op compiled after this module
+     * loads already points at parataxis_pp_exit. */
     if (!parataxis_saved_pp_exit) {
         parataxis_saved_pp_exit = PL_ppaddr[OP_EXIT];
         PL_ppaddr[OP_EXIT] = parataxis_pp_exit;
@@ -1409,8 +1377,7 @@ DLLEXPORT int init_system() {
 /**
  * @brief Performs the low-level OS context switch.
  *
- * Saves the Perl state and then uses OS primitives (SwitchToFiber or
- * swapcontext) to change execution flow.
+ * Saves the Perl state and then uses OS primitives (SwitchToFiber or swapcontext) to change execution flow.
  *
  * @param target_id ID of the target fiber (-1 for Main).
  */
@@ -1439,8 +1406,7 @@ void perform_switch(int target_id, int set_last_sender) {
 /**
  * @brief Yields execution back to the caller or the main thread.
  *
- * Suspends the current fiber and returns a value to the context that
- * last resumed or called this fiber.
+ * Suspends the current fiber and returns a value to the context that last resumed or called this fiber.
  *
  * @param ret_val The Perl SV to "return" to the caller.
  * @return SV* The value passed in when this fiber is eventually resumed.
@@ -1481,9 +1447,8 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
 /**
  * @brief Entry point function for all new fibers.
  *
- * Sets up the Perl environment (ENTER/SAVETMPS), unpacks arguments,
- * calls the user coderef, handles results/errors, and manages the
- * fiber's completion lifecycle.
+ * Sets up the Perl environment (ENTER/SAVETMPS), unpacks arguments, calls the user coderef, handles results/errors, and
+ * manages the fiber's completion lifecycle.
  *
  * @param c Pointer to the fiber context being started.
  */
@@ -1516,13 +1481,10 @@ void para_entry_point(para_fiber_t * c) {
         int volatile ret;
         JMPENV_PUSH(ret);
         if (ret == 2) {
-            /* exit() landed here.  On x64 Windows the CRT cannot longjmp
-             * across stacks (0xC0000028 / STATUS_BAD_STACK), so we must NOT
-             * rethrow from this fiber stack.  Record that this fiber's
-             * subtree asked to exit, mark it finished, and switch back to
-             * whoever called it.  coro_call sees exit_pending and re-enters
-             * perl's exit machinery on the caller's stack, where the whole
-             * JMPENV chain lives on one stack. */
+            /* exit() landed here. On x64 Windows the CRT cannot longjmp across stacks (0xC0000028 / STATUS_BAD_STACK),
+             * so we must NOT rethrow from this fiber stack. Record that this fiber's subtree asked to exit, mark it
+             * finished, and switch back to whoever called it. coro_call sees exit_pending and re-enters perl's exit
+             * machinery on the caller's stack, where the whole JMPENV chain lives on one stack. */
             int fid = current_fiber_id;
             if (fid >= 0 && fid < MAX_FIBERS && fibers[fid])
                 fibers[fid]->exit_pending = 1;
@@ -1539,12 +1501,10 @@ void para_entry_point(para_fiber_t * c) {
                 coro_yield(&PL_sv_undef);
         }
         else if (ret != 0) {
-            /* A non-exit longjmp (die) that escaped the body's G_EVAL.  This
-             * should not normally happen; finish the fiber with whatever is
-             * in $@ and hand control back to the caller. */
+            /* A non-exit longjmp (die) that escaped the body's G_EVAL. This should not normally happen; finish the
+             * fiber with whatever is in $@ and hand control back to the caller. */
             JMPENV_POP;
-            para_fiber_t * fc = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
-                                ? fibers[current_fiber_id] : c;
+            para_fiber_t * fc = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS) ? fibers[current_fiber_id] : c;
             if (fc) {
                 fc->finished = true;
                 int parent = fc->parent_id;
@@ -1582,11 +1542,9 @@ void para_entry_point(para_fiber_t * c) {
 
     /* Update the Perl-level Acme::Parataxis object.
      *
-     * The object is a blessed flat arrayref; slot layout mirrors the
-     * Perl-side constants F_ERROR=2, F_RESULT=3, F_IS_READY=5,
-     * F_CALLBACKS=6.  Writing the result/error slots directly avoids a
-     * method dispatch per fiber completion; the callback dispatch sub is
-     * only invoked when callbacks were actually registered. */
+     * The object is a blessed flat arrayref; slot layout mirrors the Perl-side constants F_ERROR=2, F_RESULT=3,
+     * F_IS_READY=5, F_CALLBACKS=6. Writing the result/error slots directly avoids a method dispatch per fiber
+     * completion; the callback dispatch sub is only invoked when callbacks were actually registered. */
     if (c->self_ref && SvROK(c->self_ref)) {
         AV * obj = (AV *)SvRV(c->self_ref);
         SV ** ready = av_fetch(obj, 5, 0);
@@ -1600,9 +1558,8 @@ void para_entry_point(para_fiber_t * c) {
                     av_store(obj, 3, SvREFCNT_inc(ret_val));
                 av_store(obj, 5, &PL_sv_yes);
             }
-            /* F_IS_DONE=1, F_FID=-1: the fiber is finished, so the object
-             * is marked done and must not touch the (already recycled)
-             * C context from DESTROY/is_done. */
+            /* F_IS_DONE=1, F_FID=-1: the fiber is finished, so the object is marked done and must not touch the
+             * (already recycled) C context from DESTROY/is_done. */
             av_store(obj, 1, &PL_sv_yes);
             SV ** fp = av_fetch(obj, 4, 0);
             if (fp && *fp)
@@ -1648,10 +1605,9 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
 /**
  * @brief Allocates a fiber stack backed by a lazily-committed mapping.
  *
- * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it.
- * Because the mapping is created with MAP_NORESERVE, no physical pages are
- * consumed until the fiber actually uses them, so a 64MB virtual stack is
- * cheap whether the fiber uses 4KB or 40MB of C stack.
+ * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it. Because the mapping is created with
+ * MAP_NORESERVE, no physical pages are consumed until the fiber actually uses them, so a 64MB virtual stack is cheap
+ * whether the fiber uses 4KB or 40MB of C stack.
  *
  * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
  * @return void* Pointer to the usable stack (guard page below it), or NULL.
@@ -1661,8 +1617,7 @@ static void * alloc_fiber_stack(size_t sz) {
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
     size_t total = FIBER_STACK_SZ + FIBER_GUARD_SZ;
-    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
     mprotect(base, FIBER_GUARD_SZ, PROT_NONE);
@@ -1690,18 +1645,14 @@ static pthread_t guard_owner_thread;
 /**
  * @brief SIGSEGV handler: reports a genuine fiber C-stack overflow.
  *
- * Runs on the alternate signal stack.  A fault in the current fiber's guard
- * page means the fiber used more than FIBER_STACK_SZ of C stack; a clear
- * message is emitted and the default disposition is restored so the process
- * aborts (with a core if enabled).  Any other fault is forwarded to the
- * previously installed handler.
+ * Runs on the alternate signal stack. A fault in the current fiber's guard page means the fiber used more than
+ * FIBER_STACK_SZ of C stack; a clear message is emitted and the default disposition is restored so the process aborts
+ * (with a core if enabled). Any other fault is forwarded to the previously installed handler.
  */
 static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
     (void)sig;
-    para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
-                       ? fibers[current_fiber_id] : NULL;
-    if (!pthread_equal(pthread_self(), guard_owner_thread) ||
-        current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
+    para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS) ? fibers[current_fiber_id] : NULL;
+    if (!pthread_equal(pthread_self(), guard_owner_thread) || current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
         !fibers[current_fiber_id]) {
         if (prev_sigsegv_act.sa_flags & SA_SIGINFO)
             prev_sigsegv_act.sa_sigaction(sig, si, uc);
@@ -1722,8 +1673,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
             prev_sigsegv_act.sa_handler(sig);
         return;
     }
-    static const char msg[] = "Parataxis: fatal: fiber C-stack overflow "
-                              "(> 64MB used); aborting\n";
+    static const char msg[] = "Parataxis: fatal: fiber C-stack overflow (> 64MB used); aborting\n";
     write(2, msg, sizeof(msg) - 1);
     signal(SIGSEGV, SIG_DFL);
 }
@@ -1731,31 +1681,30 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
 /**
  * @brief Installs the fiber stack guard handler (Linux only).
  *
- * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber
- * running into its guard page is detected and reported cleanly.
+ * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber running into its guard page is detected and
+ * reported cleanly.
  */
 static void install_stack_guard(void) {
     if (guard_alt_stack)
         return;
     guard_owner_thread = pthread_self();
     size_t alt_sz = 256 * 1024;
-    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE,
-                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (guard_alt_stack == MAP_FAILED) {
         guard_alt_stack = NULL;
         return;
     }
-    stack_t ss = { 0 };
+    stack_t ss = {0};
     ss.ss_sp = guard_alt_stack;
     ss.ss_size = alt_sz;
     sigaltstack(&ss, NULL);
-    struct sigaction act = { 0 };
+    struct sigaction act = {0};
     act.sa_sigaction = stack_guard_handler;
     act.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&act.sa_mask);
     sigaction(SIGSEGV, &act, &prev_sigsegv_act);
 }
-#else /* !__linux__ */
+#else  /* !__linux__ */
 /**
  * @brief Obtains a fiber stack, reusing one from the cache when possible.
  *
@@ -1785,8 +1734,7 @@ static void free_fiber_stack(void * p, size_t sz) {
 /**
  * @brief Arms the OS-level context for a (possibly recycled) fiber.
  *
- * Installs the entry trampoline on the fiber's stack so that the next
- * context switch resumes the fiber from scratch.
+ * Installs the entry trampoline on the fiber's stack so that the next context switch resumes the fiber from scratch.
  *
  * @param c The fiber context to arm.
  * @param idx The fiber ID (used by the ucontext makecontext path).
@@ -1797,11 +1745,9 @@ static void arm_fiber_context(para_fiber_t * c, int idx) {
 #else
 #ifdef USE_ASM_CORO
     /*
-     * Lay out the fresh stack for the assembly switch.  When the switch
-     * routine resumes this context it first pops the six dummy saved
-     * registers, then "returns" into para_trampoline.  The trampoline pops
-     * the fiber pointer and tail-calls para_entry_point with the correct
-     * ABI stack alignment.
+     * Lay out the fresh stack for the assembly switch. When the switch routine resumes this context it first pops the
+     * six dummy saved registers, then "returns" into para_trampoline. The trampoline pops the fiber pointer and
+     * tail-calls para_entry_point with the correct ABI stack alignment.
      */
     void ** slot = (void **)((char *)c->stack_p + c->stack_sz);
     slot -= 8; /* 6 saved regs + return address + fiber pointer */
@@ -1918,8 +1864,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
 /**
  * @brief Resumes a fiber (asymmetric call).
  *
- * Suspends the caller and switches execution to the specified fiber.
- * Sets the caller as the 'parent' for future yields.
+ * Suspends the caller and switches execution to the specified fiber. Sets the caller as the 'parent' for future yields.
  *
  * @param fiber_id Fiber ID to call.
  * @param args Perl SV (usually arrayref) to pass as arguments to the fiber.
@@ -1938,26 +1883,19 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     }
     fibers[fiber_id]->parent_id = current_fiber_id;
 
-    /* Guard the fiber run with our own jump environment.  When the fiber
-     * longjmps out of the system (exit(), or a die that escapes the body's
-     * G_EVAL), perl never pops back into the scheduler: it unwinds the
-     * fiber's own contexts and jumps to the innermost env.  That env chain
-     * is anchored here, so we can restore the perl state of whoever called
+    /* Guard the fiber run with our own jump environment. When the fiber longjmps out of the system (exit(), or a die
+     * that escapes the body's G_EVAL), perl never pops back into the scheduler: it unwinds the fiber's own contexts and
+     * jumps to the innermost env. That env chain is anchored here, so we can restore the perl state of whoever called
      * coro_call (perl-owned stacks only) before rethrowing.
      *
-     * The caller of this coro_call is the parent fiber (or main, for the
-     * top-level call).  Restoring the PARENT's perl state matters: the next
-     * env on the chain is the parent's G_EVAL, and its case-2 cleanup runs
-     * `my_exit_jump()` which dounwinds the *current* savestack.  If we left
-     * main's perl state current here, that dounwind would pop main's
-     * savestack entries (e.g. the scheduler's run_fiber_checked XSUB arena
-     * destructors) and perl_run's later LEAVE loop would free the same
-     * arenas a second time -> Affix "free from wrong pool" panic.  Restoring
-     * the parent's own state makes the dounwind pop the parent's savestack
-     * (freed exactly once there, or leaked harmlessly if the parent's XSUB
-     * scopes were abandoned by the jump).  Only the top-level wrapper
-     * (parent == main) restores main's state, so perl_run/perl_destruct
-     * finish on the main context. */
+     * The caller of this coro_call is the parent fiber (or main, for the top-level call). Restoring the PARENT's perl
+     * state matters: the next env on the chain is the parent's G_EVAL, and its case-2 cleanup runs `my_exit_jump()`
+     * which dounwinds the *current* savestack. If we left main's perl state current here, that dounwind would pop
+     * main's savestack entries (e.g. the scheduler's run_fiber_checked XSUB arena destructors) and perl_run's later
+     * LEAVE loop would free the same arenas a second time -> Affix "free from wrong pool" panic. Restoring the parent's
+     * own state makes the dounwind pop the parent's savestack (freed exactly once there, or leaked harmlessly if the
+     * parent's XSUB scopes were abandoned by the jump). Only the top-level wrapper (parent == main) restores main's
+     * state, so perl_run/perl_destruct finish on the main context. */
     dJMPENV;
     int volatile ret;
     JMPENV_PUSH(ret);
@@ -1967,15 +1905,15 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
         if (parent >= 0 && parent < MAX_FIBERS && fibers[parent]) {
             current_fiber_id = parent;
             restore_perl_state(fibers[parent]);
-        } else {
+        }
+        else {
             current_fiber_id = -1;
             restore_perl_state(&main_context);
         }
 #ifdef _WIN32
-        /* Propagate an exit() pending in the (sub)fiber we were resuming to
-         * the fiber that called us.  Nested fiber exits then keep unwinding
-         * one stack level at a time and only re-enter perl's exit machinery
-         * on the main stack. */
+        /* Propagate an exit() pending in the (sub)fiber we were resuming to the fiber that called us. Nested fiber
+         * exits then keep unwinding one stack level at a time and only re-enter perl's exit machinery on the main
+         * stack. */
         if (fibers[fiber_id] && fibers[fiber_id]->exit_pending && current_fiber_id >= 0) {
             para_fiber_t * caller = fibers[current_fiber_id];
             if (caller) {
@@ -1992,10 +1930,9 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     JMPENV_POP;
 #ifdef _WIN32
     if (fibers[fiber_id] && fibers[fiber_id]->exit_pending) {
-        /* The fiber's exit() was caught on the fiber stack (see
-         * para_entry_point).  We are back on the caller's stack, so perl's
-         * exit machinery -- which longjmps up the JMPENV chain -- is safe
-         * here: every env it will hit lives on this same stack. */
+        /* The fiber's exit() was caught on the fiber stack (see para_entry_point). We are back on the caller's stack,
+         * so perl's exit machinery (which longjmps up the JMPENV chain) is safe here: every env it will hit lives on
+         * this same stack. */
         int exit_status = fibers[fiber_id]->exit_status;
         fibers[fiber_id]->exit_pending = 0;
         fibers[fiber_id]->exit_status = 0;
@@ -2021,9 +1958,8 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
 /**
  * @brief Runs a fiber to its next suspension point and cleans it up.
  *
- * Combines the scheduler's per-fiber work (resume, finish detection and
- * destruction) into a single call so the FFI overhead is paid once per
- * fiber instead of four times.
+ * Combines the scheduler's per-fiber work (resume, finish detection and destruction) into a single call so the FFI tax
+ * is paid once per fiber instead of four times.
  *
  * @param fiber_id Fiber to resume.
  * @param args Argument arrayref to pass to the fiber, or NULL for none.
@@ -2058,10 +1994,9 @@ DLLEXPORT int run_fiber_checked(int fiber_id, SV * args) {
 /**
  * @brief Creates a fiber object, its C context, and runs it inline.
  *
- * Merges the Perl-side spawn sequence (bless, create_fiber, run_fiber_checked)
- * into a single FFI call.  Returns the blessed fiber object with the run
- * status stored at object slot 8 (F_LAST_STATUS):
- *   1 finished, 0 yielded (re-enqueue), 3 yielded 'WAITING', -1 not found.
+ * Merges the Perl-side spawn sequence (bless, create_fiber, run_fiber_checked) into a single FFI call. Returns the
+ * blessed fiber object with the run status stored at object slot 8 (F_LAST_STATUS): 1 finished, 0 yielded (re-enqueue),
+ * 3 yielded 'WAITING', -1 not found.
  *
  * @param user_code Coderef to run as the fiber body.
  * @param class     Class name to bless the fiber object into.
@@ -2095,8 +2030,7 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
 /**
  * @brief Reclaims all completed background jobs in a single call.
  *
- * Returns an arrayref of [fiber_id, result] pairs for every finished job,
- * freeing the job slots as it goes.
+ * Returns an arrayref of [fiber_id, result] pairs for every finished job, freeing the job slots as it goes.
  *
  * @return SV* Arrayref of completed jobs (may be empty).
  */
@@ -2113,9 +2047,8 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
         AV * pair = newAV();
         av_push(pair, newSViv(get_job_coro_id(job_idx)));
         SV * res = get_job_result(job_idx);
-        /* get_job_result returns a mortal parked on the caller's tmps stack;
-         * copy it so the pair owns its own SV instead of double-decrementing
-         * the mortal when both the pair and FREETMPS release it. */
+        /* get_job_result returns a mortal parked on the caller's tmps stack; copy it so the pair owns its own SV
+         * instead of double-decrementing the mortal when both the pair and FREETMPS release it. */
         av_push(pair, (res && res != &PL_sv_undef) ? newSVsv(res) : &PL_sv_undef);
         av_push(out, newRV_noinc((SV *)pair));
         free_job_slot(job_idx);
@@ -2125,8 +2058,7 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
 /**
  * @brief Transfers control directly to another fiber (symmetric).
  *
- * Suspends the current fiber and switches directly to the target. No
- * parent/child relationship is established.
+ * Suspends the current fiber and switches directly to the target. No parent/child relationship is established.
  *
  * @param target_id Fiber ID to transfer to.
  * @param args Arguments to pass to the target.
@@ -2172,9 +2104,8 @@ DLLEXPORT int is_finished(int fiber_id) {
 /**
  * @brief Returns the Perl object bound to a live fiber, if any.
  *
- * Replaces the Perl-level %REGISTRY lookup: the C context already owns a
- * strong reference to the object via self_ref, so no separate registry or
- * weak-reference bookkeeping is needed on the Perl side.
+ * Replaces the Perl-level %REGISTRY lookup: the C context already owns a strong reference to the object via self_ref,
+ * so no separate registry or weak-reference bookkeeping is needed on the Perl side.
  *
  * @param fiber_id The fiber ID to look up.
  * @return SV* The blessed fiber object (mortalized), or &PL_sv_undef.
@@ -2210,8 +2141,8 @@ static void recursive_depth_reset(pTHX_ CV * cv) {
 /**
  * @brief Clears active pads in the fiber stack.
  *
- * Internal helper used during fiber destruction to ensure all active lexical
- * scopes are unwound and their variables freed.
+ * Internal helper used during fiber destruction to ensure all active lexical scopes are unwound and their variables
+ * freed.
  *
  * @param si The Stack Info structure of the fiber.
  */
@@ -2242,8 +2173,8 @@ static void _clear_pads_in_stack(pTHX_ PERL_SI * si) {
 /**
  * @brief Destroys a fiber and releases all associated memory.
  *
- * This includes freeing OS-level stacks and context, but also carefully
- * decrementing refcounts of Perl SVs stored within the fiber.
+ * This includes freeing OS-level stacks and context, but also carefully decrementing refcounts of Perl SVs stored
+ * within the fiber.
  *
  * @param fiber_id Fiber ID to destroy.
  */
@@ -2310,14 +2241,14 @@ DLLEXPORT void destroy_coro(int fiber_id) {
 /**
  * @brief Global cleanup function for the fiber and thread pool system.
  *
- * Signals all worker threads to terminate and destroys all remaining
- * fibers. Should be called during global destruction or system shutdown.
+ * Signals all worker threads to terminate and destroys all remaining fibers. Should be called during global destruction
+ * or system shutdown.
  */
 DLLEXPORT void cleanup() {
     dTHX;
 #ifdef _WIN32
-    /* Restore the original exit op so any exit() during global destruction
-     * (after this DLL could be unmapped) behaves like a plain perl exit. */
+    /* Restore the original exit op so any exit() during global destruction (after this DLL could be unmapped) behaves
+     * like a plain perl exit. */
     if (parataxis_saved_pp_exit && PL_ppaddr[OP_EXIT] == parataxis_pp_exit)
         PL_ppaddr[OP_EXIT] = parataxis_saved_pp_exit;
 #endif
@@ -2352,8 +2283,7 @@ DLLEXPORT void cleanup() {
 #ifndef _WIN32
 #ifdef __linux__
     while (stack_cache_count > 0)
-        munmap((char *)stack_cache[--stack_cache_count] - FIBER_GUARD_SZ,
-               FIBER_STACK_SZ + FIBER_GUARD_SZ);
+        munmap((char *)stack_cache[--stack_cache_count] - FIBER_GUARD_SZ, FIBER_STACK_SZ + FIBER_GUARD_SZ);
 #else
     while (stack_cache_count > 0)
         free(stack_cache[--stack_cache_count]);

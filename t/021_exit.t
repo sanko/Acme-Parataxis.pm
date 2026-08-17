@@ -2,20 +2,17 @@ use v5.40;
 use blib;
 use Acme::Parataxis;
 use Test2::V1 -ipP;
-use Cwd qw(abs_path);
+use Cwd        qw[abs_path];
 use File::Temp ();
 $|++;
 #
-diag '$Acme::Parataxis::VERSION = ' . $Acme::Parataxis::VERSION;
-diag 'Testing exit() propagation out of fibers (subprocess) ...';
-
 my $perl = $^X;
 
 # The child needs the freshly-built module; use absolute paths so the test
 # does not depend on the child's current directory.
 my @inc;
-push @inc, '-I' . abs_path($_) for grep { -e $_ } qw[blib/lib blib/arch];
 
+#~ push @inc, '-I' . abs_path($_) for grep { -e $_ } qw[blib/lib blib/arch];
 sub shell_quote {
     my ($s) = @_;
     return $s if $s =~ /^[A-Za-z0-9_\-\/.:\\]+$/;
@@ -32,15 +29,14 @@ sub shell_quote {
 # nested quotes, so an inline `-e "...code..."` command line gets mangled.
 sub run_exit_code {
     my ($code) = @_;
-
     if ( $^O eq 'MSWin32' ) {
         my $script = File::Temp->newdir() . 'child.pl';
         open my $fh, '>', $script or die "cannot write $script: $!";
         print {$fh} $code;
         close $fh;
-        my @cmd = ( $perl, @inc, $script );
+        my @cmd  = ( $perl, @inc, $script );
         my $line = join ' ', map { shell_quote($_) } @cmd;
-        my $out = `cmd /v:on /c "$line 2>&1 & echo PTXRC=!errorlevel!"`;
+        my $out  = `cmd /v:on /c "$line 2>&1 & echo PTXRC=!errorlevel!"`;
         if ( $out =~ /PTXRC=(-?\d+)/ ) {
             my $rc = $1;
             $out =~ s/\s*PTXRC=-?\d+\s*\z//;
@@ -48,7 +44,6 @@ sub run_exit_code {
         }
         return ( $? >> 8, $out, 0 );
     }
-
     my @cmd  = ( $perl, @inc, '-e', $code );
     my $line = join ' ', map { shell_quote($_) } @cmd;
     local $SIG{__WARN__} = sub { };
@@ -60,38 +55,33 @@ sub run_exit_code {
 # "cannot read child status" signature: skip rather than report a bogus
 # failure (Coro's own exit test skips on Windows for the same reason).  A
 # genuinely-failing child would print a panic, which still fails loudly.
-sub is_exit_code {
-    my ( $got, $want, $name, $out, $trusted ) = @_;
+sub is_exit_code ( $got, $want, $name, $out, $trusted ) {
     if ( !$trusted && $out !~ /panic/ ) {
         plan skip_all => 'cannot read the child status on this perl (spawn reporting is broken)';
         return;
     }
-    is( $got, $want, $name );
+    is $got, $want, $name;
 }
-
 subtest 'exit(0) from a nested fiber' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async yield fiber]; async { fiber { exit 0 }; yield; }');
-    is_exit_code( $rc, 0, 'nested fiber exit(0) terminates cleanly with status 0', $out, $trusted );
+    is_exit_code $rc, 0, 'nested fiber exit(0) terminates cleanly with status 0', $out, $trusted;
 };
-
 subtest 'exit(7) from the top-level async block' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async]; async { exit 7; }');
-    is_exit_code( $rc, 7, 'async top-level exit(7) propagates the requested status', $out, $trusted );
+    is_exit_code $rc, 7, 'async top-level exit(7) propagates the requested status', $out, $trusted;
 };
-
 subtest 'exit(3) after yielding and being resumed' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async yield fiber]; async { fiber { 1 }; yield; exit 3; }');
-    is_exit_code( $rc, 3, 'exit(3) after a yield/resume cycle propagates the requested status', $out, $trusted );
+    is_exit_code $rc, 3, 'exit(3) after a yield/resume cycle propagates the requested status', $out, $trusted;
 };
-
 subtest 'exit() does not double-free scheduler scopes' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async yield fiber]; async { fiber { exit 0 }; yield; }');
     if ( !$trusted && $out !~ /panic/ ) {
         plan skip_all => 'cannot read the child status on this perl (spawn reporting is broken)';
         return;
     }
-    isnt( $rc, 255, 'no wrong-pool panic (exit != 255)' );
-    ok( $out !~ /panic/, 'no panic message in the child output' );
+    isnt $rc, 255, 'no wrong-pool panic (exit != 255)';
+    ok $out !~ /panic/, 'no panic message in the child output';
 };
-
+#
 done_testing();

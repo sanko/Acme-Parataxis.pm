@@ -8,9 +8,7 @@
     # (eg/prodcons), now running on the real Coro::Channel-style module.
     # "get" blocks while the channel is empty, "put" blocks while it is
     # full; both park the current fiber until the other end catches up.
-
     my $chan = Acme::Parataxis::Channel->new(4);
-
     async {
         # Producers
         fiber {
@@ -26,6 +24,5 @@
             say "consumed $item (queue now " . $chan->size . ')';
         }
     };
-
     say 'done';
 }

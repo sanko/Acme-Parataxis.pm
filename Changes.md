@@ -11,11 +11,11 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 
 ### Changed
 
-- Spawned fibers run inline at spawn time: a body that completes without yielding never touches the scheduler queue at all.
-- The fiber registry is replaced bye strong references to each fiber object in C.
+- Spawned fibers run inline at spawn time.
+- The fiber registry is replaced by strong references to each fiber object in C.
 - Fiber completion moved from a Perl method into C: the entry point writes state directly into the object's slots with `av_store`, and only dispatches callbacks when callbacks were actually registered.
-- `spawn` now performs the whole create+run sequence in a single FFI call (`spawn_fiber`) instead of two FFI boundary crossings and builds the fiber object in C.
-- Fiber objects are incrementally-filled arrayrefs instead of hashrefs, indexed via the `F_*` slot constants (cheaper to build and to index).
+- To save time on FFI boundary crossings, `spawn` now performs the whole create run run sequence in a single call and builds the fiber object in C.
+- Fiber objects are incrementally-filled arrayrefs instead of hashrefs.
 - On x86_64 ELF, context switching uses a hand written trampoline that only saves the callee-saved registers and stack pointer, avoiding `swapcontext`'s signal-mask syscall.
 - `spawn` and `await` hot paths flattened by inlining helpers.
 
@@ -24,19 +24,10 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 - A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
 - The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
 - `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
-- The scheduler now reports a deadlock instead of spinning forever when every fiber is blocked (parked on a semaphore, channel, or future) and nothing is runnable: `FATAL: deadlock detected, N fibers blocked and nothing runnable`.
 
 ### Added
 
-- `Acme::Parataxis::Channel` - Coro::Channel-style message queues built on counting semaphores: `new`, `put`, `get`, `shutdown`, `size` (and the undocumented `adjust`). Writers park while the queue is full, readers park while it is empty, and a size-`1` channel is a rendezvous point.
-- `Acme::Parataxis::Semaphore` - Coro::Semaphore-style counting semaphores: `new`, `_alloc`, `count`, `down`, `up`, `try`, `adjust`, `wait`, `waiters`, `guard`. Blocked fibers park (no busy-waiting) and are resumed in FIFO order as permits become available.
-- `Acme::Parataxis::Signal` - Coro::Signal-style binary semaphores / event flags: `new`, `wait` (with optional callback), `send`, `broadcast`, `awaited`. `send` wakes one waiter or remembers the signal; `broadcast` wakes everyone or loses it; a `wait` callback fires in the sending fiber's context.
-- Unit tests ported from Coro's own suite, now running on the real modules: a producer/consumer bounded channel (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), a counting semaphore with guards, parking, `try`, `adjust`, `wait` and `shutdown` (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`), and signals (`t/025_coro_signal.t`, from Coro `t/16_signal.t`).
-
-### Fixed
-
-- `exit()` inside a fiber now works on Windows x64. The CRT cannot `longjmp` across stacks, so a fiber's exit previously crashed the process with `0xC0000028` (`STATUS_BAD_STACK`, reported as status 40). The exit is now captured on the fiber stack by a fiber-aware `pp_exit`, recorded, and re-raised on the caller's stack where perl's whole JMPENV chain lives on one stack; nested fiber exits unwind one stack level at a time to the main stack.
-- The exit-code subtests in `t/021_exit.t` now genuinely pass on Windows (previously they skipped when a Windows perl could not report a spawned child's status, and the child code now runs from a temp `.pl` file because `cmd.exe` mangles nested quotes in an inline `-e` command line). See perl5 GH #20081 for the broken spawn status reporting that motivated the `!errorlevel!` path.
+- Unit tests ported from Coro's own suite, as a demonstration of utility: joining spawned fibers and collecting results (`t/016_coro_join.t`, from Coro `t/08_join.t`), eval/cede inside fibers (`t/017_coro_eval.t`, from Coro `t/07_eval.t`), a producer/consumer bounded channel built from fibers (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), and a counting semaphore with guards (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
 - Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
 
 ## [v0.0.10] - 2026-02-22

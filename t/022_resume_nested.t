@@ -4,10 +4,8 @@ use Acme::Parataxis qw[async yield await fiber];
 use Test2::V1 -ipP;
 $|++;
 #
-diag '$Acme::Parataxis::VERSION = ' . $Acme::Parataxis::VERSION;
-diag 'Testing that a fiber resumed after a nested spawn keeps a valid top_env ...';
-
 subtest 'Resume after nested spawn' => sub {
+
     # Regression: coro_call overwrote the fiber's saved top_env on every
     # resume, so a fiber that yielded AFTER a nested spawn came back with
     # PL_top_env pointing at the caller's (main) stack.  The resumed fiber's
@@ -15,23 +13,22 @@ subtest 'Resume after nested spawn' => sub {
     # failed" on threaded-debug perls (abort, exit 134).
     my $out = '';
     async {
-        fiber { 1 };
+        fiber {1};
         yield;
         $out = 'done';
     };
-    is( $out, 'done', 'fiber completed its body after yield following a nested spawn' );
+    is $out, 'done', 'fiber completed its body after yield following a nested spawn';
 };
-
 subtest 'Spawn and await in the same fiber, then yield' => sub {
     my @log;
     async {
-        my $child = fiber { 1 };
-        my $r = await($child);
+        my $child = fiber {1};
+        my $r     = await($child);
         push @log, "child=$r";
         yield;
         push @log, 'parent-done';
     };
-    is( "@log", 'child=1 parent-done', 'resumed fiber saw both its nested result and the post-yield continuation' );
+    is "@log", 'child=1 parent-done', 'resumed fiber saw both its nested result and the post-yield continuation';
 };
-
+#
 done_testing();

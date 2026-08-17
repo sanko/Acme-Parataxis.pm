@@ -1,46 +1,8 @@
 # NAME
 
-Acme::Parataxis - A terrible idea, honestly...
+Acme::Parataxis - Coroutines Using OS Fibers via FFI
 
 # SYNOPSIS
-
-The classic way (as I write this, Acme::Parataxis is 5 days old and already has a 'classic' API...)
-
-```perl
-use v5.40;
-use Acme::Parataxis;
-$|++;
-
-Acme::Parataxis::run(
-    sub {
-        say 'Main task started';
-
-        # Spawn background workers
-        my $f1 = Acme::Parataxis->spawn(
-            sub {
-                say '  Task 1: Sleeping in a native thread pool...';
-                Acme::Parataxis->await_sleep(1000);
-                say '  Task 1: Ah! What a nice nap...';
-                return 42;
-            }
-        );
-        my $f2 = Acme::Parataxis->spawn(
-            sub {
-                say '  Task 2: Performing I/O...';
-
-                # await_read/write for non-blocking socket handling
-                return 'I/O Done';
-            }
-        );
-
-        # Block current fiber until results are ready (without blocking the thread)
-        say 'Result 1: ' . $f1->await( );
-        say 'Result 2: ' . $f2->await( );
-    }
-);
-```
-
-Or do things the more modern way:
 
 ```perl
 use v5.40;
@@ -75,27 +37,16 @@ async {
 [Wren](https://wren.io/concurrency.html) programming language. It combines cooperative multitasking (fibers) with a
 preemptive native thread pool.
 
-Fibers are a mechanism for lightweight concurrency. They are similar to threads but are cooperatively scheduled. While
-the OS may switch between threads at any time, a fiber only passes control when explicitly told to do so. This makes
-concurrency deterministic and easier to reason about. You (probably) don't have to worry about random context switches
-clobbering your data.
+Fibers are modern hardware's mechanism for lightweight concurrency. They are similar to threads but are cooperatively
+scheduled. While the OS may switch between threads at any time, a fiber only passes control when explicitly told to do
+so. This makes concurrency deterministic and easier to reason about. You (probably) don't have to worry about random
+context switches clobbering your data. Each fiber has its own stack and context, but they don't use OS thread
+resources. You can easily create thousands of them without stalling your system.
 
-Fibers are incredibly lightweight. Each one has its own stack and context, but they don't use OS thread resources. You
-can easily create thousands of them without stalling your system.
+This module was originally very experimental and lived in the `Acme::` namespace. It still manually manipulates Perl's
+internal stacks and C context but I no longer consider it dangerous.
 
-## A Warning
-
-I had this idea while writing cookbook examples for Affix. I wondered if I could implement a hybrid concurrency model
-for Perl from within FFI. This is that unpublished article made into a module. It's fragile. It's dangerous. It's my
-attempt at combining cooperative multitasking (green threads or fibers or whatever they're called in the latest edit of
-Wikipedia) with a preemptive native thread pool. It's Acme::Parataxis.
-
-This module is experimental and resides in the `Acme::` namespace for a reason. It manually manipulates Perl's
-internal stacks and C context. It is very dangerous. It's irresponsible, honestly, that I'm even putting this terrible
-idea into the world. Don't use this. Forget you even saw it. Just **reading** this has probably made your projects more
-prone to breaking. Reading the package name out loud might cause brain damage to yourself and those within earshot.
-
-Close the browser and clear your history before this does further harm!
+And thus it's here, in a brand new top level namespace because I don't know where else it could make sense.
 
 # MODERN API
 
@@ -115,7 +66,8 @@ async {
 
 ## `fiber { ... }`
 
-An alias for `spawn( )`. It creates a new fiber and returns a [Future](#acme-parataxis-future-object-methods).
+An alias for `spawn( )`. It creates a new fiber and returns an `Acme::Parataxis` fiber object that can be awaited
+with `await( )` or `->await( )`, and also provides Future-style methods (`result`, `on_ready`).
 
 ```perl
 my $f = fiber {
@@ -265,8 +217,7 @@ Acme::Parataxis::run(sub {
 
 ## `spawn( $code )`
 
-Creates a new fiber and adds it to the scheduler's queue. Returns a [Future](#acme-parataxis-future-object-methods)
-that will eventually contain the fiber's return value.
+Creates a new fiber and runs it. Returns an `Acme::Parataxis` fiber object that can be awaited with `await( )` or `->await( )` and will eventually contain the fiber's return value.
 
 ```perl
 my $future = Acme::Parataxis->spawn(sub {
@@ -278,6 +229,17 @@ my $future = Acme::Parataxis->spawn(sub {
 
 Pauses the current fiber and returns control to the scheduler. If `@args` are provided, they are passed to the context
 that next resumes this fiber. Arguments can be of any Perl data type.
+
+## `$fiber->priority( [ $prio ] )`
+
+Get or set the scheduler priority of a fiber, Coro-style. Higher numbers are resumed first; fibers with equal priority
+keep the FIFO order they were enqueued in. The default priority is 0. Setting the priority of a fiber that is already
+queued immediately moves it to its new position in the run queue.
+
+```perl
+my $fast = Acme::Parataxis->spawn(sub { ... });
+$fast->priority(10);   # runs before any priority-0 fiber
+```
 
 ## `stop( )`
 
@@ -400,20 +362,6 @@ Returns the unique numeric ID of the fiber object.
 Returns true if the fiber has finished execution (either by returning or dying). Once a fiber is done, its internal ID
 is released and it can no longer be called.
 
-# Acme::Parataxis::Future OBJECT METHODS
-
-## `await( )`
-
-Suspends the current fiber until the future is ready. Returns the result or **dies** if the task encountered an error.
-
-## `is_ready( )`
-
-Returns true if the task associated with the future has completed.
-
-## `result( )`
-
-Returns the task result immediately. Croaks if the future is not yet ready.
-
 # INTEGRATING SYNCHRONOUS MODULES
 
 To use synchronous modules (like `HTTP::Tiny`) in a non-blocking way, you can subclass their handle or transport
@@ -477,6 +425,10 @@ underlying I/O is ready.
 
 # EXAMPLES
 
+These are useful samples that should be modules in their own right but find their home here in documentation instead.
+
+...for now.
+
 ## Cooperative Parallelism
 
 This example demonstrates how to perform multiple HTTP requests concurrently on a single interpretation thread.
@@ -528,27 +480,271 @@ $c->call( ); # Prime consumer
 $p->call( ); # Start producer
 ```
 
-# BEST PRACTICES & GOTCHAS
+## Futures
 
-- **Avoid blocking syscalls:** Never call blocking `sleep( )` or `sysread( )` on the main interpretation thread.
-Always use the `await_*` equivalents to offload work to the pool.
-- **Thread Safety:** While Perl code remains single-threaded, background tasks run on separate OS threads. Shared
-C-level data (if accessed via FFI) must be mutex-protected.
-- **Stack Limits:** Each fiber is allocated a 512KB stack by default. This is more than sufficient for most
-Perl code and allows for high concurrency with a small memory footprint. Extremely deep recursion or massive regex
-backtracking might still hit limits.
-- **Efficiency:** The native thread pool is initialized dynamically upon the first asynchronous request. It
-starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition
-variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
-- **Reference Cycles:** Be careful when passing fiber objects into their own closures, as this can create
-memory leaks.
+The current hotness in lightweight concurrency abstrations.
 
-# GORY TECHNICAL DETAILS
+```perl
+class Acme::Parataxis::Future {
+    use Carp qw[croak];
+    field $is_ready : reader = 0;
+    field $result;
+    field $error;
+    field @callbacks;
+    field $waiter;
+
+    method result () { # Returns the task result immediately. Croaks if the future is not yet ready.
+        croak 'Future not ready' unless $is_ready;
+        return $result;
+    }
+
+    method set_result ($val) {
+        die 'Future already ready' if $is_ready;
+        $result   = $val;
+        $is_ready = 1;
+        $_->($self) for @callbacks;
+    }
+
+    method set_error ($err) {
+        die 'Future already ready' if $is_ready;
+        $error    = $err;
+        $is_ready = 1;
+        $_->($self) for @callbacks;
+    }
+
+    method clear_result () {
+        $result = undef;
+        $error  = undef;
+    }
+
+    method on_ready ($cb) {
+        if   ($is_ready) { $cb->($self) }
+        else             { push @callbacks, $cb }
+    }
+
+    method await () {
+        # Suspends the current fiber until the future is ready. Returns the result or dies if the task encountered an error
+        return $self->result if $is_ready;
+        $waiter = Acme::Parataxis->current_fid;
+        $self->on_ready( \&_wake_waiter );
+        Acme::Parataxis->yield('WAITING');
+        $self->result;
+    }
+
+    method _wake_waiter () {
+        return unless defined $waiter;
+        Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
+        $waiter = undef;
+    }
+}
+```
+
+## Semaphore
+
+A simple integer counter that optionally blocks fibers when it reaches zero. There is no owner associated with a
+semaphore, so one fiber can `down` it while another can `up` it, `up` may be called before `down`, and so on.
+
+Blocked fibers are parked (they do not busy-wait) and are resumed in FIFO order as permits become available, exactly
+like the futures used by `await`.
+
+```perl
+use Acme::Parataxis;
+use Acme::Parataxis::Semaphore;
+
+my $sem = Acme::Parataxis::Semaphore->new;   # unlocked by default
+
+async {
+    fiber { $sem->down };   # wait for a signal
+    $sem->up;
+};
+```
+
+Here's the code:
+
+```perl
+class Acme::Parataxis::Semaphore {
+    field $count   : reader : param //= 1;
+    field @waiters : reader;    # fiber ids in FIFO order and re-enqueued via the scheduler when woken
+
+    method _block_until_available () {    # Park the current fiber until a permit is available then recheck the count
+        while ( $count <= 0 ) {
+            push @waiters, Acme::Parataxis->current_fid;
+            Acme::Parataxis->yield('WAITING');
+        }
+        1;
+    }
+
+    method down () {
+        $self->_block_until_available;
+        $count--;
+        1;
+    }
+
+    method try () {
+        return 0 if $count <= 0;
+        $count--;
+        1;
+    }
+
+    method up () {
+        $count++;
+        Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) if $count > 0 && @waiters;
+        1;
+    }
+
+    method adjust ($diff) {
+        $count += $diff;
+        my $n       = $count;
+        my $waiting = scalar @waiters;
+        $n = $waiting if $waiting < $n;
+        Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) while $n-- > 0;
+        1;
+    }
+    method wait () { $self->_block_until_available }
+
+    method guard () {
+        $self->down;
+        Acme::Parataxis::Semaphore::Guard->new( semaphore => $self );
+    }
+};
+
+class Acme::Parataxis::Semaphore::Guard { # Util
+    field $semaphore : param;
+
+    method DESTROY {
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        $semaphore->up;
+    }
+};
+```
+
+## Channels
+
+A simple message queue that allows you to send and recieve data. If the channel is full, writers block; if it is empty,
+readers block. Both ends can be used by as many fibers as you want concurrently.
+
+A channel of size `1` is a rendezvous point (no buffering: `put` waits for a matching `get`); to buffer one element
+use size `2`, and so on.
+
+```perl
+use Acme::Parataxis;
+use Acme::Parataxis::Channel;
+
+my $q = Acme::Parataxis::Channel->new( 4 );
+
+async {
+    fiber { $q->put( $_ ) for 1 .. 8 };      # producers
+    say $q->get for 1 .. 8;                  # consumer
+};
+```
+
+A simple concept.
+
+```perl
+class Acme::Parataxis::Channel {
+    field $capacity : param //= 2_000_000_000;
+    field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
+    field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity - 1 );
+    field @data : reader;
+
+    method put ($value) {
+        push @data, $value;
+        $sem_get->up;
+        $sem_put->down;
+        1;
+    }
+
+    method get () {
+        $sem_get->down;
+        $sem_put->up;
+        shift @data;
+    }
+    method size ()        { scalar @data }
+    method shutdown ()    { $sem_get->adjust(1_000_000_000); 1 }
+    method adjust ($diff) { $sem_put->adjust($diff) }
+};
+```
+
+## Signals
+
+An object with a two-state flag and a FIFO queue of waiters. A fiber parked in `wait` does not busy-wait; it is
+resumed by the scheduler when the signal fires.
+
+```perl
+use Acme::Parataxis;
+use Acme::Parataxis::Signal;
+
+my $sig = Acme::Parataxis::Signal->new;
+
+async {
+    fiber { $sig->wait; say 'I rise!' };
+    $sig->send;
+};
+```
+
+It's also very simple.
+
+```perl
+class Acme::Parataxis::Signal {
+    field $count : reader : param //= true; # true if a send is pending
+    field @waiters;            # fiber ids (integers) or callback coderefs. FIFO
+
+    method _wake_one () {
+        my $waiter = shift @waiters;
+        $count = false;            # a woken waiter consumes the signal
+        if ( ref $waiter eq 'CODE' ) { $waiter->() }
+        else {
+            Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
+        }
+        $waiter;
+    }
+
+    method send () { # Wake up one waiter, or remember the signal if nobody is waiting.
+        if   (@waiters) { $self->_wake_one }
+        else            { $count = true }         # remember the signal
+        return true;
+    }
+
+    method broadcast { # Wake up all waiters.  If nobody is waiting the signal is lost.
+        my $n = scalar @waiters;               # fixed wake budget, like coro_signal_wake
+        $count = false;                        # signal lost if nobody is waiting
+        $self->_wake_one while $n-- > 0 && @waiters;
+        return true;
+    }
+
+    method wait ( $arg //= () ) { # Returns true when at least one fiber is currently waiting on the signal.
+        if ( defined $arg ) {
+            push @waiters, $arg;      # callback form
+            $self->send if $count;    # already signalled: fire now
+            return;
+        }
+        if ($count) {
+            $count = false;           # consume the remembered signal
+            return;
+        }
+        push @waiters, Acme::Parataxis->current_fid;
+        Acme::Parataxis->yield('WAITING');
+        return;
+    }
+
+    method awaited { return scalar @waiters }    # 0 when nobody is waiting
+};
+```
+
+# Best Practices & Gotchas
+
+- **Avoid blocking syscalls:** Never call blocking `sleep( )` or `sysread( )` on the main interpretation thread. Always use the `await_*` equivalents to offload work to the pool.
+- **Thread Safety:** While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
+- **Stack Limits:** Each fiber is allocated a 512KB stack by default. This is more than sufficient for most Perl code and allows for high concurrency with a small memory footprint. Extremely deep recursion or massive regex backtracking might still hit limits.
+- **Efficiency:** The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
+- **Reference Cycles:** Be careful when passing fiber objects into their own closures, as this can create memory leaks.
+
+# Gory Technical Details
 
 ## Architectural Inspiration
 
-The concurrency model in Parataxis is heavily inspired by the **Wren** programming language, specifically its treatment
-of fibers as the primary unit of execution and its deterministic cooperative scheduling.
+The core concurrency model in Parataxis is heavily inspired by the **Wren** programming language, specifically its
+treatment of fibers as the primary unit of execution and its deterministic cooperative scheduling.
 
 ## Stack Virtualization
 
@@ -571,9 +767,10 @@ exceptions within fibers.
 
 ## Signal Handling
 
-Signals are delivered to the main process thread. Perl handles these at 'safe points,' which in this module typically
-occur during a context switch (yield, transfer, or call). If you send a signal while a fiber is suspended, it will
-generally be processed when the fiber is resumed and hits the next internal Perl opcode.
+Not to be confused with (Affix::Parataxis::Signal) Signals are delivered to the main process thread. Perl handles these
+at 'safe points,' which in this module typically occur during a context switch (yield, transfer, or call). If you send
+a signal while a fiber is suspended, it will generally be processed when the fiber is resumed and hits the next
+internal Perl opcode.
 
 ## The 'Final Transfer' Requirement
 

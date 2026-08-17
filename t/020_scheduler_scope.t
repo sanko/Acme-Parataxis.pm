@@ -4,21 +4,15 @@ use Acme::Parataxis qw[async fiber yield await];
 use Test2::V1 -ipP;
 $|++;
 #
-diag 'Scheduler scoping: things Coro handles that used to hang here (never-run fibers, nested async).';
-
 subtest 'A created-but-never-run fiber does not block scheduler exit' => sub {
-    ok(
-        eval {
-            async {
-                my $f = Acme::Parataxis->new( code => sub { return 'idle' } );
-                pass 'created a fiber object, never spawned it';
-            };
-            1;
-        },
-        'async with an idle ->new fiber returns'
-    );
+    ok eval {
+        async {
+            my $f = Acme::Parataxis->new( code => sub { return 'idle' } );
+            pass 'created a fiber object, never spawned it';
+        };
+        1;
+    }, 'async with an idle ->new fiber returns';
 };
-
 subtest 'Nested async shares the scheduler and returns the block result' => sub {
     my @order;
     my $inner_result;
@@ -30,10 +24,9 @@ subtest 'Nested async shares the scheduler and returns the block result' => sub 
         };
         push @order, 'outer:end';
     };
-    is( join( q{,}, @order ), 'outer:start,inner,outer:end', 'inner async ran between outer steps' );
-    is( $inner_result, 42, 'nested async returned the block value' );
+    is join( q{,}, @order ), 'outer:start,inner,outer:end', 'inner async ran between outer steps';
+    is $inner_result,        42,                            'nested async returned the block value';
 };
-
 subtest 'async inside a spawned fiber' => sub {
     my @out;
     async {
@@ -45,9 +38,8 @@ subtest 'async inside a spawned fiber' => sub {
             push @out, "worker-got-$v";
         };
     };
-    is( join( q{,}, @out ), 'nested-worker,worker-got-7', 'fiber awaited a nested async' );
+    is join( q{,}, @out ), 'nested-worker,worker-got-7', 'fiber awaited a nested async';
 };
-
 subtest 'Deep nesting (three levels)' => sub {
     my @out;
     async {
@@ -59,9 +51,8 @@ subtest 'Deep nesting (three levels)' => sub {
         };
         push @out, 'L1e';
     };
-    is( join( q{,}, @out ), 'L1,L2,L3,L2e,L1e', 'order preserved through nesting' );
+    is join( q{,}, @out ), 'L1,L2,L3,L2e,L1e', 'order preserved through nesting';
 };
-
 subtest 'Parked fiber woken by a callback (rouse pattern)' => sub {
     my $got;
     async {
@@ -75,6 +66,7 @@ subtest 'Parked fiber woken by a callback (rouse pattern)' => sub {
         yield;
         $cb->(77);
     };
-    is( $got, 77, 'callback resumed the parked fiber' );
+    is $got, 77, 'callback resumed the parked fiber';
 };
+#
 done_testing();
