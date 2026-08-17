@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
 
+### Fixed
+
+- Fixed crash (double-free / use-after-free) when fibers call Affix FFI functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5.
+
 ### Changed
 
 - Spawned fibers run inline at spawn time.
