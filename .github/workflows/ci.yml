@@ -19,7 +19,7 @@ jobs:
             pkg: pkg install -y
             version: 14.1
         perl:
-          - "5.40"
+          - 5.40
       max-parallel: 5
     uses: ./.github/workflows/cross.yml
     with:
@@ -46,22 +46,6 @@ jobs:
     with:
       flags: '${{ matrix.flags }}'
       os: '${{ matrix.os }}'
-      perl: '${{ matrix.perl }}'
-  riscv:
-    name: 'RISC-V/v${{matrix.perl}}'
-    needs:
-      - setup
-    strategy:
-      fail-fast: false
-      matrix:
-        flags: ['']
-        perl:
-          - "5.42.0"
-      max-parallel: 2
-    uses: ./.github/workflows/unix.yml
-    with:
-      flags: '${{ matrix.flags }}'
-      os: ubuntu-24.04-riscv
       perl: '${{ matrix.perl }}'
   macos:
     name: "[${{ matrix.os == 'macos-15-intel' && 'Intel' || 'M1' }}] macOS/v${{matrix.perl}}"
@@ -125,6 +109,23 @@ jobs:
           dir=${1:-.}
           # Process the specified directory
           process_dir "artifacts"
+  riscv:
+    name: 'RISC-V/v${{matrix.perl}}'
+    needs:
+      - setup
+    strategy:
+      fail-fast: false
+      matrix:
+        flags:
+          - ''
+        perl:
+          - 5.42.0
+      max-parallel: 2
+    uses: ./.github/workflows/unix.yml
+    with:
+      flags: '${{ matrix.flags }}'
+      os: ubuntu-24.04-riscv
+      perl: '${{ matrix.perl }}'
   setup:
     name: Generate Testing Matrix
     outputs:
