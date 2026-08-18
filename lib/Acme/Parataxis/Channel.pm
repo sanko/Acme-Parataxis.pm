@@ -1,6 +1,7 @@
 use v5.40;
 no warnings 'experimental::class';
 use feature 'class';
+use Acme::Parataxis::Semaphore;
 
 class Acme::Parataxis::Channel {
     field $capacity : param //= 2_000_000_000;
