@@ -501,15 +501,15 @@ resumed by the scheduler when the signal fires.
 
 =over
 
-=item * B<Avoid blocking syscalls:> Never call blocking C<sleep()> or C<sysread()> on the main interpretation thread. Always use the C<await_*> equivalents to offload work to the pool.
+=item * B<Avoid Blocking Syscalls>: Never call blocking C<sleep()> or C<sysread()> on the main interpretation thread. Always use the C<await_*> equivalents to offload work to the pool.
 
-=item * B<Thread Safety:> While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
+=item * B<Thread Safety>: While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
 
-=item * B<Stack Limits:> Each fiber is allocated a 64MB virtual stack backed by mmap with a guard page. Physical memory is only consumed for pages the fiber actually touches, so this is cheap even for thousands of fibers.
+=item * B<Stack Limits>: Each fiber is allocated a virtual stack backed by mmap with a guard page. Physical memory is only consumed for pages the fiber actually touches, so this is cheap even for thousands of fibers. On Linux and FreeBSD the reservation is 64MB and made with `MAP_NORESERVE`; on macOS (which has no `MAP_NORESERVE`, so every mapping counts against the process memory budget) the reservation is 8MB -- still ample for deep recursion.
 
-=item * B<Efficiency:> The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
+=item * B<Efficiency>: The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
 
-=item * B<Reference Cycles:> Be careful when passing fiber objects into their own closures, as this can create memory leaks.
+=item * B<Reference Cycles>: Be careful when passing fiber objects into their own closures, as this can create memory leaks.
 
 =back
 

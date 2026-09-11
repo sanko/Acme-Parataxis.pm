@@ -432,6 +432,7 @@ static int outstanding_jobs = 0;
 #if !defined(MAP_ANON)
 #define MAP_ANON 0x1000
 #endif
+
 /**
  * @brief Red zone protecting the bottom of each fiber stack.
  *
@@ -440,15 +441,34 @@ static int outstanding_jobs = 0;
  * page size is 16 KiB.
  */
 static size_t fiber_guard_sz;
+
 /**
- * @brief Virtual size of each fiber stack.
+ * @brief Virtual size of each fiber stack, selected per platform.
  *
- * The full region is mapped with MAP_NORESERVE on Linux so physical memory is only committed for pages the fiber
- * actually touches (the stack grows downward on demand). On macOS/FreeBSD the same mmap approach is used without
- * MAP_NORESERVE (the kernel overcommits by default). The bottom fiber_guard_sz bytes are PROT_NONE; hitting them
- * means genuine >FIBER_STACK_SZ C-stack usage, which the SIGSEGV guard handler reports instead of corrupting the heap.
+ * The full region is mapped lazily so physical memory is only committed for pages the fiber actually touches. Linux
+ * and FreeBSD map it with MAP_NORESERVE, which makes a large reservation free. macOS has no MAP_NORESERVE, so every
+ * anonymous mapping counts against the process memory budget at full size but a 64 MB stack times a tableful of fibers
+ * gets the process SIGKILLed on Apple Silicon. For macOS we use a small reservation instead (depth - 20000).
+ *
+ * Perl recursion fits in a ~1 MB OS fiber on Windows, so 8 MB leaves ample headroom even in a DEBUGGING build. The
+ * bottom fiber_guard_sz bytes are PROT_NONE; hitting them means genuine >FIBER_STACK_SZ C-stack usage, which the
+ * SIGSEGV guard handler reports instead of corrupting the heap.
  */
-#define FIBER_STACK_SZ (64 * 1024 * 1024)
+#ifdef __linux__
+#define FIBER_STACK_SZ   (64 * 1024 * 1024)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE)
+#elif defined(__APPLE__)
+#define FIBER_STACK_SZ   (8 * 1024 * 1024)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON)
+#else
+#ifdef MAP_NORESERVE
+#define FIBER_STACK_SZ   (64 * 1024 * 1024)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE)
+#else
+#define FIBER_STACK_SZ   (8 * 1024 * 1024)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON)
+#endif
+#endif
 /** @brief Lazy-init: set fiber_guard_sz to the system page size. */
 static void init_guard_sz(void) {
     if (!fiber_guard_sz)
@@ -1649,46 +1669,13 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
 #endif
 
 #ifndef _WIN32
-#ifdef __linux__
-/**
- * @brief Allocates a fiber stack backed by a lazily-committed mapping.
- *
- * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it. Because the mapping is created with
- * MAP_NORESERVE, no physical pages are consumed until the fiber actually uses them, so a 64MB virtual stack is cheap
- * whether the fiber uses 4KB or 40MB of C stack.
- *
- * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
- * @return void* Pointer to the usable stack (guard page below it), or NULL.
- */
-static void * alloc_fiber_stack(size_t sz) {
-    (void)sz;
-    init_guard_sz();
-    if (stack_cache_count > 0)
-        return stack_cache[--stack_cache_count];
-    size_t total = FIBER_STACK_SZ + fiber_guard_sz;
-    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
-    if (base == MAP_FAILED)
-        return NULL;
-    mprotect(base, fiber_guard_sz, PROT_NONE);
-    return (char *)base + fiber_guard_sz;
-}
-
-/** @brief Returns a fiber stack to the reuse cache or unmaps it. */
-static void free_fiber_stack(void * p, size_t sz) {
-    (void)sz;
-    if (p && stack_cache_count < MAX_CACHED_STACKS) {
-        stack_cache[stack_cache_count++] = p;
-        return;
-    }
-    if (p)
-        munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
-}
-#else  /* !__linux__ */
 /**
  * @brief Allocates a fiber stack backed by a lazily-committed mmap mapping.
  *
- * Identical to the Linux path: a PROT_NONE guard page sits below the usable stack so overflow is caught cleanly.
- * macOS and FreeBSD overcommit by default, so a 64 MB virtual mapping is cheap even without MAP_NORESERVE.
+ * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it. The mapping uses FIBER_MMAP_FLAGS:
+ * MAP_NORESERVE where the platform has it (Linux, FreeBSD), so a 64 MB reservation is free until touched, and a small
+ * FIBER_STACK_SZ where it does not (macOS), so a tableful of fibers stays under the process memory budget. No
+ * physical pages are consumed until they are used.
  *
  * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
  * @return void* Pointer to the usable stack (guard page below it), or NULL.
@@ -1699,7 +1686,7 @@ static void * alloc_fiber_stack(size_t sz) {
     if (stack_cache_count > 0)
         return stack_cache[--stack_cache_count];
     size_t total = FIBER_STACK_SZ + fiber_guard_sz;
-    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void * base = mmap(NULL, total, PROT_READ | PROT_WRITE, FIBER_MMAP_FLAGS, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
     mprotect(base, fiber_guard_sz, PROT_NONE);
@@ -1713,10 +1700,9 @@ static void free_fiber_stack(void * p, size_t sz) {
         stack_cache[stack_cache_count++] = p;
         return;
     }
-    if (p)
+if (p)
         munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 }
-#endif /* __linux__ */
 
 /** @brief Previous SIGSEGV disposition, restored when a fault is not ours. */
 static struct sigaction prev_sigsegv_act;

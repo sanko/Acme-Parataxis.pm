@@ -48,8 +48,7 @@ context switches clobbering your data. Each fiber has its own stack and context,
 resources. You can easily create thousands of them without stalling your system.
 
 While this module lives in the `Acme::` namespace due to its highly experimental origins (it manually manipulates
-Perl's internal stacks and C context via FFI), it is designed to be a robust and highly functional concurrency
-framework.
+Perl's internal stacks and C context via FFI), it is designed to be a robust and highly functional concurrency framework.
 
 # Core Concepts
 
@@ -81,8 +80,8 @@ already done.
 
 Yielding is the "secret sauce" of fibers.
 
-A yielded fiber passes control back to its caller but remembers its exact state, including all variables and the
-current instruction pointer. The next time it's called, it resumes exactly where it left off.
+A yielded fiber passes control back to its caller but remembers its exact state, including all variables and the current
+instruction pointer. The next time it's called, it resumes exactly where it left off.
 
 ```
 Acme::Parataxis->yield();
@@ -137,8 +136,8 @@ async {
 
 ## `fiber { ... }`
 
-An alias for `spawn()`. It creates a new fiber and returns an `Acme::Parataxis` fiber object that can be awaited with
-`await()` or `->await()`, and also provides Future-style methods (`result`, `on_ready`).
+An alias for `spawn()`. It creates a new fiber and returns an `Acme::Parataxis` fiber object that can be awaited
+with `await()` or `->await()`, and also provides Future-style methods (`result`, `on_ready`).
 
 ```perl
 my $f = fiber {
@@ -539,11 +538,11 @@ async {
 
 # Best Practices & Gotchas
 
-- **Avoid blocking syscalls:** Never call blocking `sleep()` or `sysread()` on the main interpretation thread. Always use the `await_*` equivalents to offload work to the pool.
-- **Thread Safety:** While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
-- **Stack Limits:** Each fiber is allocated a 64MB virtual stack backed by mmap with a guard page. Physical memory is only consumed for pages the fiber actually touches, so this is cheap even for thousands of fibers.
-- **Efficiency:** The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
-- **Reference Cycles:** Be careful when passing fiber objects into their own closures, as this can create memory leaks.
+- **Avoid Blocking Syscalls**: Never call blocking `sleep()` or `sysread()` on the main interpretation thread. Always use the `await_*` equivalents to offload work to the pool.
+- **Thread Safety**: While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
+- **Stack Limits**: Each fiber is allocated a virtual stack backed by mmap with a guard page. Physical memory is only consumed for pages the fiber actually touches, so this is cheap even for thousands of fibers. On Linux and FreeBSD the reservation is 64MB and made with \`MAP\_NORESERVE\`; on macOS (which has no \`MAP\_NORESERVE\`, so every mapping counts against the process memory budget) the reservation is 8MB -- still ample for deep recursion.
+- **Efficiency**: The native thread pool is initialized dynamically upon the first asynchronous request. It starts with a small "seed" pool and grows on demand up to the configured limit. Worker threads use condition variables to sleep efficiently when idle, ensuring near-zero CPU usage when no background tasks are pending.
+- **Reference Cycles**: Be careful when passing fiber objects into their own closures, as this can create memory leaks.
 
 # Gory Technical Details
 
@@ -601,5 +600,4 @@ Sanko Robinson [https://github.com/sanko](https://github.com/sanko)
 
 Copyright (C) Sanko Robinson.
 
-This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
-2.
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License 2.
