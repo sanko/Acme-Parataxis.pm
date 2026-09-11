@@ -9,33 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
 
+::Futures are also new.
+
 ### Fixed
 
-- Fixed crash (double-free / use-after-free) when fibers call Affix FFI functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5.
+- Fixed crash (double-free / use-after-free) when fibers call Affix'd functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5+.
 - Fixed SIGSEGV on macOS and FreeBSD caused by fiber stacks being only 512KB (via `posix_memalign`). All POSIX platforms now use a 64MB `mmap`-backed stack with a PROT_NONE guard page, matching the Linux path. The SIGSEGV guard handler is also available on macOS/FreeBSD now.
-- Fixed FreeBSD compilation: added `MAP_ANONYMOUS` → `MAP_ANON` fallback.
+- Fixed FreeBSD compilation: added `MAP_ANONYMOUS` w/ `MAP_ANON` fallback.
 - Fixed macOS SIGBUS: the guard region size is now derived from `sysconf(_SC_PAGESIZE)` at runtime so it always covers at least one full page (16 KiB on Apple Silicon). Also fixed `cleanup()` to use `munmap()` instead of `free()` on non-Linux POSIX platforms.
+- `is_finished()` now rejects fiber ids of `MAX_FIBERS` or greater instead of reading out of bounds of the fiber table.
+- `t/021_exit.t` passes the parent's `blib` include paths to its child test processes, so `use Acme::Parataxis` succeeds when running from a source checkout (previously every child reported exit status 2 on Windows).
+- Closed a busy-spin footgun: `wait`, fiber `await`, `Semaphore` waits, and `Signal->wait` now croak instead of burning 100% CPU when called from outside the scheduler, and `->new` croaks when the 1024-slot fiber table is exhausted rather than creating a fiber that can never run.
+- A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
+- The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
+- `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
 
 ### Changed
 
 - Spawned fibers run inline at spawn time.
 - The fiber registry is replaced by strong references to each fiber object in C.
 - Fiber completion moved from a Perl method into C: the entry point writes state directly into the object's slots with `av_store`, and only dispatches callbacks when callbacks were actually registered.
-- To save time on FFI boundary crossings, `spawn` now performs the whole create run run sequence in a single call and builds the fiber object in C.
-- Fiber objects are incrementally-filled arrayrefs instead of hashrefs.
+- To save time on FFI boundary crossings, `spawn` now performs the whole create run sequence in a single call and builds the fiber object in C.
+- Fiber objects are incrementally-filled AV*s instead of HV*s.
 - On x86_64 ELF, context switching uses a hand written trampoline that only saves the callee-saved registers and stack pointer, avoiding `swapcontext`'s signal-mask syscall.
 - `spawn` and `await` hot paths flattened by inlining helpers.
-
-### Fixed
-
-- A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
-- The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
-- `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
+- Worker threads block on `select()` for the full `await_read`/`await_write` timeout instead of polling every 10ms, cutting idle syscalls by ~50x. On POSIX a shutdown pipe wakes any worker blocked in `select()` during `cleanup()`.
 
 ### Added
 
-- Unit tests ported from Coro's own suite, as a demonstration of utility: joining spawned fibers and collecting results (`t/016_coro_join.t`, from Coro `t/08_join.t`), eval/cede inside fibers (`t/017_coro_eval.t`, from Coro `t/07_eval.t`), a producer/consumer bounded channel built from fibers (`t/018_coro_channel.t`, from Coro `t/02_channel.t` + `eg/prodcons`), and a counting semaphore with guards (`t/019_coro_semaphore.t`, from Coro `t/15_semaphore.t`).
-- Standalone producer/consumer example `eg/coro_prodcons.pl`, modelled on Coro's `eg/prodcons`.
+- Futures
 
 ## [v0.0.10] - 2026-02-22
 
