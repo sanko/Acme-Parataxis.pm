@@ -8,10 +8,11 @@ class Acme::Parataxis::Future {
     field $result;
     field $error;
     field @callbacks;
-    field $waiter;
+    field @waiters;
 
-    method result () {    # Returns the task result immediately. Croaks if the future is not yet ready.
+    method result () {    # Returns the task result immediately. Croaks if the future is not yet ready or failed.
         croak 'Future not ready' unless $is_ready;
+        croak $error if defined $error;
         return $result;
     }
 
@@ -30,8 +31,11 @@ class Acme::Parataxis::Future {
     }
 
     method clear_result () {
-        $result = undef;
-        $error  = undef;
+        $result    = undef;
+        $error     = undef;
+        $is_ready  = 0;
+        @callbacks = ();
+        @waiters   = ();
     }
 
     method on_ready ($cb) {
@@ -41,18 +45,20 @@ class Acme::Parataxis::Future {
 
     method await () {
 
-        # Suspends the current fiber until the future is ready. Returns the result or dies if the task encountered an error
+        # Suspends the current fiber until the future is ready. Returns the result or dies if the task encountered an error.
         return $self->result if $is_ready;
-        $waiter = Acme::Parataxis->current_fid;
-        $self->on_ready( \&_wake_waiter );
+        my $fid = Acme::Parataxis->current_fid;
+        croak 'await() must be called from inside a scheduled fiber' if $fid < 0;
+        push @waiters, $fid;
+        $self->on_ready( \&_wake_waiters );
         Acme::Parataxis->yield('WAITING');
         $self->result;
     }
 
-    method _wake_waiter () {
-        return unless defined $waiter;
-        Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
-        $waiter = undef;
+    method _wake_waiters () {
+        return unless @waiters;
+        Acme::Parataxis::_scheduler_enqueue_by_id($_) for @waiters;
+        @waiters = ();
     }
 };
 1;

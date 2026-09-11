@@ -29,16 +29,15 @@ This makes signals safe to fire before anyone has had a chance to register inter
 B<Broadcast:> C<broadcast> wakes every currently queued waiter at once, which is useful for fan-out patterns. Unlike
 C<send>, a broadcast that finds nobody waiting simply drops the signal.
 
-=head1 CONSTRUCTOR
+=head1 METHODS
 
-=head2 C<new( )>
+=head2 C<new( [...] )>
 
     my $sig = Acme::Parataxis::Signal->new();
 
-Creates a new signal in the unsignalled state. You can also pass C<count-E<gt>true> to create a signal that is already
-signalled (i.e., the next C<wait> returns immediately).
-
-=head1 METHODS
+Creates a new signal. By default, it initializes in the *signalled* state (C<count = true>), meaning the very first
+C<wait> will return immediately without blocking. You can pass C<count =E<gt> false> to create a signal in the
+unsignalled state.
 
 =head2 C<send( )>
 
@@ -47,7 +46,7 @@ signalled (i.e., the next C<wait> returns immediately).
 Wake up one waiter if any are queued. If nobody is currently waiting, the signal is remembered so the next C<wait>
 returns immediately without blocking. Returns true.
 
-=head2 C<broadcast>
+=head2 C<broadcast( )>
 
     $sig->broadcast;
 
@@ -58,7 +57,7 @@ Wake up B<all> currently waiting fibers. If nobody is waiting, the signal is los
     $sig->wait;
     $sig->wait(\&callback);
 
-Wait for the signal. In the no-argument form, suspends the current fiber until the signal is sent. If the signal is
+Wait for the signal. In the no-argument form, it suspends the current fiber until the signal is sent. If the signal is
 already pending, it is consumed immediately without blocking.
 
 When a coderef is passed, it is registered as a callback and invoked when the signal fires. If the signal is already

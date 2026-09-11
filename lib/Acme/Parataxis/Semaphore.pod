@@ -70,7 +70,7 @@ positive. This is useful for bulk-release scenarios, such as unblocking a channe
     $sem->wait;
 
 Block until a permit is available. This is equivalent to C<down> but is named for consistency with other
-Acme::Parataxis synchronization primitives.
+C<Acme::Parataxis> synchronization primitives.
 
 =head2 C<guard>
 

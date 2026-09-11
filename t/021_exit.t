@@ -2,17 +2,18 @@ use v5.40;
 use blib;
 use Acme::Parataxis;
 use Test2::V1 -ipP;
-use Cwd        qw[abs_path];
 use File::Temp ();
 $|++;
 #
 my $perl = $^X;
 
-# The child needs the freshly-built module; use absolute paths so the test
-# does not depend on the child's current directory.
-my @inc;
+# The child must load the just-built module just like this process does, so
+# hand it the same blib directories that `use blib` added to @INC (absolute
+# paths, so the child's working directory does not matter).  When the module
+# is already installed and no blib is around, nothing is added and the child
+# simply uses the installed module.
+my @inc = map { '-I' . $_ } grep {/blib/} @INC;
 
-#~ push @inc, '-I' . abs_path($_) for grep { -e $_ } qw[blib/lib blib/arch];
 sub shell_quote {
     my ($s) = @_;
     return $s if $s =~ /^[A-Za-z0-9_\-\/.:\\]+$/;

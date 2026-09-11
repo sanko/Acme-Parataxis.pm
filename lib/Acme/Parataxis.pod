@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis - Coroutines Using OS Fibers via FFI
+Acme::Parataxis - Perl Coroutines Using Real OS Fibers via FFI
 
 =head1 SYNOPSIS
 
@@ -15,17 +15,21 @@ Acme::Parataxis - Coroutines Using OS Fibers via FFI
     async {
         say 'Main task started';
 
-        # 'fiber' is a shorter alias for 'spawn'
         my $f1 = fiber {
             say '  Task 1: Sleeping...';
             await_sleep(1000);
-            return 42;
+            return 'Coffee!';
         };
 
         my $f2 = fiber {
-            say '  Task 2: Performing I/O...';
-            # ...
-            return 'I/O Done';
+            say '  Task 2: Calculating... (simulated CPU work)';
+            my $sum = 0;
+            for ( 1 .. 100 ) {
+                $sum += $_;
+                maybe_yield();    # Be a good neighbor
+            }
+            say '  Task 2: Complete. Will return ' . $sum;
+            return $sum;
         };
 
         # 'await' works on fibers and futures
@@ -45,20 +49,84 @@ so. This makes concurrency deterministic and easier to reason about. You (probab
 context switches clobbering your data. Each fiber has its own stack and context, but they don't use OS thread
 resources. You can easily create thousands of them without stalling your system.
 
-This module was originally very experimental and lived in the C<Acme::> namespace. It still manually manipulates Perl's
-internal stacks and C context but I no longer consider it dangerous.
+While this module lives in the C<Acme::> namespace due to its highly experimental origins (it manually manipulates
+Perl's internal stacks and C context via FFI), it is designed to be a robust and highly functional concurrency
+framework.
 
-And thus it's here, in a brand new top level namespace because I don't know where else it could make sense.
+=head1 Core Concepts
 
-=head1 MODERN API
+=head2 Creating Fibers
+
+All Perl code in this system runs within a fiber. When you start your script or call C<Acme::Parataxis::run>, a "main"
+fiber is active. You can create new fibers using C<spawn> or by manually instantiating an C<Acme::Parataxis> object:
+
+    my $fiber = Acme::Parataxis->new(code => sub {
+        say "I'm in a fiber!";
+    });
+
+Creating a fiber does not run it immediately. It simply prepares the context and waits to be invoked.
+
+=head2 Invoking Fibers
+
+To run a fiber, you "call" it. This suspends the current fiber and executes the called one until it finishes or yields.
+
+    $fiber->call();
+
+When the called fiber finishes, control returns to the fiber that called it. It is an error to call a fiber that is
+already done.
+
+=head2 Yielding
+
+Yielding is the "secret sauce" of fibers.
+
+A yielded fiber passes control back to its caller but remembers its exact state, including all variables and the
+current instruction pointer. The next time it's called, it resumes exactly where it left off.
+
+    Acme::Parataxis->yield();
+
+=head2 Communication (Passing Values)
+
+Fibers can pass data back and forth through C<call> and C<yield>:
+
+=over
+
+=item * B<Resuming with a value>: Arguments passed to C<$fiber-E<gt>call(@args)> are returned by the C<yield()> call that
+suspended the fiber.
+
+=item * B<Yielding with a value>: Arguments passed to C<Acme::Parataxis-E<gt>yield(@args)> are returned to the caller by
+the C<call()> that resumed the fiber.
+
+=back
+
+=head2 Full Coroutines
+
+Fibers in Parataxis are "full coroutines." This means they can suspend from anywhere in the callstack. You can call
+C<yield()> from deeply nested functions, and the entire fiber stack will be suspended until the fiber is resumed.
+
+=head2 Transferring Control
+
+While C<call()> and C<yield()> manage a stack-like chain of execution, C<transfer()> provides an unstructured way to
+switch between fibers. When you transfer to a fiber, the current one is suspended, and the target fiber resumes. Unlike
+C<call()>, transferring does not establish a parent/child relationship. It's more like a C<goto> for execution
+contexts.
+
+    $other_fiber->transfer();
+
+=head2 Fibers vs. Threads
+
+In Parataxis, your Perl code always runs on a single OS thread. However, when you call an C<await_*> function, the
+current fiber is suspended, and the actual blocking work is performed on a B<different> OS thread in a native pool.
+Once the task completes, your fiber is automatically queued for resumption on the main thread.
+
+=head1 API
 
 While the classic object-oriented API is always available, C<Acme::Parataxis> exports a set of functions (via the
 C<:all> tag) that provide a more modern, concise way to write concurrent code.
 
 =head2 C<async { ... }>
 
-A convenience wrapper around C<run( )>. It starts the scheduler, executes the provided block as the main fiber, and
-automatically calls C<stop( )> when the block completes.
+A convenience wrapper around C<run()>. It starts the scheduler, executes the provided block as the main fiber, and
+automatically calls C<stop()> when the block completes.
 
     async {
         say "The scheduler is running!";
@@ -66,8 +134,8 @@ automatically calls C<stop( )> when the block completes.
 
 =head2 C<fiber { ... }>
 
-An alias for C<spawn( )>. It creates a new fiber and returns an C<Acme::Parataxis> fiber object that can be awaited
-with C<await( )> or C<< ->await( ) >>, and also provides Future-style methods (C<result>, C<on_ready>).
+An alias for C<spawn()>. It creates a new fiber and returns an C<Acme::Parataxis> fiber object that can be awaited with
+C<await()> or C<< ->await() >>, and also provides Future-style methods (C<result>, C<on_ready>).
 
     my $f = fiber {
         say "Hello from fiber!";
@@ -110,82 +178,17 @@ Suspends the current fiber until the provided filehandle is ready for writing, o
         syswrite($socket, $message);
     };
 
-=head2 C<await_core_id( )>
+=head2 C<await_core_id()>
 
 Returns the ID of the CPU core currently executing the background task. This is a non-blocking operation that offloads
 the request to the thread pool and suspends the fiber until the result is ready.
 
     async {
-        my $core = await_core_id( );
+        my $core = await_core_id();
         say "Background task handled by CPU core: $core";
     };
 
-=head1 CORE CONCEPTS
-
-=head2 Creating Fibers
-
-All Perl code in this system runs within a fiber. When you start your script or call C<Acme::Parataxis::run>, a "main"
-fiber is active. You can create new fibers using C<spawn> or by manually instantiating an C<Acme::Parataxis> object:
-
-    my $fiber = Acme::Parataxis->new(code => sub {
-        say "I'm in a fiber!";
-    });
-
-Creating a fiber does not run it immediately. It simply prepares the context and waits to be invoked.
-
-=head2 Invoking Fibers
-
-To run a fiber, you "call" it. This suspends the current fiber and executes the called one until it finishes or yields.
-
-    $fiber->call( );
-
-When the called fiber finishes, control returns to the fiber that called it. It is an error to call a fiber that is
-already done.
-
-=head2 Yielding
-
-Yielding is the "secret sauce" of fibers.
-
-A yielded fiber passes control back to its caller but remembers its exact state including all variables and the current
-instruction pointer. The next time it's called, it resumes exactly where it left off.
-
-    Acme::Parataxis->yield( );
-
-=head2 Communication (Passing Values)
-
-Fibers can pass data back and forth through C<call> and C<yield>:
-
-=over
-
-=item * B<Resuming with a value>: Arguments passed to C<$fiber-E<gt>call(@args)> are returned by the C<yield( )> call that
-suspended the fiber.
-
-=item * B<Yielding with a value>: Arguments passed to C<Acme::Parataxis-E<gt>yield(@args)> are returned to the caller by
-the C<call( )> that resumed the fiber.
-
-=back
-
-=head2 Full Coroutines
-
-Fibers in Parataxis are "full coroutines." This means they can suspend from anywhere in the callstack. You can call
-C<yield( )> from deeply nested functions, and the entire fiber stack will be suspended until the fiber is resumed.
-
-=head2 Transferring Control
-
-While C<call( )> and C<yield( )> manage a stack-like chain of execution, C<transfer( )> provides an unstructured way to
-switch between fibers. When you transfer to a fiber, the current one is suspended, and the target fiber resumes. Unlike
-C<call( )>, transferring does not establish a parent/child relationship. It's more like a C<goto> for execution
-contexts.
-
-    $other_fiber->transfer( );
-
-=head2 Fibers vs. Threads
-
-In Parataxis, your B<Perl code> always runs on a single OS thread. However, when you call an C<await_*> function, the
-current fiber is suspended, and the actual blocking work is performed on a B<different> OS thread in a native pool.
-Once the task completes, your fiber is automatically queued for resumption on the main thread.
-
-=head1 SCHEDULER FUNCTIONS
+=head1 Scheduler Functions
 
 The following functions are the primary interface for the integrated cooperative scheduler.
 
@@ -195,16 +198,16 @@ Starts the event loop and executes C<$code> as the initial fiber. The loop conti
 fibers or pending background tasks.
 
     Acme::Parataxis::run(sub {
-        say "The scheduler is running!";
+        say 'The scheduler is running!';
     });
 
 =head2 C<spawn( $code )>
 
-Creates a new fiber and runs it. Returns an C<Acme::Parataxis> fiber object that can be awaited with C<await( )> or C<<
-->await( ) >> and will eventually contain the fiber's return value.
+Creates a new fiber and runs it. Returns an C<Acme::Parataxis> fiber object that can be awaited with C<await()> or C<<
+->await() >> and will eventually contain the fiber's return value.
 
     my $future = Acme::Parataxis->spawn(sub {
-        return "Hello from fiber #" . Acme::Parataxis->current_fid;
+        return 'Hello from fiber #' . Acme::Parataxis->current_fid;
     });
 
 =head2 C<yield( @args )>
@@ -221,14 +224,12 @@ queued immediately moves it to its new position in the run queue.
     my $fast = Acme::Parataxis->spawn(sub { ... });
     $fast->priority(10);   # runs before any priority-0 fiber
 
-=head2 C<stop( )>
+=head2 C<stop()>
 
 Tells the scheduler to exit the loop after the current iteration. Note that this does not immediately terminate other
 fibers; it simply prevents the scheduler from starting new ones.
 
-=cut
-
-=head1 THREAD POOL CONFIGURATION
+=head1 Thread Pool Configuration
 
 C<Acme::Parataxis> uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
 tune its behavior using these functions.
@@ -241,36 +242,11 @@ logical CPU cores detected on your system (up to a hard limit of 64).
     # Limit the pool to 4 threads
     set_max_threads(4);
 
-=head2 C<max_threads( )>
+=head2 C<max_threads()>
 
 Returns the currently configured maximum thread pool size.
 
-=head1 BLOCKING & I/O FUNCTIONS
-
-These functions B<suspend> the current fiber and offload the actual blocking work to the native thread pool.
-
-=head2 C<await_sleep( $ms )>
-
-Suspends the fiber for C<$ms> milliseconds. While the background thread sleeps, other fibers can continue to execute.
-
-=head2 C<await_read( $fh, $timeout = 5000 )>
-
-Suspends the fiber until the filehandle C<$fh> is ready for reading, or the C<$timeout> (in milliseconds) is reached.
-
-    my $status = Acme::Parataxis->await_read($socket);
-    if ($status > 0) {
-        my $data = <$socket>;
-    }
-
-=head2 C<await_write( $fh, $timeout = 5000 )>
-
-Suspends the fiber until the filehandle C<$fh> is ready for writing.
-
-=head2 C<await_core_id( )>
-
-Offloads a request to the thread pool and returns the ID of the CPU core that handled the job.
-
-=head1 MANUAL FIBER MANAGEMENT
+=head1 Manual Fiber Management
 
 Advanced users can manage context switching themselves without using the integrated scheduler.
 
@@ -294,16 +270,18 @@ caller.
 A "symmetric" switch. Suspends the current context and moves directly to the target fiber. No parent/child relationship
 is established. Like C<call>, it supports passing arbitrary Perl data via C<@args>.
 
-=head1 PREEMPTION
+=head1 Preemption
 
-=head2 C<maybe_yield( )>
+If you really must interrupt the normal flow of things, these functions will come in handy.
+
+=head2 C<maybe_yield()>
 
 Increments an internal operation counter for the current fiber. If the counter reaches the threshold set by
 C<set_preempt_threshold>, the fiber automatically yields.
 
     while (my $row = $sth->fetch) {
         process($row);
-        Acme::Parataxis->maybe_yield( ); # Cooperatively prevent starvation
+        Acme::Parataxis->maybe_yield(); # Cooperatively prevent starvation
     }
 
 =head2 C<set_preempt_threshold( $val )>
@@ -312,31 +290,29 @@ Sets the number of C<maybe_yield> increments before a forced yield occurs. Defau
 
 =head1 Class Methods
 
-=head2 C<tid( )>
+=head2 C<tid()>
 
 Returns the unique OS Thread ID of the main interpreter thread.
 
-=head2 C<current_fid( )>
+=head2 C<current_fid()>
 
 Returns the unique numeric ID of the currently executing fiber, or -1 if called from the "root" (main) context.
 
-=head2 C<root( )>
+=head2 C<root()>
 
-Returns a proxy object representing the initial execution context. This is useful for C<transfer( )>ing control back to
+Returns a proxy object representing the initial execution context. This is useful for C<transfer()>ing control back to
 the main thread from a symmetric coroutine.
 
-=head1 Acme::Parataxis OBJECT METHODS
-
-=head2 C<fid( )>
+=head2 C<fid()>
 
 Returns the unique numeric ID of the fiber object.
 
-=head2 C<is_done( )>
+=head2 C<is_done()>
 
 Returns true if the fiber has finished execution (either by returning or dying). Once a fiber is done, its internal ID
 is released and it can no longer be called.
 
-=head1 INTEGRATING SYNCHRONOUS MODULES
+=head1 Integrating with Synchronous Code
 
 To use synchronous modules (like C<HTTP::Tiny>) in a non-blocking way, you can subclass their handle or transport
 methods and use a C<while> loop combined with C<yield('WAITING')>. This ensures the fiber yields control until the
@@ -395,18 +371,17 @@ underlying I/O is ready.
         }
     }
 
-=head1 EXAMPLES
+=head1 Examples
 
-These are useful samples that should be modules in their own right but find their home here in documentation instead.
-
-...for now.
+These are useful samples that should be modules in their own right but find their home here in documentation instead
+for now.
 
 =head2 Cooperative Parallelism
 
 This example demonstrates how to perform multiple HTTP requests concurrently on a single interpretation thread.
 
     use Acme::Parataxis;
-    # ... (See My::HTTP implementation in INTEGRATING SYNCHRONOUS MODULES) ...
+    # ... (See My::HTTP implementation above) ...
 
     Acme::Parataxis::run(sub {
         my $http = My::HTTP->new(verify_SSL => 0);
@@ -419,12 +394,12 @@ This example demonstrates how to perform multiple HTTP requests concurrently on 
         } @urls;
 
         # Collect results as they become ready
-        say "Status for $urls[$_]: " . $futures[$_]->await( ) for 0..$#urls;
+        say "Status for $urls[$_]: " . $futures[$_]->await() for 0..$#urls;
     });
 
 =head2 Symmetric Producer/Consumer
 
-A low-level example of Passing control sideways between fibers.
+A low-level example of passing control sideways between fibers.
 
     my ($p, $c);
 
@@ -437,21 +412,39 @@ A low-level example of Passing control sideways between fibers.
     });
 
     $c = Acme::Parataxis->new(code => sub {
-        my $item = Acme::Parataxis->yield( ); # Initial wait
+        my $item = Acme::Parataxis->yield(); # Initial wait
         while (1) {
             last if $item eq 'DONE';
             say "Consumer: Eating $item";
-            $item = $p->transfer( );
+            $item = $p->transfer();
         }
     });
 
-    $c->call( ); # Prime consumer
-    $p->call( ); # Start producer
+    $c->call(); # Prime consumer
+    $p->call(); # Start producer
 
 =head2 Futures
 
-The current hotness in lightweight concurrency abstrations.
+A common pattern for lightweight concurrency abstractions.
 
+    use Acme::Parataxis::Future;
+
+    my $future = Acme::Parataxis::Future->new;
+
+    # Register a callback
+    $future->on_ready(sub ($f) {
+        say 'Result: ' . $f->result;
+    });
+
+    # Set the result (from another fiber)
+    $future->set_result(42);
+
+    # Await in a fiber (suspends until ready)
+    my $value = $future->await;
+
+A future represents a value that will be available at some point in the future. Futures are used to coordinate between
+fibers: one fiber produces a result via C<set_result> or C<set_error>, and one or more consumers retrieve it via
+C<result> or C<await>.
 
 =head2 Semaphore
 
@@ -473,7 +466,7 @@ like the futures used by C<await>.
 
 =head2 Channels
 
-A simple message queue that allows you to send and recieve data. If the channel is full, writers block; if it is empty,
+A simple message queue that allows you to send and receive data. If the channel is full, writers block; if it is empty,
 readers block. Both ends can be used by as many fibers as you want concurrently.
 
 A channel of size C<1> is a rendezvous point (no buffering: C<put> waits for a matching C<get>); to buffer one element
@@ -508,7 +501,7 @@ resumed by the scheduler when the signal fires.
 
 =over
 
-=item * B<Avoid blocking syscalls:> Never call blocking C<sleep( )> or C<sysread( )> on the main interpretation thread. Always use the C<await_*> equivalents to offload work to the pool.
+=item * B<Avoid blocking syscalls:> Never call blocking C<sleep()> or C<sysread()> on the main interpretation thread. Always use the C<await_*> equivalents to offload work to the pool.
 
 =item * B<Thread Safety:> While Perl code remains single-threaded, background tasks run on separate OS threads. Shared C-level data (if accessed via FFI) must be mutex-protected.
 
@@ -548,24 +541,24 @@ exceptions within fibers.
 
 =head2 Signal Handling
 
-Not to be confused with (Affix::Parataxis::Signal) Signals are delivered to the main process thread. Perl handles these
-at 'safe points,' which in this module typically occur during a context switch (yield, transfer, or call). If you send
-a signal while a fiber is suspended, it will generally be processed when the fiber is resumed and hits the next
-internal Perl opcode.
+Not to be confused with C<Acme::Parataxis::Signal>, true OS-level signals (like C<SIGINT>) are delivered to the main
+process thread. Perl handles these at 'safe points,' which in this module typically occur during a context switch
+(yield, transfer, or call). If you receive an OS signal while a fiber is suspended, it will generally be processed when
+the fiber is resumed and hits its next internal Perl opcode.
 
 =head2 The 'Final Transfer' Requirement
 
-In a symmetric coroutine model (using C<transfer( )>), fibers don't have a natural 'parent' to return to. I've added
-fallback logic to return to the C<last_sender> or the main thread on exit but it's good practice to explicitly
-C<transfer( )> back to a partner fiber or the C<root( )> context to ensure your application logic remains predictable.
+In a symmetric coroutine model (using C<transfer()>), fibers don't have a natural 'parent' to return to. I've added
+fallback logic to return to the C<last_sender> or the main thread on exit, but it's good practice to explicitly
+C<transfer()> back to a partner fiber or the C<root()> context to ensure your application logic remains predictable.
 Leaving a fiber to just 'fall off the end' is like walking out of a room without closing the door; eventually, the
 draft will bother someone.
 
-=head2 C<is_done( )> vs. Destruction
+=head2 C<is_done()> vs. Destruction
 
-A fiber being C<is_done( )> simply means its Perl code has finished executing. The underlying C-level memory (stacks,
+A fiber being C<is_done()> simply means its Perl code has finished executing. The underlying C-level memory (stacks,
 context, etc.) is not immediately freed until the C<Acme::Parataxis> object is destroyed or the runtime performs its
-final C<cleanup( )>. This is why you might see memory usage stay flat even after a fiber finishes, until the garbage
+final C<cleanup()>. This is why you might see memory usage stay flat even after a fiber finishes, until the garbage
 collector finally catches up with the object.
 
 =head1 AUTHOR
