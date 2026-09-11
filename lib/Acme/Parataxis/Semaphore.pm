@@ -3,12 +3,16 @@ no warnings 'experimental::class';
 use feature 'class';
 
 class Acme::Parataxis::Semaphore {
+    use Acme::Parataxis;
+    use Carp qw[croak];
     field $count : reader : param //= 1;
     field @waiters : reader;    # fiber ids in FIFO order and re-enqueued via the scheduler when woken
 
     method _block_until_available () {    # Park the current fiber until a permit is available then recheck the count
         while ( $count <= 0 ) {
-            push @waiters, Acme::Parataxis->current_fid;
+            my $fid = Acme::Parataxis->current_fid;
+            croak 'Semaphore waits must occur inside a scheduled fiber' if $fid < 0;
+            push @waiters, $fid;
             Acme::Parataxis->yield('WAITING');
         }
         1;
@@ -26,9 +30,20 @@ class Acme::Parataxis::Semaphore {
         1;
     }
 
+    method _wake_waiters ($budget) {    # Wakes up to $budget waiters, skipping stale (destroyed) fiber ids
+        my $woken = 0;
+        while ( @waiters && $woken < $budget ) {
+            my $waiter = shift @waiters;
+            next unless defined Acme::Parataxis->by_id($waiter);
+            Acme::Parataxis::_scheduler_enqueue_by_id($waiter);
+            $woken++;
+        }
+        $woken;
+    }
+
     method up () {
         $count++;
-        Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) if $count > 0 && @waiters;
+        $self->_wake_waiters(1) if $count > 0;
         1;
     }
 
@@ -37,7 +52,7 @@ class Acme::Parataxis::Semaphore {
         my $n       = $count;
         my $waiting = scalar @waiters;
         $n = $waiting if $waiting < $n;
-        Acme::Parataxis::_scheduler_enqueue_by_id( shift @waiters ) while $n-- > 0;
+        $self->_wake_waiters($n);
         1;
     }
     method wait () { $self->_block_until_available }

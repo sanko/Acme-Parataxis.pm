@@ -507,6 +507,16 @@ static int current_thread_count = 0;
 /** @brief Flag to signal worker threads to terminate */
 static volatile int threads_keep_running = 1;
 
+#ifndef _WIN32
+/** @brief Pipe used to wake worker threads blocked in select() during shutdown. */
+static int shutdown_pipe[2] = { -1, -1 };
+#endif
+
+/** @brief Submitted-but-unreclaimed job count per fiber id (avoids fiber slot reuse while jobs are in flight). */
+static int job_refcount[MAX_FIBERS];
+/** @brief Set when a fiber id is destroyed but still has outstanding jobs; the id must not be reused until they drain. */
+static bool fiber_destroyed[MAX_FIBERS];
+
 #ifdef _WIN32
 /** @brief Windows-only handle for the main thread converted to fiber */
 static void * main_fiber_handle = NULL;
@@ -594,45 +604,45 @@ void * worker_thread(void * arg) {
                 job->output.i = cpu;
             }
             else if (job->type == TASK_READ || job->type == TASK_WRITE) {
-                fd_set fds;
-                FD_ZERO(&fds);
+                fd_set work_fds;
+                FD_ZERO(&work_fds);
+                int nfds = 0;
 #ifdef _WIN32
                 SOCKET s = (SOCKET)job->input.i;
-                FD_SET(s, &fds);
+                FD_SET(s, &work_fds);
+                nfds = 0;
 #else
                 int fd = (int)job->input.i;
-                FD_SET(fd, &fds);
-#endif
-                struct timeval tv;
-                int res;
-                int elapsed_ms = 0;
-                int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;
-
-                while (threads_keep_running) {
-                    tv.tv_sec = 0;
-                    tv.tv_usec = 10000;
-
-                    fd_set work_fds = fds;
-                    if (job->type == TASK_READ)
-#ifdef _WIN32
-                        res = select(0, &work_fds, NULL, NULL, &tv);
-#else
-                        res = select(fd + 1, &work_fds, NULL, NULL, &tv);
-#endif
-                    else
-#ifdef _WIN32
-                        res = select(0, NULL, &work_fds, NULL, &tv);
-#else
-                        res = select(fd + 1, NULL, &work_fds, NULL, &tv);
-#endif
-
-                    if (res != 0)
-                        break;
-
-                    elapsed_ms += 10;
-                    if (elapsed_ms >= timeout)
-                        break;
+                FD_SET(fd, &work_fds);
+                nfds = fd + 1;
+                if (shutdown_pipe[0] >= 0) {
+                    FD_SET(shutdown_pipe[0], &work_fds);
+                    if (shutdown_pipe[0] + 1 > nfds)
+                        nfds = shutdown_pipe[0] + 1;
                 }
+#endif
+                int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;
+                struct timeval tv;
+                tv.tv_sec = timeout / 1000;
+                tv.tv_usec = (timeout % 1000) * 1000;
+
+                int res;
+                if (job->type == TASK_READ)
+#ifdef _WIN32
+                    res = select(nfds, &work_fds, NULL, NULL, &tv);
+#else
+                    res = select(nfds, &work_fds, NULL, NULL, &tv);
+#endif
+                else
+#ifdef _WIN32
+                    res = select(nfds, NULL, &work_fds, NULL, &tv);
+#else
+                    res = select(nfds, NULL, &work_fds, NULL, &tv);
+#endif
+#ifndef _WIN32
+                if (shutdown_pipe[0] >= 0 && FD_ISSET(shutdown_pipe[0], &work_fds))
+                    res = -1;    /* woken for shutdown, not readiness */
+#endif
                 job->output.i = (res > 0) ? 1 : -1;
             }
 
@@ -665,6 +675,10 @@ DLLEXPORT void init_threads() {
         return;
     LOCK_INIT(queue_lock);
     PARA_COND_INIT(queue_cond);
+#ifndef _WIN32
+    if (pipe(shutdown_pipe) != 0)
+        shutdown_pipe[0] = shutdown_pipe[1] = -1;
+#endif
     for (int i = 0; i < MAX_JOBS; i++)
         job_slots[i].status = JOB_FREE;
 
@@ -715,6 +729,8 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].timeout_ms = timeout_ms;
         job_slots[idx].status = JOB_NEW;
         outstanding_jobs++;
+        if (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
+            job_refcount[current_fiber_id]++;
         PARA_COND_SIGNAL(queue_cond);
     }
     UNLOCK(queue_lock);
@@ -792,10 +808,22 @@ DLLEXPORT int get_job_coro_id(int idx) {
 DLLEXPORT void free_job_slot(int idx) {
     if (idx < 0 || idx >= MAX_JOBS)
         return;
+    int owner = job_slots[idx].fiber_id;
     LOCK(queue_lock);
     job_slots[idx].status = JOB_FREE;
     outstanding_jobs--;
     UNLOCK(queue_lock);
+
+    /* Release the owner fiber id only once every job it submitted has been reclaimed, and only if the fiber has been
+     * destroyed. This keeps a stale completion from ever waking a newer fiber that reused the same id. */
+    if (owner >= 0 && owner < MAX_FIBERS && job_refcount[owner] > 0) {
+        job_refcount[owner]--;
+        if (job_refcount[owner] == 0 && fiber_destroyed[owner]) {
+            fiber_destroyed[owner] = 0;
+            if (free_slot_count < MAX_FIBERS)
+                free_slots[free_slot_count++] = owner;
+        }
+    }
 }
 
 /**
@@ -1820,7 +1848,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
         /* Safety net: scan for a slot if the free list is ever exhausted. */
         idx = -1;
         for (int i = 0; i < MAX_FIBERS; i++) {
-            if (fibers[i] == NULL) {
+            if (fibers[i] == NULL && !fiber_destroyed[i]) {
                 idx = i;
                 break;
             }
@@ -2123,7 +2151,7 @@ DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
 
 /** @brief Returns 1 if the fiber has finished execution. */
 DLLEXPORT int is_finished(int fiber_id) {
-    if (fiber_id < 0)
+    if (fiber_id < 0 || fiber_id >= MAX_FIBERS)
         return 0;
     return (fibers[fiber_id] && fibers[fiber_id]->finished) ? 1 : 0;
 }
@@ -2213,8 +2241,15 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     if (!c)
         return;
     fibers[fiber_id] = NULL;
-    if (free_slot_count < MAX_FIBERS)
-        free_slots[free_slot_count++] = fiber_id;
+    if (job_refcount[fiber_id] > 0) {
+        /* Keep the id out of the free list until every in-flight job it submitted has been reclaimed, so no newer
+         * fiber can be woken by a stale completion targeting this id (released via free_job_slot). */
+        fiber_destroyed[fiber_id] = 1;
+    }
+    else {
+        if (free_slot_count < MAX_FIBERS)
+            free_slots[free_slot_count++] = fiber_id;
+    }
 
     /* Unwind pads */
     if (c->si)
@@ -2295,6 +2330,12 @@ DLLEXPORT void cleanup() {
             }
         }
 #else
+        /* Wake any workers blocked in select() so they observe threads_keep_running = 0 */
+        if (shutdown_pipe[1] >= 0) {
+            char byte = 1;
+            ssize_t ignored = write(shutdown_pipe[1], &byte, 1);
+            (void)ignored;
+        }
         /* Give threads a moment to notice threads_keep_running = 0 */
         usleep(10000);
 #endif
@@ -2315,6 +2356,11 @@ DLLEXPORT void cleanup() {
     while (stack_cache_count > 0)
         munmap((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 #endif
+    if (shutdown_pipe[1] >= 0) {
+        close(shutdown_pipe[0]);
+        close(shutdown_pipe[1]);
+        shutdown_pipe[0] = shutdown_pipe[1] = -1;
+    }
 #endif
     if (main_context.transfer_data && main_context.transfer_data != &PL_sv_undef) {
         SvREFCNT_dec(main_context.transfer_data);

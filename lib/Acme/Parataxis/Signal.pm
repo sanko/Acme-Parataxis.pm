@@ -4,6 +4,7 @@ use feature 'class';
 
 class Acme::Parataxis::Signal {
     use Acme::Parataxis;
+    use Carp qw[croak];
     field $count : reader : param //= true;    # true if a send is pending
     field @waiters;                            # fiber ids (integers) or callback coderefs. FIFO
 
@@ -40,7 +41,9 @@ class Acme::Parataxis::Signal {
             $count = false;                    # consume the remembered signal
             return;
         }
-        push @waiters, Acme::Parataxis->current_fid;
+        my $fid = Acme::Parataxis->current_fid;
+        croak 'Signal waits must occur inside a scheduled fiber' if $fid < 0;
+        push @waiters, $fid;
         Acme::Parataxis->yield('WAITING');
         return;
     }

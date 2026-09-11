@@ -21,6 +21,7 @@ class Acme::Parataxis::Future {
         $result   = $val;
         $is_ready = 1;
         $_->($self) for @callbacks;
+        $self->_wake_waiters;
     }
 
     method set_error ($err) {
@@ -28,6 +29,7 @@ class Acme::Parataxis::Future {
         $error    = $err;
         $is_ready = 1;
         $_->($self) for @callbacks;
+        $self->_wake_waiters;
     }
 
     method clear_result () {
@@ -50,7 +52,6 @@ class Acme::Parataxis::Future {
         my $fid = Acme::Parataxis->current_fid;
         croak 'await() must be called from inside a scheduled fiber' if $fid < 0;
         push @waiters, $fid;
-        $self->on_ready( \&_wake_waiters );
         Acme::Parataxis->yield('WAITING');
         $self->result;
     }

@@ -103,9 +103,6 @@ package Acme::Parataxis v0.1.0 {
         push @paths, File::Spec->catfile( dirname(__FILE__), '..',   'arch', 'auto',      'Acme', 'Parataxis', $lib_name );
         push @paths, File::Spec->catfile( dirname(__FILE__), '..',   '..',   'arch',      'auto', 'Acme', 'Parataxis', $lib_name );
         push @paths, File::Spec->catfile( dirname(__FILE__), 'auto', 'Acme', 'Parataxis', $lib_name );
-
-        # XXX - Local dir check (This is temporary)
-        push @paths, File::Spec->catfile( '.', $lib_name );
         for my $inc (@INC) {
             next if ref $inc;
             push @paths, File::Spec->catfile( $inc, 'auto', 'Acme', 'Parataxis', $lib_name );
@@ -154,11 +151,16 @@ package Acme::Parataxis v0.1.0 {
         }
         return $fiber;
     }
-    my $PENDING_JOBS = 0;
 
     sub _submit_job ( $type, $arg, $timeout ) {
-        return -1 if submit_c_job( $type, $arg, $timeout ) < 0;
-        $PENDING_JOBS++;
+        my $rc = submit_c_job( $type, $arg, $timeout );
+        if ( $rc < 0 ) {
+
+            # The 1024-slot job queue is full. Yield once so the scheduler can drain completed jobs, then retry.
+            Acme::Parataxis->yield;
+            $rc = submit_c_job( $type, $arg, $timeout );
+            croak "job queue full: could not submit the job after a scheduler tick (submit_c_job returned $rc)" if $rc < 0;
+        }
         return 0;
     }
 
@@ -169,7 +171,7 @@ package Acme::Parataxis v0.1.0 {
             unshift @_, $invocant if defined $invocant;
         }
         my $ms = shift // 0;
-        return 'Queue Full' if _submit_job( 0, $ms, 0 ) < 0;
+        _submit_job( 0, $ms, 0 );
         return yield('WAITING');
     }
 
@@ -179,7 +181,7 @@ package Acme::Parataxis v0.1.0 {
             ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
             unshift @_, $invocant if defined $invocant;
         }
-        return 'Queue Full' if _submit_job( 1, 0, 0 ) < 0;
+        _submit_job( 1, 0, 0 );
         return yield('WAITING');
     }
 
@@ -194,7 +196,7 @@ package Acme::Parataxis v0.1.0 {
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-        return 'Queue Full' if _submit_job( 2, $handle, $timeout ) < 0;
+        _submit_job( 2, $handle, $timeout );
         return yield('WAITING');
     }
 
@@ -209,7 +211,7 @@ package Acme::Parataxis v0.1.0 {
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
-        return 'Queue Full' if _submit_job( 3, $handle, $timeout ) < 0;
+        _submit_job( 3, $handle, $timeout );
         return yield('WAITING');
     }
 
@@ -279,11 +281,10 @@ package Acme::Parataxis v0.1.0 {
         _enqueue($main_fiber);
         while ($IS_RUNNING) {
             my @ready;
-            if ($PENDING_JOBS) {
+            if ( get_outstanding_jobs() ) {
                 my $out = [];
                 drain_jobs($out);
                 @ready = @$out;
-                $PENDING_JOBS -= @ready;
             }
             for my $ready (@ready) {
                 my ( $fid, $res ) = @$ready;
@@ -304,13 +305,13 @@ package Acme::Parataxis v0.1.0 {
                 }
             }
             my $active_count = get_live_fiber_count();
-            if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready && !$PENDING_JOBS ) {
-                die "FATAL: deadlock detected, $active_count fibers blocked and nothing runnable\n" if $active_count > 0;
-                if ( defined $main_fiber && $main_fiber->is_done ) {
-                    $IS_RUNNING = 0;
+            if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
+                if ( get_outstanding_jobs() ) {
+                    usleep(1000);    # Wait for background jobs to finish
                 }
                 else {
-                    usleep(1000);
+                    die 'FATAL: deadlock detected...' if $active_count > 0;
+                    $IS_RUNNING = 0                   if defined $main_fiber && $main_fiber->is_done;
                 }
             }
         }
@@ -320,7 +321,9 @@ package Acme::Parataxis v0.1.0 {
 
     sub new ( $class, %args ) {
         my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0 ], $class;
-        $self->[F_FID] = Acme::Parataxis::create_fiber( $args{code}, $self );
+        my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
+        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' if $fid < 0;
+        $self->[F_FID] = $fid;
         return $self;
     }
     sub fid   ($self) { $self->[F_FID] }
@@ -413,6 +416,9 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub wait ($self) {
+        if ( !$self->is_done && Acme::Parataxis->current_fid < 0 ) {
+            croak 'wait() must be called from inside the scheduler, or the fiber must already be done';
+        }
         Acme::Parataxis->yield('WAITING_FOR_CHILD') until $self->is_done;
         return _result($self);
     }
@@ -425,6 +431,7 @@ package Acme::Parataxis v0.1.0 {
     sub await ($self) {
         my $ready = $self->[F_IS_READY];
         if ( !$ready ) {
+            croak 'await() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
             $self->[F_WAITER] = Acme::Parataxis->current_fid;
             $self->on_ready( \&_wake_waiter );
             Acme::Parataxis->yield('WAITING');

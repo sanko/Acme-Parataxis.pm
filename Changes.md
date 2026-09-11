@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
 
-::Futures are also new.
+### Added
+
+- Acme::Parataxis::Future
+- Acme::Parataxis::Channel
+- Acme::Parataxis::Semaphore
+- Acme::Parataxis::Signal
 
 ### Fixed
 
@@ -23,6 +28,12 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 - A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
 - The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
 - `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
+- A destroyed fiber's id is kept out of the free list until every job it submitted has been reclaimed, so a stale completion can never be misdelivered to a (or corrupt) fiber that later reuses the id.
+- Pending-job tracking now reads the C-side outstanding job count instead of a run-local counter, so jobs left over from a `stop`ped run are drained and handled by the next run instead of tripping `FATAL: deadlock detected` or sitting in the done-queue forever.
+- `Semaphore` `up`/`adjust` skip stale (already destroyed) waiters instead of consuming a wake that should go to a live fiber.
+- Channel constructors now reject a capacity below 1 instead of deadlocking on it at load time.
+- The 1024-slot job queue is no longer fatal on the first try: `_submit_job` yields once and retries before croaking.
+- `Future::set_result`/`set_error` wake awaiters exactly once instead of appending a duplicate `_wake_waiters` callback on every `await`.
 
 ### Changed
 
@@ -34,10 +45,6 @@ The hot path has been moved from Perl into C and roughly tripled context swappin
 - On x86_64 ELF, context switching uses a hand written trampoline that only saves the callee-saved registers and stack pointer, avoiding `swapcontext`'s signal-mask syscall.
 - `spawn` and `await` hot paths flattened by inlining helpers.
 - Worker threads block on `select()` for the full `await_read`/`await_write` timeout instead of polling every 10ms, cutting idle syscalls by ~50x. On POSIX a shutdown pipe wakes any worker blocked in `select()` during `cleanup()`.
-
-### Added
-
-- Futures
 
 ## [v0.0.10] - 2026-02-22
 

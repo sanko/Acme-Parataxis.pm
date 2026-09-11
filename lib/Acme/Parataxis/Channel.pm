@@ -8,6 +8,9 @@ class Acme::Parataxis::Channel {
     field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
     field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity - 1 );
     field @data : reader;
+    ADJUST {
+        $capacity >= 1 or die "Channel capacity must be >= 1 (got $capacity)\n";
+    }
 
     method put ($value) {
         push @data, $value;
