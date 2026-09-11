@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class';
+no warnings 'experimental::class', 'recursion';
 use feature 'class';
 
 class Acme::Parataxis::Semaphore {

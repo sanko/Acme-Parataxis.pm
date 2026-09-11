@@ -1,4 +1,5 @@
 use v5.40;
+no warnings 'recursion';    # fibers run on separate heap stacks; Perl's C-stack-depth heuristic misfires there
 use experimental qw[class try];
 
 package Acme::Parataxis v0.1.0 {
@@ -139,7 +140,8 @@ package Acme::Parataxis v0.1.0 {
             $code  = $class;
             $class = __PACKAGE__;
         }
-        my $fiber  = Acme::Parataxis::spawn_fiber( $code, $class );
+        my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
+        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' unless $fiber && ref $fiber;
         my $status = $fiber->[F_LAST_STATUS];
         if ( $status == 1 ) {
             my $err = $fiber->[F_ERROR];
