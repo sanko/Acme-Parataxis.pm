@@ -48,7 +48,8 @@ context switches clobbering your data. Each fiber has its own stack and context,
 resources. You can easily create thousands of them without stalling your system.
 
 While this module lives in the `Acme::` namespace due to its highly experimental origins (it manually manipulates
-Perl's internal stacks and C context via FFI), it is designed to be a robust and highly functional concurrency framework.
+Perl's internal stacks and C context via FFI), it is designed to be a robust and highly functional concurrency
+framework.
 
 # Core Concepts
 
@@ -80,8 +81,8 @@ already done.
 
 Yielding is the "secret sauce" of fibers.
 
-A yielded fiber passes control back to its caller but remembers its exact state, including all variables and the current
-instruction pointer. The next time it's called, it resumes exactly where it left off.
+A yielded fiber passes control back to its caller but remembers its exact state, including all variables and the
+current instruction pointer. The next time it's called, it resumes exactly where it left off.
 
 ```
 Acme::Parataxis->yield();
@@ -136,8 +137,8 @@ async {
 
 ## `fiber { ... }`
 
-An alias for `spawn()`. It creates a new fiber and returns an `Acme::Parataxis` fiber object that can be awaited
-with `await()` or `->await()`, and also provides Future-style methods (`result`, `on_ready`).
+An alias for `spawn()`. It creates a new fiber and returns an `Acme::Parataxis` fiber object that can be awaited with
+`await()` or `->await()`, and also provides Future-style methods (`result`, `on_ready`).
 
 ```perl
 my $f = fiber {
@@ -600,4 +601,5 @@ Sanko Robinson [https://github.com/sanko](https://github.com/sanko)
 
 Copyright (C) Sanko Robinson.
 
-This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License 2.
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.

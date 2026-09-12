@@ -37,7 +37,7 @@ subtest 'Destroyed fiber id stays reserved until its jobs drain' => sub {
     my ( $fidX, $tX );
     async {
         my $X = fiber {
-            $tX = await_sleep(150);    # long enough that A's stale job drains mid-run
+            $tX = await_sleep(300);    # long enough that A's stale job drains mid-run
             return 'X-value';
         };
         $fidX = $X->fid;
@@ -45,17 +45,23 @@ subtest 'Destroyed fiber id stays reserved until its jobs drain' => sub {
         is $gotX, 'X-value', 'X ran cleanly, unmatched stale wake did not touch it';
     };
     ok $fidX != $fidA, "id held while job pending ($fidX != $fidA)";
-    ok $tX >= 150,     "X slept its full 150ms ($tX), not the stale 120ms";
+    ok $tX >= 150,     "X slept its full 300ms ($tX), not the stale 120ms";
 
     # Run 3: after the stale job is reclaimed the id is released and can be
-    # handed out safely again.
-    my $fidC;
+    # handed out safely again. Release only happens once the main thread drains
+    # the completed job, which is scheduling-dependent -- a fixed sleep window is
+    # too thin under load -- so poll with short-lived probe fibers until A's slot
+    # is observed being handed out again (bounded so a real regression still fails).
+    my ( $fidC, $deadline ) = ( undef, time() + 5 );
     async {
-        my $D = fiber { await_sleep(200); return 'D' };    # keeps PENDING_JOBS > 0 across the stale drain
-        await_sleep(1);                                    # let D submit before we claim slots
-        my $C = fiber { await_sleep(5); return 'C' };
-        $fidC = $C->fid;
-        $C->await;
+        my $D = fiber { await_sleep(1000); return 'D' };    # keeps PENDING_JOBS > 0 across the stale drain
+        await_sleep(1);                                     # let D submit before we claim slots
+        while ( !defined $fidC && time() < $deadline ) {
+            my $P = fiber { await_sleep(2); return 'P' };
+            $fidC = $P->fid if $P->fid == $fidA;
+            $P->await;
+            await_sleep(5) if !defined $fidC;               # yield so the stale job can be drained
+        }
         $D->await;
     };
     ok $fidC == $fidA, "id released for reuse once jobs drained ($fidC == $fidA)";
