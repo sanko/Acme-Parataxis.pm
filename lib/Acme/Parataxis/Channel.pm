@@ -2,8 +2,7 @@ use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
 use Acme::Parataxis::Semaphore;
-
-class Acme::Parataxis::Channel {
+class Acme::Parataxis::Channel v0.1.0 {
     field $capacity : param //= 2_000_000_000;
     field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
     field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity - 1 );
@@ -28,4 +27,5 @@ class Acme::Parataxis::Channel {
     method shutdown ()    { $sem_get->adjust(1_000_000_000); 1 }
     method adjust ($diff) { $sem_put->adjust($diff) }
 };
+#
 1;

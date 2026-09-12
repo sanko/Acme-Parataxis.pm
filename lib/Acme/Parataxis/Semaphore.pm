@@ -1,8 +1,7 @@
 use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
-
-class Acme::Parataxis::Semaphore {
+class Acme::Parataxis::Semaphore v0.1.0 {
     use Acme::Parataxis;
     use Carp qw[croak];
     field $count : reader : param //= 1;
@@ -71,4 +70,5 @@ class Acme::Parataxis::Semaphore::Guard {    # Util
         $semaphore->up;
     }
 };
+#
 1;

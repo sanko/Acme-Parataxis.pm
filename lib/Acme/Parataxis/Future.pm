@@ -1,8 +1,7 @@
 use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
-
-class Acme::Parataxis::Future {
+class Acme::Parataxis::Future v0.1.0 {
     use Carp qw[croak];
     field $is_ready : reader = 0;
     field $result;
@@ -62,4 +61,5 @@ class Acme::Parataxis::Future {
         @waiters = ();
     }
 };
+#
 1;

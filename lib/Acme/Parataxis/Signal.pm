@@ -1,8 +1,7 @@
 use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
-
-class Acme::Parataxis::Signal {
+class Acme::Parataxis::Signal v0.1.0 {
     use Acme::Parataxis;
     use Carp qw[croak];
     field $count : reader : param //= true;    # true if a send is pending
@@ -49,4 +48,5 @@ class Acme::Parataxis::Signal {
     }
     method awaited { return scalar @waiters }    # 0 when nobody is waiting
 };
+#
 1;

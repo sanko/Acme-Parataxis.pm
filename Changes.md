@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This started as a silly little diversion in February but I'm actually using this in actual projects now. I've even used it to shake out bugs in Affix.
+This started as a silly little diversion in February but I'm using this in actual projects now. I've even used it to shake out bugs in Affix.
 
 I might move it out of the Acme namespace...
 
-Anyway, the fiber hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
+Anyway, the major win is that fiber hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
 
 ### Added
 
@@ -27,7 +27,6 @@ Anyway, the fiber hot path has been moved from Perl into C and roughly tripled c
 - Fixed FreeBSD compilation: added `MAP_ANONYMOUS` w/ `MAP_ANON` fallback.
 - Fixed macOS SIGBUS: the guard region size is now derived from `sysconf(_SC_PAGESIZE)` at runtime so it always covers at least one full page (16 KiB on Apple Silicon). Also fixed `cleanup()` to use `munmap()` instead of `free()` on non-Linux POSIX platforms.
 - `is_finished()` now rejects fiber ids of `MAX_FIBERS` or greater instead of reading out of bounds of the fiber table.
-- `t/021_exit.t` passes the parent's `blib` include paths to its child test processes, so `use Acme::Parataxis` succeeds when running from a source checkout (previously every child reported exit status 2 on Windows).
 - Closed a busy-spin footgun: `wait`, fiber `await`, `Semaphore` waits, and `Signal->wait` now croak instead of burning 100% CPU when called from outside the scheduler, and `->new` croaks when the 1024-slot fiber table is exhausted rather than creating a fiber that can never run.
 - A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
 - The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.

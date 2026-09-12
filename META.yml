@@ -40,14 +40,18 @@ provides:
     version: v0.1.0
   Acme::Parataxis::Channel:
     file: lib/Acme/Parataxis/Channel.pm
+    version: v0.1.0
   Acme::Parataxis::Future:
     file: lib/Acme/Parataxis/Future.pm
+    version: v0.1.0
   Acme::Parataxis::Semaphore:
     file: lib/Acme/Parataxis/Semaphore.pm
+    version: v0.1.0
   Acme::Parataxis::Semaphore::Guard:
     file: lib/Acme/Parataxis/Semaphore.pm
   Acme::Parataxis::Signal:
     file: lib/Acme/Parataxis/Signal.pm
+    version: v0.1.0
 requires:
   Affix: v1.0.7
   File::Basename: '0'
