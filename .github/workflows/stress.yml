@@ -1,0 +1,57 @@
+---
+jobs:
+  results:
+    if: always()
+    name: Summary
+    needs:
+      - stress-linux
+      - stress-macos
+    uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
+  stress-linux:
+    name: Stress Linux
+    secrets: inherit
+    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+    with:
+      matrix: |
+        [
+          {"platform_name":"ubuntu","os":"ubuntu-latest","arch":"x86_64","toolchain":"gcc","perl_version":"5.42.3","configure":"-DDEBUGGING"},
+          {"platform_name":"ubuntu","os":"ubuntu-latest","arch":"x86_64","toolchain":"clang","perl_version":"5.42.3","configure":"-DDEBUGGING"}
+        ]
+      task: |
+        perl -V
+        #~ Install cpanm via its canonical self-bootstrap (installs the real
+        #~ `cpanm` binary into the active perl's bin dir). `command -v cpanm`
+        #~ is a hard fail point that catches any no-op.
+        curl -L https://cpanmin.us | perl - App::cpanminus
+        command -v cpanm
+        #~ Fuzz for a few hundred seeded interleavings and soak for 30s of waves.
+        PARATAXIS_STRESS_ITER=400 PARATAXIS_STRESS_SECONDS=30 cpanm -v .
+  stress-macos:
+    name: Stress macOS
+    secrets: inherit
+    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+    with:
+      matrix: |
+        [
+          {"platform_name":"macos","os":"macos-15","arch":"aarch64","toolchain":"gcc","perl_version":"5.42.3","configure":"-DDEBUGGING"},
+          {"platform_name":"macos-intel","os":"macos-15-intel","arch":"x86_64","toolchain":"clang","perl_version":"5.42.3","configure":"-DDEBUGGING"}
+        ]
+      task: |
+        perl -V
+        curl -L https://cpanmin.us | perl - App::cpanminus
+        command -v cpanm
+        PARATAXIS_STRESS_ITER=400 PARATAXIS_STRESS_SECONDS=30 cpanm -v .
+name: Stress
+on:
+  pull_request: ~
+  push:
+    branches:
+      - main
+      - dev
+      - dev-repair
+  schedule:
+    - cron: 0 12 * * *
+  workflow_dispatch: ~
+permissions:
+  actions: read
+  contents: read

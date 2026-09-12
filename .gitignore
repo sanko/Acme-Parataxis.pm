@@ -40,3 +40,6 @@ eg/lib/*.pm
 *.session
 
 ROADMAP.md
+
+# Draft articles — published elsewhere, never committed
+/Article_*.md
