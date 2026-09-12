@@ -624,19 +624,23 @@ void * worker_thread(void * arg) {
                 job->output.i = cpu;
             }
             else if (job->type == TASK_READ || job->type == TASK_WRITE) {
-                fd_set work_fds;
-                FD_ZERO(&work_fds);
+                fd_set read_fds, write_fds;
+                FD_ZERO(&read_fds);
+                FD_ZERO(&write_fds);
                 int nfds = 0;
 #ifdef _WIN32
                 SOCKET s = (SOCKET)job->input.i;
-                FD_SET(s, &work_fds);
+                if (job->type == TASK_READ) FD_SET(s, &read_fds);
+                else                        FD_SET(s, &write_fds);
                 nfds = 0;
 #else
                 int fd = (int)job->input.i;
-                FD_SET(fd, &work_fds);
+                if (job->type == TASK_READ) FD_SET(fd, &read_fds);
+                else                        FD_SET(fd, &write_fds);
                 nfds = fd + 1;
+
                 if (shutdown_pipe[0] >= 0) {
-                    FD_SET(shutdown_pipe[0], &work_fds);
+                    FD_SET(shutdown_pipe[0], &read_fds); /* ALWAYS read_fds */
                     if (shutdown_pipe[0] + 1 > nfds)
                         nfds = shutdown_pipe[0] + 1;
                 }
@@ -646,21 +650,11 @@ void * worker_thread(void * arg) {
                 tv.tv_sec = timeout / 1000;
                 tv.tv_usec = (timeout % 1000) * 1000;
 
-                int res;
-                if (job->type == TASK_READ)
-#ifdef _WIN32
-                    res = select(nfds, &work_fds, NULL, NULL, &tv);
-#else
-                    res = select(nfds, &work_fds, NULL, NULL, &tv);
-#endif
-                else
-#ifdef _WIN32
-                    res = select(nfds, NULL, &work_fds, NULL, &tv);
-#else
-                    res = select(nfds, NULL, &work_fds, NULL, &tv);
-#endif
+                /* Pass both sets to select */
+                int res = select(nfds, &read_fds, &write_fds, NULL, &tv);
+
 #ifndef _WIN32
-                if (shutdown_pipe[0] >= 0 && FD_ISSET(shutdown_pipe[0], &work_fds))
+                if (shutdown_pipe[0] >= 0 && FD_ISSET(shutdown_pipe[0], &read_fds))
                     res = -1;    /* woken for shutdown, not readiness */
 #endif
                 job->output.i = (res > 0) ? 1 : -1;

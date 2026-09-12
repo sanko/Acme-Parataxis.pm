@@ -1,6 +1,7 @@
 use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
+#
 class Acme::Parataxis::Signal v0.1.0 {
     use Acme::Parataxis;
     use Carp qw[croak];
