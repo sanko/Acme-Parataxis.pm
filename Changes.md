@@ -7,14 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
+This started as a silly little diversion in February but I'm actually using this in actual projects now. I've even used it to shake out bugs in Affix.
+
+I might move it out of the Acme namespace...
+
+Anyway, the fiber hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
 
 ### Added
 
-- Acme::Parataxis::Future
-- Acme::Parataxis::Channel
-- Acme::Parataxis::Semaphore
-- Acme::Parataxis::Signal
+- `Acme::Parataxis::Channel`: a buffered FIFO message queue for producer/consumer patterns between fibers. Writers block when full, readers when empty; a capacity of `1` makes it a rendezvous point. Built on two semaphores.
+- `Acme::Parataxis::Future`: a one-shot placeholder for an eventual computation result. A producer fires `set_result`/`set_error` exactly once; consumers pick it up with `await`/`result` or register an `on_ready` callback.
+- `Acme::Parataxis::Semaphore`: a counting semaphore with no ownership: blocked fibers are parked (no busy-wait) and resumed FIFO as permits become available.
+- `Acme::Parataxis::Signal`: a two-state flag with a FIFO queue of waiters. `send` latches the signal so a later `wait` consumes it immediately, while `broadcast` wakes every queued waiter at once (and drops if nobody is waiting).
 
 ### Fixed
 
