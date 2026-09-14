@@ -11,7 +11,7 @@ Acme::Parataxis::Channel - A simple message queue for inter-fiber communication
     use Acme::Parataxis;
     use Acme::Parataxis::Channel;
 
-    my $q = Acme::Parataxis::Channel->new( 4 );
+    my $q = Acme::Parataxis::Channel->new( capacity => 1024 );
 
     async {
         fiber { $q->put( $_ ) for 1 .. 8 };      # producers
