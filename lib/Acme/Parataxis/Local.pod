@@ -55,7 +55,7 @@ Values live in a stash keyed by the fiber B<object> (not its id, see below), pru
 moment a fiber is observed done or its object is destroyed. No scheduler or C changes are
 required.
 
-=head1 AUTHORS
+=head1 AUTHOR
 
 Sanko Robinson <sanko@cpan.org>
 
