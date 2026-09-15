@@ -203,6 +203,53 @@ async {
 };
 ```
 
+# Cancellation
+
+Cooperative cancellation is built on three pieces: a deadline helper (`with_timeout`), a token you can hand out
+(`Acme::Parataxis::CancellationToken`), and a pair of exceptions that both of them raise.
+
+## `with_timeout( $ms, [ $token, ] $code )`
+
+Runs `$code` in a child fiber and makes sure it finishes within `$ms` milliseconds. Calls from outside the scheduler
+croak. When the deadline trips, `with_timeout` throws
+[`Acme::Parataxis::Error::Timeout`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ATimeout) in the calling fiber; the child fiber and
+anything it was blocked on are cleaned up and the scheduler keeps running.
+
+If you pass an optional [`Acme::Parataxis::CancellationToken`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACancellationToken), that token can
+cancel the block early, in which case `Acme::Parataxis::Error::Cancelled` is thrown instead. A pre-cancelled token
+fails fast without running `$code` at all. With no token, the deadline alone is used; a bound of `0` means no
+deadline.
+
+```perl
+async {
+    my $value = eval { with_timeout( 250, sub { $client->request } ) }
+        or die 'request timed out';
+
+    my $cancel = Acme::Parataxis::CancellationToken->new;
+    fiber { sleep 1; $cancel->cancel } ;
+    eval { with_timeout( 10_000, $cancel, sub { $worker->run } ) }
+        or die 'worker cancelled';
+};
+```
+
+## `Acme::Parataxis::CancellationToken`
+
+See [Acme::Parataxis::CancellationToken](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACancellationToken): `register`, `unregister`, `cancel`, `cancelled`, `kind`, `waiters`.
+
+## What gets thrown
+
+Both `with_timeout` and a cancelled token interrupt a blocking wait by throwing an exception into the parked fiber at
+its park site. The two classes, both subclasses of `Acme::Parataxis::Error`, are:
+
+- [`Acme::Parataxis::Error::Timeout`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ATimeout) - kind `'timeout'`, thrown when a
+deadline expires.
+- [`Acme::Parataxis::Error::Cancelled`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ACancelled) - kind `'cancelled'`, thrown when a
+token fires.
+
+Both expose `message()` and `wait_reason()`; `wait_reason()` returns `[ reason, file, line ]` describing the wait
+that was interrupted (see the `wait_reason` section). A fiber that dies while another fiber is awaiting it no longer
+kills the whole run: the error is delivered to the awaiting fiber's `await` call instead.
+
 # Scheduler Functions
 
 The following functions are the primary interface for the integrated cooperative scheduler.
@@ -248,6 +295,23 @@ $fast->priority(10);   # runs before any priority-0 fiber
 
 Tells the scheduler to exit the loop after the current iteration. Note that this does not immediately terminate other
 fibers; it simply prevents the scheduler from starting new ones.
+
+## `on_wake( $code )`
+
+Register a callback to run the next time the current fiber is resumed from a blocking wait. The callback receives the
+fiber object as its only argument. Call it immediately before the call that will block the fiber (`await_sleep`, a
+semaphore `down`, `Signal->wait`, a Channel `get`/`put`, an `await`); it fires exactly once, when that wait
+completes, and is cleared afterwards.
+
+```perl
+fiber {
+    Acme::Parataxis->on_wake(sub ($f) { say "Woke up! fid=" . $f->fid });
+    await_sleep(500);
+};
+```
+
+Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
+the fiber. If the fiber is never actually parked, the hook is silently dropped.
 
 # Thread Pool Configuration
 
@@ -337,6 +401,20 @@ Returns the unique numeric ID of the fiber object.
 
 Returns true if the fiber has finished execution (either by returning or dying). Once a fiber is done, its internal ID
 is released and it can no longer be called.
+
+## `$fiber->wait_reason()`
+
+While a fiber is suspended inside a blocking wait (`await_sleep`, `await`, `await_read`, a semaphore `down`, a
+`Signal->wait`, a Channel `get`/`put`, or a busy `wait` for a child), returns a 3-element arrayref recording
+how it parked: `[ $reason, $file, $line ]` where `$reason` is a short label and `$file`/`$line` are the caller's
+location that entered the wait. Returns `undef` for a fiber that is running, finished, or merely cooperatively
+yielded.
+
+```perl
+my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42 ]
+```
+
+This is read-only diagnostic metadata; workers waiting on the same primitive are unaffected by it.
 
 # Integrating with Synchronous Code
 

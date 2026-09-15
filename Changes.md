@@ -20,6 +20,9 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 - `Acme::Parataxis::Semaphore`: a counting semaphore with no ownership: blocked fibers are parked (no busy-wait) and resumed FIFO as permits become available.
 - `Acme::Parataxis::Signal`: a two-state flag with a FIFO queue of waiters. `send` latches the signal so a later `wait` consumes it immediately, while `broadcast` wakes every queued waiter at once (and drops if nobody is waiting).
 - Waiter introspection and removal (the foundation for cancellation): blocking waits now park through a single `_park`/`_resume_hooks` path that records a `wait_reason` (a label plus the calling file/line, readable via `$fiber->wait_reason`) and fires `on_wake` hooks exactly once when a parked fiber is resumed. `Semaphore`, `Signal`, `Future`, and `Channel` each gained `remove_waiter` to un-register a parked waiter.
+- Cancellation tokens: `Acme::Parataxis::CancellationToken` lets any fiber register for cooperative cancellation. `cancel` is idempotent and interrupts every parked, registered fiber by throwing `Acme::Parataxis::Error::Cancelled` at the park site; a fiber registered against an already-cancelled token has its next park aborted immediately, and `unregister` opts a fiber back out.
+- `with_timeout( $ms, [ $token, ] $code )`: runs a block as a child fiber and throws `Acme::Parataxis::Error::Timeout` in the caller if it doesn't finish in time, cleaning up the child and anything it was blocked on while the scheduler keeps running. An optional token cancels the block early (`Error::Cancelled`); a pre-cancelled token fails fast; a bound of `0` means no deadline.
+- `Acme::Parataxis::Error`, `Acme::Parataxis::Error::Cancelled`, and `Acme::Parataxis::Error::Timeout`: the exceptions interruption throws, with `message`/`kind` and the `wait_reason` of the interrupted wait.
 
 ### Fixed
 
@@ -42,6 +45,8 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 ### Changed
 
 - Spawned fibers run inline at spawn time.
+- A scheduled fiber that dies while another fiber is awaiting it (or has an `on_ready` callback) no longer takes down the whole run loop: the error is delivered to the awaiting fiber's `await` instead, matching Coro-style rethrows.
+- Interrupted waits deregister themselves from the sync primitive they were parked on before re-entering, so an id freed by cancellation can be safely reused by a later fiber without spurious wakes.
 - The fiber registry is replaced by strong references to each fiber object in C.
 - Fiber completion moved from a Perl method into C: the entry point writes state directly into the object's slots with `av_store`, and only dispatches callbacks when callbacks were actually registered.
 - To save time on FFI boundary crossings, `spawn` now performs the whole create run sequence in a single call and builds the fiber object in C.

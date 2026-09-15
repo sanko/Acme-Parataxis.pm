@@ -10,13 +10,14 @@ package Acme::Parataxis v0.1.0 {
     use Time::HiRes    qw[usleep];
     use Exporter       qw[import];
     use Carp           qw[croak];
+    use Acme::Parataxis::Error;
     our %EXPORT_TAGS = (
         all => [
             our @EXPORT_OK
                 = qw[
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
-                current_fid tid root maybe_yield on_wake
+                current_fid tid root maybe_yield on_wake with_timeout
                 set_max_threads max_threads
                 ]
         ]
@@ -27,7 +28,8 @@ package Acme::Parataxis v0.1.0 {
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
-    my %PARKED;    # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
+    my %PARKED;       # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
+    my %PARK_REGS;    # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -43,7 +45,8 @@ package Acme::Parataxis v0.1.0 {
         F_LAST_STATUS => 8,
         F_PRIORITY    => 9,
         F_WAIT_REASON => 10,
-        F_WAKE_HOOKS  => 11
+        F_WAKE_HOOKS  => 11,
+        F_INTERRUPT   => 12
     };
 
     # Scheduler run queue.  Kept sorted by descending priority (stable for
@@ -137,24 +140,59 @@ package Acme::Parataxis v0.1.0 {
         return ( ref $result eq 'ARRAY' ) ? ( wantarray ? @$result : $result->[-1] ) : $result;
     }
 
-    # Park the current fiber in a blocking wait, recording why and where (for diagnostics and M1 cancellation).
+    # Park the current fiber in a blocking wait, recording why and where (for diagnostics and cancellation).
     # $level is the caller stack depth (relative to _park) of the *user* frame whose location should be attributed:
     # 1 for direct wait sites, 2 for a Semaphore down(), 3 for a Channel get()/put().
-    sub _park ( $reason, $level = 1 ) {
+    #
+    # On the *re-entry* after the yield returns, a pending interrupt (set by _interrupt) is consumed and thrown, so a
+    # cancelled wait unwinds with Acme::Parataxis::Error::Cancelled (or ::Timeout) right here — the caller of the wait
+    # sees the parked wait's own reason in the error's wait_reason.
+    #
+    # $dereg, when given, is a coderef that removes the *parking* fiber from whatever waiter list it is parked on
+    # (Semaphore/Signal/Future/child-await). It runs only when this park is interrupted, before the error is thrown, so
+    # a cancelled fiber never leaves a stale id behind that a later wake could fire at a reused fiber.
+    sub _park ( $reason, $level = 1, $dereg = undef ) {
         my $fid = Acme::Parataxis->current_fid;
         croak '_park() must be called from inside a scheduled fiber' if $fid < 0;
         my $fiber = Acme::Parataxis->by_id($fid);
         return unless $fiber;    # already finished; nothing to park
         my ( $file, $line ) = ( caller($level) )[ 1, 2 ];
-        $fiber->[F_WAIT_REASON] = [ $reason, $file, $line ];
-        $PARKED{$fid} = 1;
-        return yield('WAITING');
+        my $site = [ $reason, $file, $line ];
+        $fiber->[F_WAIT_REASON] = $site;
+        $PARKED{$fid}           = 1;
+        $PARK_REGS{$fid}        = $dereg if defined $dereg;
+        my $res = yield('WAITING');
+
+        if ( defined( my $kind = $fiber->[F_INTERRUPT] ) ) {
+            $fiber->[F_INTERRUPT] = undef;
+            delete $PARKED{$fid};
+            if ( my $dereg = delete $PARK_REGS{$fid} ) { $dereg->() }
+            my $err = $kind eq 'timeout' ? Acme::Parataxis::Error::Timeout->new( wait_reason => $site ) :
+                Acme::Parataxis::Error::Cancelled->new( wait_reason => $site );
+            die $err;
+        }
+        return $res;
+    }
+
+    # Marks a fiber as interrupted and, if it is currently parked, wakes it so the interrupt is observed at the park's
+    # re-entry. A fiber that is not parked keeps the marker and the first park it (re)enters afterwards throws. $kind is
+    # 'cancel' or 'timeout' and selects which error the fiber throws.
+    sub _interrupt ( $fid, $kind ) {
+        my $fiber = Acme::Parataxis->by_id($fid);
+        return unless $fiber;
+        return                         if $fiber->[F_IS_DONE];
+        $fiber->[F_INTERRUPT] = $kind  if $kind eq 'cancel' || $kind eq 'timeout';
+        _scheduler_enqueue_by_id($fid) if $PARKED{$fid};
+        return $fiber;
     }
 
     # Runs once when a fiber is resumed from a parked state: clear the parked bookkeeping and fire on_wake hooks.
+    # On a natural wake the park's deregistrations are dropped (the park is over); on an interrupt wake they are kept
+    # for the throw in _park, which runs them before the fiber unwinds.
     sub _resume_hooks ($fiber) {
         return unless delete $PARKED{ $fiber->[F_FID] };
         $fiber->[F_WAIT_REASON] = undef;
+        delete $PARK_REGS{ $fiber->[F_FID] } unless defined $fiber->[F_INTERRUPT];
         my $hooks = $fiber->[F_WAKE_HOOKS];
         $fiber->[F_WAKE_HOOKS] = undef;
         if ($hooks) { $_->($fiber) for @$hooks }
@@ -173,6 +211,60 @@ package Acme::Parataxis v0.1.0 {
         my $fiber = Acme::Parataxis->by_id( Acme::Parataxis->current_fid );
         push @{ $fiber->[F_WAKE_HOOKS] }, $code;
         return $code;
+    }
+
+    # Runs $code as a child fiber with a deadline of $ms milliseconds and returns its value, or throws
+    # Acme::Parataxis::Error::Timeout when the deadline fires first. An optional Acme::Parataxis::CancellationToken
+    # before $code cancels the block like an external deadline. A 0 or undef $ms means no deadline.
+    #
+    # The block runs as a child fiber in the same scheduler, so cooperative waits inside it (await_sleep, ->await,
+    # ->wait, semaphore/signal/channel ops) suspend only the block's fiber. When a token fires, the child's parked wait
+    # is interrupted at its park re-entry and the child unwinds (unregistering from the tokens as it goes);
+    # with_timeout rethrows the resulting error (::Timeout or ::Cancelled) in this fiber, so it can be caught with
+    # eval/try. Note that the C job table cannot cancel an armed sleep job early, so once the deadline timer is armed
+    # the run stays alive at least until it expires; the timer is not armed at all when the block finishes inline
+    # (never parks) or when $ms is 0.
+    sub with_timeout {
+        my $invocant = shift;
+        if ( !defined $invocant ||
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
+            unshift @_, $invocant if defined $invocant;
+            $invocant = __PACKAGE__;
+        }
+        my $ms = shift;
+        croak 'with_timeout() requires a duration in milliseconds' unless defined $ms && $ms >= 0;
+        my $tok  = ( ref $_[0] eq 'Acme::Parataxis::CancellationToken' ) ? shift : undef;
+        my $code = shift;
+        croak 'with_timeout() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'with_timeout() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        if ( $tok && $tok->cancelled ) {    # the user already cancelled: fail without running the block
+            die Acme::Parataxis::Error::Cancelled->new;
+        }
+        state $have_token = do { require Acme::Parataxis::CancellationToken; 1; };
+        my $deadline = Acme::Parataxis::CancellationToken->new( kind => 'timeout' );
+        $tok = $deadline unless $tok;       # no explicit token: the deadline alone governs the block
+        my $child = fiber {
+            $deadline->register;
+            $tok->register if $tok ne $deadline;
+            my $val = eval { $code->() };
+            my $err = $@;
+            $deadline->unregister;
+            $tok->unregister if $tok ne $deadline;
+            die $err         if $err;                # the ::Timeout/::Cancelled throw (or any real error) unwinds out of the child
+            return $val;
+        };
+
+        # The block finished synchronously: the value (or an inline error, already rethrown by spawn) is final. Skipping
+        # the deadline also means a quick inlined block never pins its run.
+        if ( $child->is_done ) {
+            die $child->error if defined $child->error;
+            return $child->result;
+        }
+        if ( $ms > 0 && !$tok->cancelled ) {
+            fiber { await_sleep($ms); $deadline->cancel };    # deadline timer; the scheduler stays until its sleep fires
+        }
+        $child->await;    # rethrows the child's stored error (::Timeout, ::Cancelled, or anything else) in this fiber
+        return $child->result;
     }
 
     sub spawn {
@@ -298,7 +390,11 @@ package Acme::Parataxis v0.1.0 {
         if ( $status == 1 ) {
             Acme::Parataxis::_mark_done($fiber);
             my $err = $fiber->[F_ERROR];
-            die $err if defined $err;
+
+            # A scheduled fiber that dies unwinds the whole run *unless* it has an observer (an awaiting parent, an
+            # on_ready callback). With an observer the error is deliberately left for the observer to rethrow at the
+            # await/call site, which lets a cancelled wait surface to its own awaiter without killing the block (M1).
+            die $err if defined $err && !@{ $fiber->[F_CALLBACKS] || [] };
             return 1;
         }
         if ( $status == 0 ) {
@@ -365,7 +461,7 @@ package Acme::Parataxis v0.1.0 {
     sub stop () { $IS_RUNNING = 0 }
 
     sub new ( $class, %args ) {
-        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef ], $class;
+        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
         croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' if $fid < 0;
         $self->[F_FID] = $fid;
@@ -422,6 +518,7 @@ package Acme::Parataxis v0.1.0 {
         $self->[F_IS_DONE] = 1;
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             delete $PARKED{ $self->[F_FID] };
+            delete $PARK_REGS{ $self->[F_FID] };
             $self->[F_FID] = -1;
         }
     }
@@ -455,6 +552,7 @@ package Acme::Parataxis v0.1.0 {
             $self->[F_IS_DONE] = 1;
             my $old_fid = $self->[F_FID];
             delete $PARKED{$old_fid};
+            delete $PARK_REGS{$old_fid};
             $self->[F_FID] = -1;
             Acme::Parataxis::destroy_coro($old_fid);
             return 1;
@@ -484,12 +582,14 @@ package Acme::Parataxis v0.1.0 {
         my $ready = $self->[F_IS_READY];
         if ( !$ready ) {
             croak 'await() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
-            $self->[F_WAITER] = Acme::Parataxis->current_fid;
+            my $fid = Acme::Parataxis->current_fid;
+            $self->[F_WAITER] = $fid;
             $self->on_ready( \&_wake_waiter );
-            _park('fiber await');
+            _park( 'fiber await', 1, sub { $self->[F_WAITER] = undef if defined $self->[F_WAITER] && $self->[F_WAITER] == $fid } );
             $ready = $self->[F_IS_READY];
         }
         croak 'Future not ready' unless $ready;
+        die $self->[F_ERROR] if defined $self->[F_ERROR];
         $self->[F_RESULT];
     }
 
@@ -503,6 +603,7 @@ package Acme::Parataxis v0.1.0 {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             delete $PARKED{ $self->[F_FID] };
+            delete $PARK_REGS{ $self->[F_FID] };
             Acme::Parataxis::destroy_coro( $self->[F_FID] );
             $self->[F_FID] = -1;
         }

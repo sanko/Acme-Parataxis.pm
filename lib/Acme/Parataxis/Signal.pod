@@ -74,8 +74,8 @@ Returns the number of fibers (or callbacks) currently waiting on this signal. Re
     my $removed = $sig->remove_waiter($fid);       # by fiber id
     my $removed = $sig->remove_waiter(\&callback); # or by callback
 
-Unregister a fiber id or callback that is currently waiting on this signal. Returns the number of entries removed (0
-or 1). Consumes nothing: a remembered signal is left untouched and no callback is invoked. Removed fibers must be
+Unregister a fiber id or callback that is currently waiting on this signal. Returns the number of entries removed (0 or
+1). Consumes nothing: a remembered signal is left untouched and no callback is invoked. Removed fibers must be
 reclaimed by the caller (typically by destroying them).
 
 =head1 AUTHOR

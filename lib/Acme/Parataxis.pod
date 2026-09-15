@@ -188,6 +188,56 @@ the request to the thread pool and suspends the fiber until the result is ready.
         say "Background task handled by CPU core: $core";
     };
 
+=head1 Cancellation
+
+Cooperative cancellation is built on three pieces: a deadline helper (C<with_timeout>), a token you can hand out
+(C<Acme::Parataxis::CancellationToken>), and a pair of exceptions that both of them raise.
+
+=head2 C<with_timeout( $ms, [ $token, ] $code )>
+
+Runs C<$code> in a child fiber and makes sure it finishes within C<$ms> milliseconds. Calls from outside the scheduler
+croak. When the deadline trips, C<with_timeout> throws
+L<C<Acme::Parataxis::Error::Timeout>|Acme::Parataxis::Error::Timeout> in the calling fiber; the child fiber and
+anything it was blocked on are cleaned up and the scheduler keeps running.
+
+If you pass an optional L<C<Acme::Parataxis::CancellationToken>|Acme::Parataxis::CancellationToken>, that token can
+cancel the block early, in which case C<Acme::Parataxis::Error::Cancelled> is thrown instead. A pre-cancelled token
+fails fast without running C<$code> at all. With no token, the deadline alone is used; a bound of C<0> means no
+deadline.
+
+    async {
+        my $value = eval { with_timeout( 250, sub { $client->request } ) }
+            or die 'request timed out';
+
+        my $cancel = Acme::Parataxis::CancellationToken->new;
+        fiber { sleep 1; $cancel->cancel } ;
+        eval { with_timeout( 10_000, $cancel, sub { $worker->run } ) }
+            or die 'worker cancelled';
+    };
+
+=head2 C<Acme::Parataxis::CancellationToken>
+
+See L<Acme::Parataxis::CancellationToken>: C<register>, C<unregister>, C<cancel>, C<cancelled>, C<kind>, C<waiters>.
+
+=head2 What gets thrown
+
+Both C<with_timeout> and a cancelled token interrupt a blocking wait by throwing an exception into the parked fiber at
+its park site. The two classes, both subclasses of C<Acme::Parataxis::Error>, are:
+
+=over
+
+=item * L<C<Acme::Parataxis::Error::Timeout>|Acme::Parataxis::Error::Timeout> - kind C<'timeout'>, thrown when a
+deadline expires.
+
+=item * L<C<Acme::Parataxis::Error::Cancelled>|Acme::Parataxis::Error::Cancelled> - kind C<'cancelled'>, thrown when a
+token fires.
+
+=back
+
+Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reason, file, line ]> describing the wait
+that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is awaiting it no longer
+kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
+
 =head1 Scheduler Functions
 
 The following functions are the primary interface for the integrated cooperative scheduler.

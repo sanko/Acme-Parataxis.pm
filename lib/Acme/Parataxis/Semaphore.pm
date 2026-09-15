@@ -13,7 +13,7 @@ class Acme::Parataxis::Semaphore v0.1.0 {
             my $fid = Acme::Parataxis->current_fid;
             croak 'Semaphore waits must occur inside a scheduled fiber' if $fid < 0;
             push @waiters, $fid;
-            Acme::Parataxis::_park( $reason, $level );
+            Acme::Parataxis::_park( $reason, $level, sub { $self->remove_waiter($fid) } );
         }
         1;
     }

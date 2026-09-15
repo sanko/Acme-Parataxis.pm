@@ -51,7 +51,7 @@ class Acme::Parataxis::Future v0.1.0 {
         my $fid = Acme::Parataxis->current_fid;
         croak 'await() must be called from inside a scheduled fiber' if $fid < 0;
         push @waiters, $fid;
-        Acme::Parataxis::_park( 'Future await', 1 );
+        Acme::Parataxis::_park( 'Future await', 1, sub { $self->remove_waiter($fid) } );
         $self->result;
     }
 

@@ -1,0 +1,75 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Error - Base class for cancellable-wait diagnostics
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async with_timeout];
+
+    async {
+        my $caught = do {
+            my $t = eval { with_timeout( 250, sub { $slow->run } ) };
+            $@;
+        };
+        if ( $caught && $caught->isa('Acme::Parataxis::Error') ) {
+            say $caught->message;              # "The operation timed out after 0.25s at ..."
+            say $caught->kind;                 # 'timeout'
+            say join ',', @{ $caught->wait_reason };   # reason, file, line
+        }
+    };
+
+=head1 DESCRIPTION
+
+Base class for the exceptions interruption raises. When a fiber is parked in a blocking wait and something cancels it
+(a C<with_timeout> deadline or a cancellation token), the wait re-enters and throws before the intended call runs. The
+thrown object is a subclass of C<Acme::Parataxis::Error>, so C<isa('Acme::Parataxis::Error')> catches both flavors;
+stringify it to get the human-readable message.
+
+=head1 SUBCLASSES
+
+=head2 Acme::Parataxis::Error::Cancelled
+
+Kind C<'cancelled'>. Constructed with C<< Acme::Parataxis::Error::Cancelled->new(%args) >> and thrown from a wait that
+a C<Acme::Parataxis::CancellationToken> cancelled.
+
+=head2 Acme::Parataxis::Error::Timeout
+
+Kind C<'timeout'>. Thrown when a C<with_timeout> deadline fires. Carries an extra C<seconds()> accessor with the
+individual wait's bound. An ordinary C<die> inside the timed-out block is B<not> converted to this; it propagates
+unchanged.
+
+=head1 METHODS
+
+=head2 C<message( )>
+
+The rendered message, e.g. C<"The operation timed out after 0.25s at Semaphore down (foo.pl line 9)">.
+
+=head2 C<kind( )>
+
+The machine-readable discriminator, C<'cancelled'> or C<'timeout'>.
+
+=head2 C<wait_reason( )>
+
+The C<[ reason, file, line ]> triple the interrupted wait parked with (the same value available on a fiber via
+C<wait_reason>). May be undef if the wait did not record one.
+
+=head2 C<seconds( )>
+
+C<Error::Timeout> only: the bound, in seconds, of the wait whose deadline fired.
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+
+=cut

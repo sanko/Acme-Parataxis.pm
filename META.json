@@ -70,8 +70,24 @@
          "file" : "lib/Acme/Parataxis.pm",
          "version" : "v0.1.0"
       },
+      "Acme::Parataxis::CancellationToken" : {
+         "file" : "lib/Acme/Parataxis/CancellationToken.pm",
+         "version" : "v0.1.0"
+      },
       "Acme::Parataxis::Channel" : {
          "file" : "lib/Acme/Parataxis/Channel.pm",
+         "version" : "v0.1.0"
+      },
+      "Acme::Parataxis::Error" : {
+         "file" : "lib/Acme/Parataxis/Error.pm",
+         "version" : "v0.1.0"
+      },
+      "Acme::Parataxis::Error::Cancelled" : {
+         "file" : "lib/Acme/Parataxis/Error.pm",
+         "version" : "v0.1.0"
+      },
+      "Acme::Parataxis::Error::Timeout" : {
+         "file" : "lib/Acme/Parataxis/Error.pm",
          "version" : "v0.1.0"
       },
       "Acme::Parataxis::Future" : {

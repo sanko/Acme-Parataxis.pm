@@ -44,7 +44,7 @@ class Acme::Parataxis::Signal v0.1.0 {
         my $fid = Acme::Parataxis->current_fid;
         croak 'Signal waits must occur inside a scheduled fiber' if $fid < 0;
         push @waiters, $fid;
-        Acme::Parataxis::_park( 'Signal wait', 1 );
+        Acme::Parataxis::_park( 'Signal wait', 1, sub { $self->remove_waiter($fid) } );
         return;
     }
     method awaited { return scalar @waiters }    # 0 when nobody is waiting

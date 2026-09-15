@@ -1,0 +1,78 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::CancellationToken - A cooperative cancellation token for fibers
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber await_sleep with_timeout];
+    use Acme::Parataxis::CancellationToken;
+
+    my $cancel = Acme::Parataxis::CancellationToken->new;
+
+    async {
+        fiber { await_sleep(100); $cancel->cancel };
+        eval { with_timeout( 10_000, $cancel, sub { $slow->run } ) }
+            or die 'cancelled';
+    };
+
+=head1 DESCRIPTION
+
+A token that any fiber can use to interrupt one-shot waits (mostly C<with_timeout>). A fiber registers for cancellation
+with C<register>, parks in a blocking wait, and if someone C<cancel>s while it is parked, the wait throws
+C<Acme::Parataxis::Error::Cancelled> at the park site. The token is idempotent: once cancelled, it stays cancelled, and
+a fiber that registers against an already-cancelled token has its very next park interrupted immediately.
+
+=head1 METHODS
+
+=head2 C<new( [ kind =E<gt> 'cancel' ] )>
+
+Creates a token. The C<kind> option selects which error interrupting the token's waiters throws; it exists so the
+internal deadline token behind C<with_timeout> can raise C<Acme::Parataxis::Error::Timeout> instead of
+C<Error::Cancelled>. You almost always want the default.
+
+=head2 C<register( )>
+
+Registers the currently running fiber with the token, returning its fiber id. Re-registering the same fiber is safe and
+deduplicated. Croaks outside the scheduler. If the token is already cancelled, registration marks the current fiber for
+an immediate interrupt instead, so its next park aborts; this keeps "did I win the race?" turns into an error rather
+than a deadlock.
+
+=head2 C<unregister( )>
+
+Removes the currently running fiber from the token, returning its fiber id. Safe to call any number of times. Do this
+after a wait completes normally if you want a later C<cancel> to leave the fiber alone.
+
+=head2 C<cancel( )>
+
+Flips the token to the cancelled state and interrupts every registered fiber that is currently parked, waking each with
+C<Acme::Parataxis::Error::Cancelled>. Returns true on the first call and C<false> afterwards - cancelling is
+idempotent.
+
+=head2 C<cancelled( )>
+
+Returns true once the token has been cancelled.
+
+=head2 C<kind( )>
+
+Returns the error kind the token raises, C<'cancel'> by default.
+
+=head2 C<waiters( )>
+
+Returns the number of fibers currently registered with the token.
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+
+=cut
