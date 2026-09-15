@@ -1,0 +1,66 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Local - A per-fiber storage slot
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Local;
+
+    my $request_id = Acme::Parataxis::Local->new;
+
+    async {
+        $request_id->set(42);
+        fiber { $request_id->set(99); say $request_id->get };   # 99
+        say $request_id->get;                                   # 42
+    };
+
+=head1 DESCRIPTION
+
+A named value slot that reads differently depending on which fiber asks. Fibers never see
+each other's values: a child won't see what its parent wrote, and siblings can't clobber
+one another. This is the opposite of C<local>: the value follows the fiber, not the
+dynamic call stack.
+
+It is designed for ambient, fiber-scoped state that must not leak sideways - tracing ids,
+span context, a database handle chosen per fiber - with no changes to the scheduler or C
+code. Each C<Local> object is one logical variable; create as many as you need.
+
+=head1 METHODS
+
+=head2 C<new( [ default =E<gt> $default ] )>
+
+Creates a slot. A single C<Local> object can be referenced from any number of fibers; each
+fiber holds its own copy. The optional C<default> is what C<get> returns until that fiber
+writes (explicitly, setting C<undef> counts as writing).
+
+=head2 C<get()>
+
+Returns the calling fiber's value for this slot: the value C<set> wrote for it, or the
+C<default> if it never wrote. Croaks outside a scheduled fiber.
+
+=head2 C<set( $value )>
+
+Writes the calling fiber's value for this slot and returns it. Croaks outside a scheduled
+fiber.
+
+=head1 HOW IT WORKS
+
+Values live in a stash keyed by the fiber B<object> (not its id, see below), pruned the
+moment a fiber is observed done or its object is destroyed. No scheduler or C changes are
+required.
+
+=head1 AUTHORS
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.

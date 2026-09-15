@@ -23,6 +23,7 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 - Cancellation tokens: `Acme::Parataxis::CancellationToken` lets any fiber register for cooperative cancellation. `cancel` is idempotent and interrupts every parked, registered fiber by throwing `Acme::Parataxis::Error::Cancelled` at the park site; a fiber registered against an already-cancelled token has its next park aborted immediately, and `unregister` opts a fiber back out.
 - `with_timeout( $ms, [ $token, ] $code )`: runs a block as a child fiber and throws `Acme::Parataxis::Error::Timeout` in the caller if it doesn't finish in time, cleaning up the child and anything it was blocked on while the scheduler keeps running. An optional token cancels the block early (`Error::Cancelled`); a pre-cancelled token fails fast; a bound of `0` means no deadline.
 - `Acme::Parataxis::Error`, `Acme::Parataxis::Error::Cancelled`, and `Acme::Parataxis::Error::Timeout`: the exceptions interruption throws, with `message`/`kind` and the `wait_reason` of the interrupted wait.
+- `Acme::Parataxis::Local`: per-fiber storage slots for ambient state that must not leak across fibers (tracing ids, span context, per-fiber handles). Each `Local` is one slot; values are isolated per fiber, survive `yield`/`await`, and are released with their fiber, with no scheduler or C changes needed.
 
 ### Fixed
 

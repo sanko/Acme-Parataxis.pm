@@ -10,6 +10,7 @@ package Acme::Parataxis v0.1.0 {
     use Time::HiRes    qw[usleep];
     use Exporter       qw[import];
     use Carp           qw[croak];
+    use Scalar::Util   qw[refaddr];
     use Acme::Parataxis::Error;
     our %EXPORT_TAGS = (
         all => [
@@ -28,8 +29,9 @@ package Acme::Parataxis v0.1.0 {
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
-    my %PARKED;       # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
-    my %PARK_REGS;    # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
+    my %PARKED;           # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
+    my %PARK_REGS;        # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
+    our %FIBER_LOCALS;    # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -197,6 +199,12 @@ package Acme::Parataxis v0.1.0 {
         $fiber->[F_WAKE_HOOKS] = undef;
         if ($hooks) { $_->($fiber) for @$hooks }
     }
+
+    # The per-fiber stash behind Acme::Parataxis::Local, created lazily. Keyed by the fiber OBJECT (not its fid):
+    # a spawned fiber that finishes inline has its fid recycled in C with no Perl-side completion hook, so a fid key
+    # would survive into the recycled id and leak state into the next fiber. The object is the fiber's identity for
+    # as long as it lives; entries are pruned where the object's fid is released (_mark_done, is_done) and on DESTROY.
+    sub _fiber_locals ($fiber) { return $FIBER_LOCALS{ refaddr($fiber) } //= {} }
 
     sub on_wake {
         my $invocant = shift;
@@ -519,6 +527,7 @@ package Acme::Parataxis v0.1.0 {
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             delete $PARKED{ $self->[F_FID] };
             delete $PARK_REGS{ $self->[F_FID] };
+            delete $FIBER_LOCALS{ refaddr($self) };
             $self->[F_FID] = -1;
         }
     }
@@ -547,12 +556,16 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub is_done ($self) {
-        return 1 if $self->[F_IS_DONE];
+        if ( $self->[F_IS_DONE] ) {
+            delete $FIBER_LOCALS{ refaddr($self) };
+            return 1;
+        }
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 && Acme::Parataxis::is_finished( $self->[F_FID] ) ) {
             $self->[F_IS_DONE] = 1;
             my $old_fid = $self->[F_FID];
             delete $PARKED{$old_fid};
             delete $PARK_REGS{$old_fid};
+            delete $FIBER_LOCALS{ refaddr($self) };
             $self->[F_FID] = -1;
             Acme::Parataxis::destroy_coro($old_fid);
             return 1;
@@ -589,6 +602,7 @@ package Acme::Parataxis v0.1.0 {
             $ready = $self->[F_IS_READY];
         }
         croak 'Future not ready' unless $ready;
+        delete $FIBER_LOCALS{ refaddr($self) };    # the fiber is done now; its locals die with it (no-op for Futures)
         die $self->[F_ERROR] if defined $self->[F_ERROR];
         $self->[F_RESULT];
     }
@@ -601,6 +615,7 @@ package Acme::Parataxis v0.1.0 {
 
     sub DESTROY($self) {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        delete $FIBER_LOCALS{ refaddr($self) };
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             delete $PARKED{ $self->[F_FID] };
             delete $PARK_REGS{ $self->[F_FID] };

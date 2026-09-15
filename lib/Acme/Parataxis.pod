@@ -291,6 +291,19 @@ completes, and is cleared afterwards.
         await_sleep(500);
     };
 
+=head2 Fiber-local storage
+
+See L<Acme::Parataxis::Local>. A C<Local> object is one per-fiber slot: each fiber reads and writes its own copy,
+isolated from siblings and the main fiber, and the value is untouched by C<yield> or C<await>. It follows the fiber,
+not the dynamic scope.
+
+    my $span = Acme::Parataxis::Local->new;
+    async {
+        $span->set('request-121');
+        fiber { say $span->get };   # undef/default - a new fiber starts empty
+        say $span->get;             # 'request-121'
+    };
+
 Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
 the fiber. If the fiber is never actually parked, the hook is silently dropped.
 
