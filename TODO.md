@@ -12,7 +12,7 @@ A milestone's status line names the commit where it landed on `dev`.
 | Milestone | Status | Landed | Tests |
 | --- | --- | --- | --- |
 | M0 — waiter removal, wait_reason, on_wake | [x] done | `7a57be5` | t/031, t/032 |
-| **M1 — cancellation tokens & with_timeout** | **[x] done** | **`87459cd`** | **t/033, t/034** |
+| **M1 — cancellation tokens & with_timeout** | **[x] done** | **`a9713df`** | **t/033, t/034** |
 | M2 — fiber-local storage | [x] done | `4540ed0` | t/035 |
 | M3 — Sync family (WaitGroup/Mutex/Barrier/Once) | next | — | — |
 | M4 — Nursery (structured concurrency) | next | — | — |
@@ -69,7 +69,7 @@ fibers is fine. Do not destroy mid-park fibers until [M4] needs it; tests that a
 waiter keep the parked fiber's object alive until global destruction instead
 (`cleanup()` reaps them; keep parked fibers in a `@parked` stash).
 
-## Milestone 1 — Cancellation tokens & `with_timeout` (`[x] done`, `87459cd`)
+## Milestone 1 — Cancellation tokens & `with_timeout` (`[x] done`, `a9713df`)
 
 Landed: `Acme::Parataxis::CancellationToken`, `with_timeout`, `Acme::Parataxis::Error`
 (+ `::Cancelled`, `::Timeout`), the per-fiber `F_INTERRUPT` slot, `%PARK_REGS` dereg
