@@ -229,6 +229,21 @@ queued immediately moves it to its new position in the run queue.
 Tells the scheduler to exit the loop after the current iteration. Note that this does not immediately terminate other
 fibers; it simply prevents the scheduler from starting new ones.
 
+=head2 C<on_wake( $code )>
+
+Register a callback to run the next time the current fiber is resumed from a blocking wait. The callback receives the
+fiber object as its only argument. Call it immediately before the call that will block the fiber (C<await_sleep>, a
+semaphore C<down>, C<Signal-E<gt>wait>, a Channel C<get>/C<put>, an C<await>); it fires exactly once, when that wait
+completes, and is cleared afterwards.
+
+    fiber {
+        Acme::Parataxis->on_wake(sub ($f) { say "Woke up! fid=" . $f->fid });
+        await_sleep(500);
+    };
+
+Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
+the fiber. If the fiber is never actually parked, the hook is silently dropped.
+
 =head1 Thread Pool Configuration
 
 C<Acme::Parataxis> uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
@@ -311,6 +326,18 @@ Returns the unique numeric ID of the fiber object.
 
 Returns true if the fiber has finished execution (either by returning or dying). Once a fiber is done, its internal ID
 is released and it can no longer be called.
+
+=head2 C<< $fiber->wait_reason() >>
+
+While a fiber is suspended inside a blocking wait (C<await_sleep>, C<await>, C<await_read>, a semaphore C<down>, a
+C<Signal-E<gt>wait>, a Channel C<get>/C<put>, or a busy C<wait> for a child), returns a 3-element arrayref recording
+how it parked: C<[ $reason, $file, $line ]> where C<$reason> is a short label and C<$file>/C<$line> are the caller's
+location that entered the wait. Returns C<undef> for a fiber that is running, finished, or merely cooperatively
+yielded.
+
+    my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42 ]
+
+This is read-only diagnostic metadata; workers waiting on the same primitive are unaffected by it.
 
 =head1 Integrating with Synchronous Code
 

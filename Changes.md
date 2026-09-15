@@ -19,6 +19,7 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 - `Acme::Parataxis::Future`: a one-shot placeholder for an eventual computation result. A producer fires `set_result`/`set_error` exactly once; consumers pick it up with `await`/`result` or register an `on_ready` callback.
 - `Acme::Parataxis::Semaphore`: a counting semaphore with no ownership: blocked fibers are parked (no busy-wait) and resumed FIFO as permits become available.
 - `Acme::Parataxis::Signal`: a two-state flag with a FIFO queue of waiters. `send` latches the signal so a later `wait` consumes it immediately, while `broadcast` wakes every queued waiter at once (and drops if nobody is waiting).
+- Waiter introspection and removal (the foundation for cancellation): blocking waits now park through a single `_park`/`_resume_hooks` path that records a `wait_reason` (a label plus the calling file/line, readable via `$fiber->wait_reason`) and fires `on_wake` hooks exactly once when a parked fiber is resumed. `Semaphore`, `Signal`, `Future`, and `Channel` each gained `remove_waiter` to un-register a parked waiter.
 
 ### Fixed
 

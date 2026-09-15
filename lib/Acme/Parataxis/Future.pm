@@ -51,8 +51,14 @@ class Acme::Parataxis::Future v0.1.0 {
         my $fid = Acme::Parataxis->current_fid;
         croak 'await() must be called from inside a scheduled fiber' if $fid < 0;
         push @waiters, $fid;
-        Acme::Parataxis->yield('WAITING');
+        Acme::Parataxis::_park( 'Future await', 1 );
         $self->result;
+    }
+
+    method remove_waiter ($fid) {    # Unregisters a parked fiber id so a later set_result/set_error will not wake it.
+        my $before = @waiters;
+        @waiters = grep { $_ != $fid } @waiters;
+        return $before - @waiters;
     }
 
     method _wake_waiters () {

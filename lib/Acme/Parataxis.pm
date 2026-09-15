@@ -16,7 +16,7 @@ package Acme::Parataxis v0.1.0 {
                 = qw[
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
-                current_fid tid root maybe_yield
+                current_fid tid root maybe_yield on_wake
                 set_max_threads max_threads
                 ]
         ]
@@ -27,6 +27,7 @@ package Acme::Parataxis v0.1.0 {
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
+    my %PARKED;    # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -40,7 +41,9 @@ package Acme::Parataxis v0.1.0 {
         F_CALLBACKS   => 6,
         F_WAITER      => 7,
         F_LAST_STATUS => 8,
-        F_PRIORITY    => 9
+        F_PRIORITY    => 9,
+        F_WAIT_REASON => 10,
+        F_WAKE_HOOKS  => 11
     };
 
     # Scheduler run queue.  Kept sorted by descending priority (stable for
@@ -134,6 +137,44 @@ package Acme::Parataxis v0.1.0 {
         return ( ref $result eq 'ARRAY' ) ? ( wantarray ? @$result : $result->[-1] ) : $result;
     }
 
+    # Park the current fiber in a blocking wait, recording why and where (for diagnostics and M1 cancellation).
+    # $level is the caller stack depth (relative to _park) of the *user* frame whose location should be attributed:
+    # 1 for direct wait sites, 2 for a Semaphore down(), 3 for a Channel get()/put().
+    sub _park ( $reason, $level = 1 ) {
+        my $fid = Acme::Parataxis->current_fid;
+        croak '_park() must be called from inside a scheduled fiber' if $fid < 0;
+        my $fiber = Acme::Parataxis->by_id($fid);
+        return unless $fiber;    # already finished; nothing to park
+        my ( $file, $line ) = ( caller($level) )[ 1, 2 ];
+        $fiber->[F_WAIT_REASON] = [ $reason, $file, $line ];
+        $PARKED{$fid} = 1;
+        return yield('WAITING');
+    }
+
+    # Runs once when a fiber is resumed from a parked state: clear the parked bookkeeping and fire on_wake hooks.
+    sub _resume_hooks ($fiber) {
+        return unless delete $PARKED{ $fiber->[F_FID] };
+        $fiber->[F_WAIT_REASON] = undef;
+        my $hooks = $fiber->[F_WAKE_HOOKS];
+        $fiber->[F_WAKE_HOOKS] = undef;
+        if ($hooks) { $_->($fiber) for @$hooks }
+    }
+
+    sub on_wake {
+        my $invocant = shift;
+        if ( !defined $invocant ||
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
+            unshift @_, $invocant if defined $invocant;
+            $invocant = __PACKAGE__;
+        }
+        my $code = shift;
+        croak 'on_wake() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        croak 'on_wake() requires a CODE ref' unless ref $code eq 'CODE';
+        my $fiber = Acme::Parataxis->by_id( Acme::Parataxis->current_fid );
+        push @{ $fiber->[F_WAKE_HOOKS] }, $code;
+        return $code;
+    }
+
     sub spawn {
         my ( $class, $code ) = @_;
         if ( ref $class eq 'CODE' ) {
@@ -174,7 +215,7 @@ package Acme::Parataxis v0.1.0 {
         }
         my $ms = shift // 0;
         _submit_job( 0, $ms, 0 );
-        return yield('WAITING');
+        return _park('await_sleep');
     }
 
     sub await_core_id {
@@ -184,7 +225,7 @@ package Acme::Parataxis v0.1.0 {
             unshift @_, $invocant if defined $invocant;
         }
         _submit_job( 1, 0, 0 );
-        return yield('WAITING');
+        return _park('await_core_id');
     }
 
     sub await_read {
@@ -199,7 +240,7 @@ package Acme::Parataxis v0.1.0 {
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
         _submit_job( 2, $handle, $timeout );
-        return yield('WAITING');
+        return _park('await_read');
     }
 
     sub await_write {
@@ -214,7 +255,7 @@ package Acme::Parataxis v0.1.0 {
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
         _submit_job( 3, $handle, $timeout );
-        return yield('WAITING');
+        return _park('await_write');
     }
 
     sub maybe_yield {
@@ -292,6 +333,7 @@ package Acme::Parataxis v0.1.0 {
                 my ( $fid, $res ) = @$ready;
                 my $fiber = __PACKAGE__->by_id($fid);
                 next unless $fiber;
+                _resume_hooks($fiber);
                 my $yield_val = $fiber->call($res);
                 if ( defined $fiber && !$fiber->is_done ) {
                     _enqueue($fiber) unless defined $yield_val && $yield_val eq 'WAITING';
@@ -303,6 +345,7 @@ package Acme::Parataxis v0.1.0 {
                 %SCHEDULER_QUEUED = ();
                 for my $current (@work) {
                     next unless $current;
+                    _resume_hooks($current);
                     _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
                 }
             }
@@ -322,7 +365,7 @@ package Acme::Parataxis v0.1.0 {
     sub stop () { $IS_RUNNING = 0 }
 
     sub new ( $class, %args ) {
-        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0 ], $class;
+        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
         croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' if $fid < 0;
         $self->[F_FID] = $fid;
@@ -378,6 +421,7 @@ package Acme::Parataxis v0.1.0 {
         return if $self->[F_IS_DONE];
         $self->[F_IS_DONE] = 1;
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
+            delete $PARKED{ $self->[F_FID] };
             $self->[F_FID] = -1;
         }
     }
@@ -410,18 +454,24 @@ package Acme::Parataxis v0.1.0 {
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 && Acme::Parataxis::is_finished( $self->[F_FID] ) ) {
             $self->[F_IS_DONE] = 1;
             my $old_fid = $self->[F_FID];
+            delete $PARKED{$old_fid};
             $self->[F_FID] = -1;
             Acme::Parataxis::destroy_coro($old_fid);
             return 1;
         }
         return 0;
     }
+    sub wait_reason ($self) { $self->[F_WAIT_REASON] }    # [reason, file, line] while parked, undef otherwise
 
     sub wait ($self) {
         if ( !$self->is_done && Acme::Parataxis->current_fid < 0 ) {
             croak 'wait() must be called from inside the scheduler, or the fiber must already be done';
         }
+        my $fid    = Acme::Parataxis->current_fid;
+        my $waiter = $fid >= 0 ? Acme::Parataxis->by_id($fid) : undef;    # the fiber doing the busy-wait
+        $waiter->[F_WAIT_REASON] = [ 'fiber wait', (caller)[ 1, 2 ] ] if $waiter;
         Acme::Parataxis->yield('WAITING_FOR_CHILD') until $self->is_done;
+        $waiter->[F_WAIT_REASON] = undef if $waiter;
         return _result($self);
     }
 
@@ -436,7 +486,7 @@ package Acme::Parataxis v0.1.0 {
             croak 'await() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
             $self->[F_WAITER] = Acme::Parataxis->current_fid;
             $self->on_ready( \&_wake_waiter );
-            Acme::Parataxis->yield('WAITING');
+            _park('fiber await');
             $ready = $self->[F_IS_READY];
         }
         croak 'Future not ready' unless $ready;
@@ -452,6 +502,7 @@ package Acme::Parataxis v0.1.0 {
     sub DESTROY($self) {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
+            delete $PARKED{ $self->[F_FID] };
             Acme::Parataxis::destroy_coro( $self->[F_FID] );
             $self->[F_FID] = -1;
         }

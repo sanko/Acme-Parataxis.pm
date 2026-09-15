@@ -44,10 +44,23 @@ class Acme::Parataxis::Signal v0.1.0 {
         my $fid = Acme::Parataxis->current_fid;
         croak 'Signal waits must occur inside a scheduled fiber' if $fid < 0;
         push @waiters, $fid;
-        Acme::Parataxis->yield('WAITING');
+        Acme::Parataxis::_park( 'Signal wait', 1 );
         return;
     }
     method awaited { return scalar @waiters }    # 0 when nobody is waiting
+
+    method _same_waiter ( $a, $b ) {             # Identity comparison for fiber ids and callback coderefs
+        if ( ref $a eq 'CODE' || ref $b eq 'CODE' ) {
+            return ref $a eq ref $b && $a == $b;
+        }
+        return $a == $b;
+    }
+
+    method remove_waiter ($waiter) {             # Unregisters a fiber id or callback; consumes nothing and never calls a callback.
+        my $before = @waiters;
+        @waiters = grep { !$self->_same_waiter( $_, $waiter ) } @waiters;
+        return $before - @waiters;
+    }
 };
 #
 1;

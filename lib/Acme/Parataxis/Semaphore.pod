@@ -72,6 +72,14 @@ positive. This is useful for bulk-release scenarios, such as unblocking a channe
 Block until a permit is available. This is equivalent to C<down> but is named for consistency with other
 C<Acme::Parataxis> synchronization primitives.
 
+=head2 C<remove_waiter( $fid )>
+
+    my $removed = $sem->remove_waiter($fid);
+
+Unregister a fiber that is currently blocked in C<down>/C<wait> on this semaphore. Returns the number of entries
+removed (0 or 1). A removed waiter is never woken by a later C<up>/C<adjust>; the caller takes responsibility for
+reclaiming that fiber (typically by destroying it).
+
 =head2 C<guard>
 
     my $guard = $sem->guard( );

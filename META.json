@@ -90,7 +90,7 @@
          "version" : "v0.1.0"
       }
    },
-   "release_status" : "stable",
+   "release_status" : "testing",
    "resources" : {
       "bugtracker" : {
          "web" : "https://github.com/sanko/Acme-Parataxis.pm/issues"

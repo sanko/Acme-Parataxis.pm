@@ -74,6 +74,14 @@ Adjust the channel capacity by C<$diff>. This can be used to grow or shrink the 
 Shut down the channel by releasing a large number of permits on the internal get semaphore. This unblocks any fibers
 waiting on C<get( )>, allowing them to drain remaining items.
 
+=head2 C<remove_waiter( $fid )>
+
+    my $removed = $ch->remove_waiter($fid);
+
+Unregister a fiber that is currently blocked in C<get>/C<put>. Returns the total number of waiter entries removed
+across both internal semaphores (0, 1, or 2). A removed waiter is never woken by a later C<put>/C<get>/C<shutdown>; the
+caller takes responsibility for reclaiming that fiber (typically by destroying it).
+
 =head1 AUTHOR
 
 Sanko Robinson L<https://github.com/sanko>

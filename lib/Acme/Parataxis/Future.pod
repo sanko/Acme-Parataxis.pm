@@ -94,6 +94,14 @@ Must be called from inside a running fiber (that is, while the C<Acme::Parataxis
 not-yet-ready future from the mainline will croak. Multiple fibers may await the same future at once; each is resumed
 when it becomes ready.
 
+=head2 C<remove_waiter( $fid )>
+
+    my $removed = $future->remove_waiter($fid);
+
+Unregister a fiber that is currently awaiting this future so a later C<set_result>/C<set_error> will not wake it.
+Returns the number of entries removed (0 or 1). Removed fibers must be reclaimed by the caller (typically by destroying
+them).
+
 =head1 AUTHOR
 
 Sanko Robinson L<https://github.com/sanko>

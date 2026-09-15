@@ -12,20 +12,24 @@ class Acme::Parataxis::Channel v0.1.0 {
     }
 
     method put ($value) {
-        $sem_put->down;
+        $sem_put->down( 'Channel put', 3 );
         push @data, $value;
         $sem_get->up;
         1;
     }
 
     method get () {
-        $sem_get->down;
+        $sem_get->down( 'Channel get', 3 );
         $sem_put->up;
         shift @data;
     }
     method size ()        { scalar @data }
     method shutdown ()    { $sem_get->adjust(1_000_000_000); 1 }
     method adjust ($diff) { $sem_put->adjust($diff) }
+
+    method remove_waiter ($fid) {    # Unregisters the fiber from any internal wait queue; returns the number of entries removed.
+        $sem_get->remove_waiter($fid) + $sem_put->remove_waiter($fid);
+    }
 };
 #
 1;
