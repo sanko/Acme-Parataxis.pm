@@ -190,14 +190,27 @@ package Acme::Parataxis v0.1.0 {
     sub fiber : prototype(&) ($code) { spawn( __PACKAGE__, $code ) }
     sub async : prototype(&) ($code) { return run($code) }
 
+    # Index at which user arguments start in @_: 0 when it is a plain call, 1 when $_[0] is a self (package name or
+    # blessed object). This mirrors the shift/unshift invocant dance used elsewhere, but reads $_[0] instead of
+    # shifting, so calling it never reifies the caller's pad @_. A reified @_ left behind in a parked frame trips
+    # pp_entersub's assert(!AvREAL(av))/assert(AvFILLp(av) == -1) when a different fiber later enters the same sub at
+    # the same depth.
+    sub _arg_offset {
+        my $self = $_[0];
+        return ( defined $self
+                && ( ( ref $self || $self ) eq __PACKAGE__ || ( builtin::blessed($self) && $self->isa(__PACKAGE__) ) ) ) ? 1
+                : 0;
+    }
+
     sub yield {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-            $invocant = __PACKAGE__;
+        my $is_self = _arg_offset( $_[0] );
+        my @deposit;
+        push @deposit, $_[$_] for ( $is_self ? 1 : 0 ) .. $#_;
+        if ( !$is_self && @deposit && !defined $deposit[0] ) {
+            shift @deposit;
         }
-        my $result = coro_yield( \@_ );
+        @_ = ();
+        my $result = coro_yield( \@deposit );
         return unless defined $result;
         return ( ref $result eq 'ARRAY' ) ? ( wantarray ? @$result : $result->[-1] ) : $result;
     }
@@ -315,18 +328,22 @@ package Acme::Parataxis v0.1.0 {
     # interrupted) teardown recalls the timer's armed sleep and the worker is freed instead of staying occupied for
     # the whole bound; the timer is not armed at all when the block finishes inline (never parks) or when $ms is 0.
     sub with_timeout {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-            $invocant = __PACKAGE__;
-        }
-        my $ms = shift;
+        my $o  = _arg_offset( $_[0] );
+        $o++ if $o == 0 && !defined $_[0];
+        my $ms = $_[$o];
         croak 'with_timeout() requires a duration in milliseconds' unless defined $ms && $ms >= 0;
-        my $tok  = ( ref $_[0] eq 'Acme::Parataxis::CancellationToken' ) ? shift : undef;
-        my $code = shift;
+        my $tok;
+        my $code;
+        if ( ref $_[ $o + 1 ] eq 'Acme::Parataxis::CancellationToken' ) {
+            $tok  = $_[ $o + 1 ];
+            $code = $_[ $o + 2 ];
+        }
+        else {
+            $code = $_[ $o + 1 ];
+        }
         croak 'with_timeout() requires a CODE ref' unless ref $code eq 'CODE';
         croak 'with_timeout() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        @_ = ();
         if ( $tok && $tok->cancelled ) {    # the user already cancelled: fail without running the block
             die Acme::Parataxis::Error::Cancelled->new;
         }
@@ -415,15 +432,12 @@ package Acme::Parataxis v0.1.0 {
     # the scheduler and is aggregated as Acme::Parataxis::Error::Nursery rather than thrown here.
     # If $code itself dies, its children are cancelled and drained before its error is rethrown.
     sub nursery {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-            $invocant = __PACKAGE__;
-        }
-        my $code = shift;
+        my $o  = _arg_offset( $_[0] );
+        $o++ if $o == 0 && !defined $_[0];
+        my $code = $_[$o];
         croak 'nursery() requires a CODE ref' unless ref $code eq 'CODE';
         croak 'nursery() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        @_ = ();
         state $have_nursery = do { require Acme::Parataxis::Nursery; 1 };
         my $nursery = Acme::Parataxis::Nursery->new;
         my $rv;
@@ -444,11 +458,16 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub spawn {
-        my ( $class, $code ) = @_;
+        my $class = $_[0];
+        my $code;
         if ( ref $class eq 'CODE' ) {
             $code  = $class;
             $class = __PACKAGE__;
         }
+        else {
+            $code = $_[1];
+        }
+        @_ = ();
         my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
         croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' unless $fiber && ref $fiber;
         my $status = $fiber->[F_LAST_STATUS];
@@ -476,34 +495,26 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub await_sleep {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-        }
-        my $ms = shift // 0;
+        my $o  = _arg_offset( $_[0] );
+        $o++ if $o == 0 && !defined $_[0];
+        my $ms = $_[$o] // 0;
+        @_ = ();
         _submit_job( 0, $ms, 0 );
         return _park('await_sleep');
     }
 
     sub await_core_id {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-        }
+        @_ = ();
         _submit_job( 1, 0, 0 );
         return _park('await_core_id');
     }
 
     sub await_read {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-        }
-        my ( $fh, $timeout ) = @_;
-        $timeout //= 5000;
+        my $o  = _arg_offset( $_[0] );
+        $o++ if $o == 0 && !defined $_[0];
+        my $fh      = $_[$o];
+        my $timeout = $_[ $o + 1 ] // 5000;
+        @_ = ();
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
@@ -512,13 +523,11 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub await_write {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-        }
-        my ( $fh, $timeout ) = @_;
-        $timeout //= 5000;
+        my $o  = _arg_offset( $_[0] );
+        $o++ if $o == 0 && !defined $_[0];
+        my $fh      = $_[$o];
+        my $timeout = $_[ $o + 1 ] // 5000;
+        @_ = ();
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
@@ -527,11 +536,7 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub maybe_yield {
-        my $invocant = shift;
-        if ( !defined $invocant ||
-            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
-            unshift @_, $invocant if defined $invocant;
-        }
+        @_ = ();
         my $result = Acme::Parataxis::_maybe_yield();
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];
