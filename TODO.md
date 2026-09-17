@@ -63,12 +63,14 @@ A milestone's status line names the commit where it landed on `dev`.
       `on_wake` (hooks fire exactly once on resume from a park; guarded by `%PARKED` so
       cooperative `yield` does not fire them).
 
-**Known boundary (pre-existing, still open):** destroying a fiber that is *currently
-parked* (suspended inside `yield('WAITING')`) then allocating a new fiber crashes the
-process (reproduced against pristine HEAD; 0xC0000005 on teardown). Destroying *finished*
-fibers is fine. Do not destroy mid-park fibers until [M4] needs it; tests that abandon a
-waiter keep the parked fiber's object alive until global destruction instead
-(`cleanup()` reaps them; keep parked fibers in a `@parked` stash).
+**Known boundary (fixed):** destroying a fiber that is *currently parked* (suspended
+inside `yield('WAITING')`) then allocating a new fiber used to crash the process
+(reproduced against pristine HEAD; 0xC0000005 — the parked fiber's live activation
+slots in shared PadLists / the global CvDEPTH counters were freed, corrupting the next
+fiber that entered the same sub). `destroy_coro` now skips the unsafe pad unwalk when
+the fiber's context stack is not exhausted (`si_cxix < 0`), making destroy-while-parked
+safe (t/046). Tests that abandon a parked waiter keep the fiber's object alive until
+global destruction anyway, via `cleanup()` and the `@parked` stash.
 
 ## Milestone 1 — Cancellation tokens & `with_timeout` (`[x] done`, `a9713df`)
 
@@ -225,7 +227,9 @@ Landed: `Acme::Parataxis::Nursery` (new file), `nursery()` in Parataxis.pm,
 t/040 (10 subtests) and t/042 (3 subtests: R2 re-park regression). The M1 interrupt
 machinery is what makes teardown safe: an aborted child that is still parked is
 interrupted (not destroyed mid-park), unwinds and dies from inside its own resume — so the
-M0 "do not destroy mid-park fibers" crash is sidestepped, not fixed.
+M0 "do not destroy mid-park fibers" crash is now fixed in the C layer: destroy_coro only
+unwinds pads when the fiber's context stack is exhausted (si_cxix < 0), so a parked
+fiber leaves its shared PadList/CvDEPTH slots alone (see t/046).
 
 API sketch:
 
@@ -282,13 +286,14 @@ no orphan fibers on any exit path ✅.
 - [x] t/042 — direct regression for the R2 re-park branch (see R2 below): a nursery
       cancelling a child parked in a `with_timeout` await, and an enclosing `with_timeout`
       deadline firing while the child is parked in an inner nursery join. Both verify the
-      still-parked coroutine is reaped without crashing and no fiber leaks. Negative
-      control confirmed load-bearing: disabling the branch reproduces the 0xC0000005 crash.
+      still-parked coroutine is reaped without crashing and no fiber leaks. Retained for
+      unwind semantics (the child dies through its own resume rather than being yanked);
+      the crash guard is now covered by the M0 C fix and witnessed in t/046.
 
-**Note:** nursery teardown of aborted children that are still parked bumps into the M0
-"do not destroy mid-park fibers" crash — plan to fix that here with the M1 interrupt
-path (an interrupted fiber unwinds and dies from inside its own resume, which the runtime
-already reaps).
+**Note:** nursery teardown of aborted children that are still parked hits the C-level M0
+"do not destroy mid-park fibers" crash, which has since been fixed: destroy_coro now
+skips the unsafe pad unwalk for a parked fiber (its context stack is not exhausted),
+letting the shared PadList/CvDEPTH slots remain for normal later reuse (see t/046).
 
 ## Milestone 5 — Channel `select` (CSP multiplexing) (`[x] done`, `aafac21`)
 
@@ -464,16 +469,20 @@ Two accompanying fixes keep the timing issue from resurfacing:
    Semaphore was audited and needs no equivalent fix (its permit is consumed by the woken
    waiter at re-entry, never pre-transferred).
 
-### R2 — with_timeout `re-park` branch: child still parked after interrupt
+### R2 — with_timeout `re-park` branch: child still parked after interrupt (**resolved, retained**)
 
-`lib/Acme/Parataxis.pm:319-328`: when the parent is interrupted mid-`$child->await`
-while the child is still parked, the child is interrupted and will die on its next
-resume, but its coroutine cannot be destroyed mid-park (the runtime crashes). The
-re-park branch re-parks the parent, registered for the child's death, so the scheduler
-reaps the child's coroutine before this frame unwinds. **Covered by t/042** (three
+`lib/Acme/Parataxis.pm` (`with_timeout`, re-park branch): when the parent is
+interrupted mid-`$child->await` while the child is still parked, the child is
+interrupted and will die on its next resume. The re-park branch re-parks the parent,
+registered for the child's death, so the scheduler lets the child run its own unwind
+(unregistering from its tokens and running destructors) before this frame unwinds and
+frees $child. The branch is no longer load-bearing for safety: the M0 crash it was
+added to guard against (destroying a parked coroutine crashed the interpreter, fixed
+in `t/046`) has been resolved at the C layer in `destroy_coro`. The branch is retained
+so an abandoned child dies through its normal cancellation path rather than being
+yanked — it is semantic correctness, not crash-prevention. **Covered by t/042** (three
 subtests: nursery-cancel of a child parked in a `with_timeout` await; an enclosing
 `with_timeout` deadline firing while the child is parked in an inner nursery join; and a
 post-teardown sanity check that later `with_timeout` calls still work). Each asserts the
-grandchild is cancelled, the still-parked coroutine is reaped without crashing, and the
-live-fiber count returns to baseline. Verified load-bearing: disabling the branch
-reproduces the 0xC0000005 crash, so M4 subtest 6 is no longer the only witness.
+grandchild is cancelled, the still-parked coroutine is reaped, and the live-fiber count
+returns to baseline. The crash itself is regression-tested in t/046.

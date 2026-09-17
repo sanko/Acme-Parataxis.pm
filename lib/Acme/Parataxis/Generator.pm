@@ -73,8 +73,8 @@ package Acme::Parataxis::Generator v0.1.0 {
     # An unexhausted (suspended) fiber is drained to its natural exit instead of being torn
     # down in mid-shot: resuming it with the drain marker makes the yield closure die, the
     # fiber-local eval absorbs it, and the fiber finishes normally (perl unwinds its own
-    # scopes), after which coro_call reaps it. Tearing a fiber down mid-eval with
-    # destroy_coro instead poisons the perl state of later fibers (0xC0000005).
+    # scopes), after which coro_call reaps it. (destroy_coro mid-eval became safe with the
+    # M0 fix, t/046, but draining is retained so the body can run its own finalization.)
     sub DESTROY ($self) {
         my $fiber = $self->{fiber};
         return if !defined $fiber;

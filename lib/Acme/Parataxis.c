@@ -2312,8 +2312,14 @@ DLLEXPORT void destroy_coro(int fiber_id) {
             free_slots[free_slot_count++] = fiber_id;
     }
 
-    /* Unwind pads */
-    if (c->si)
+    /* Unwind pads. This is only ever safe when the fiber's perl context stack has already been unwound to exhaustion
+     * (a fiber that was reaped after finishing: si_cxix == -1, so the walk below is a no-op). A fiber destroyed while
+     * still parked keeps live activation slots in the shared PadLists and the global CvDEPTH counters of every
+     * subroutine it is currently inside (yield, the wait helpers, run, ...); _clear_pads_in_stack frees those slots
+     * and adjusts CvDEPTH for the *running* fiber's bookkeeping, corrupting any other fiber that activates the same
+     * sub at the same depth (M0). The parked fiber's own closures release their pads when user_cv is decref'd below,
+     * and its shared-sub slots are simply overwritten by normal later use, so skipping the unwalk is safe. */
+    if (c->si && c->si->si_cxix < 0)
         _clear_pads_in_stack(aTHX_ c->si);
 
     /* Release Perl references */

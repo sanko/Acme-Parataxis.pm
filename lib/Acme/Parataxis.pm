@@ -393,9 +393,11 @@ package Acme::Parataxis v0.1.0 {
         if ( !$ok && !$child->is_done ) {
 
             # We were cancelled out of the await while the child is still parked. It is interrupted and will die on its
-            # next resume, but its coroutine cannot be destroyed while mid-park (the runtime crashes). Re-park here,
-            # registered for the child's death, so the scheduler reaps the child's coroutine before this frame unwinds
-            # and frees $child. The interrupt marker on this fiber was consumed by the throwing await, so returning
+            # next resume. Re-park here, registered for the child's death, so the scheduler lets the child run its own
+            # unwind (unregistering from its tokens and running destructors) and reaps it before this frame unwinds and
+            # frees $child. The M0 fix in the C layer means freeing the child mid-park would no longer crash, so this
+            # branch is no longer load-bearing for safety — it is kept so an abandoned child dies by unwinding rather
+            # than being yanked. The interrupt marker on this fiber was consumed by the throwing await, so returning
             # from this park (rather than throwing again) is certain.
             my $fid = Acme::Parataxis->current_fid;
             $child->on_ready( sub { Acme::Parataxis::_scheduler_enqueue_by_id($fid) } );

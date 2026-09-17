@@ -6,9 +6,10 @@ use Test2::V1 -ipP;
 $|++;
 
 # R2 regression: with_timeout's re-park branch (Parataxis.pm "parent interrupted mid-await while the child is still
-# parked"). The parent must not unwind its frame while the child's coroutine is mid-park -- the runtime cannot destroy
-# a parked coroutine without crashing. with_timeout instead re-parks the parent registered for the child's death, so
-# the scheduler reaps the coroutine before the frame unwinds. Two interrupt sources exercise the branch:
+# parked"). The parent must not unwind its frame while the child's coroutine is mid-park; it re-parks registered for the
+# child's death, so the scheduler lets the child unwind and reaps it before the frame unwinds. (The 0xC0000005 crash
+# this branch used to guard against -- destroying a parked coroutine -- is fixed at the C layer by M0, t/046; the branch
+# is retained so an abandoned child dies by unwinding rather than being yanked.) Two interrupt sources exercise it:
 #   (a) a nursery cancelling a child that is parked in a with_timeout await (deterministic, no timing);
 #   (b) an enclosing with_timeout deadline firing while the child is parked in an inner nursery join.
 subtest 'a nursery cancelling a child parked in a with_timeout await reaps the grandchild' => sub {
