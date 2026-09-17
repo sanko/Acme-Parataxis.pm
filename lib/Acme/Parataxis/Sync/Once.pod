@@ -1,0 +1,65 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync::Once - Run an initializer exactly once
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::Once;
+
+    my $cfg = Acme::Parataxis::Sync::Once->new;
+
+    async {
+        my @fs = map {
+            fiber { $cfg->do( sub { load_config() }) }
+        } 1 .. 20;
+        $_->await for @fs;      # load_config ran exactly once
+    };
+
+=head1 DESCRIPTION
+
+A lazy-one-shot initializer for shared state. The B<first> fiber to call C<do> runs the action; every fiber that calls
+C<do> while it is running parks until the action finishes and then proceeds; every later call returns immediately
+without re-running the action. This is the "initialize this cache exactly once, no matter how many fibers need it"
+primitive.
+
+The returning fiber gets the action's return value; concurrent and late callers get no value. If the action dies, that
+exception propagates to the executing fiber only, the Once is still marked done (so the action never runs again), and
+the parked callers proceed - matching C<sync.Once>. C<do> is not reentrant: an action that calls C<do> again on the
+same fiber croaks, corking a recursive initializer instead of deadlocking on itself.
+
+=head1 METHODS
+
+=head2 C<new()>
+
+Creates an un-run Once.
+
+=head2 C<do( $code )>
+
+Runs C<$code> exactly once across all callers, as described above. Returns the action's return value for the executing
+fiber only; returns nothing for everyone else. Croaks outside a scheduled fiber, without a CODE reference, and when
+called re-entrantly from the action itself.
+
+=head2 C<done()>
+
+Returns true once the action has run (or died), false before anything calls C<do>.
+
+=head2 C<waiters()>
+
+Returns how many fibers are currently parked waiting for the action to finish.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+

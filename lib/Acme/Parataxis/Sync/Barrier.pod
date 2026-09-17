@@ -1,0 +1,65 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync::Barrier - Release N fibers at a common boundary
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::Barrier;
+
+    my $b = Acme::Parataxis::Sync::Barrier->new( parties => 4 );
+
+    async {
+        my @fs = map { fiber { $b->arrive_and_wait; ... } } 1 .. 4;
+        $_->await for @fs;
+    };
+
+=head1 DESCRIPTION
+
+The classic rendezvous point: C<parties> fibers call C<arrive_and_wait>; the first C<parties - 1> park, and the last
+arrival releases everyone - the parked fibers B<and> the last arriver itself - at the same instant. Nobody proceeds
+past the boundary until all C<parties> have arrived, which makes it useful for round-based algorithms
+(barrier-synchronization parallelism, phase-locked loops).
+
+After a release the barrier re-arms for a fresh generation, so the same object can synchronize an arbitrary number of
+rounds. An interrupted C<arrive_and_wait> (see C<with_timeout>) unregisters itself from the current generation; the
+remaining live parties still complete the phase.
+
+=head1 METHODS
+
+=head2 C<new( parties =E<gt> $n )>
+
+Creates a barrier requiring C<$n> arrivals per phase. Croaks unless C<$n> is positive.
+
+=head2 C<arrive_and_wait()>
+
+Arrives at the current phase and parks until C<parties> fibers have arrived, then returns true. The last arrival also
+returns true (its own release) and starts the next phase. Croaks outside a scheduled fiber.
+
+=head2 C<parties()>
+
+Returns the number of arrivals required per phase.
+
+=head2 C<remaining()>
+
+Returns how many arrivals are still needed for the current phase.
+
+=head2 C<waiters()>
+
+Returns how many fibers are currently parked at the phase boundary.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+

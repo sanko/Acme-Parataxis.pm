@@ -238,6 +238,29 @@ Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reas
 that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is awaiting it no longer
 kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
 
+=head2 Bare C<nursery( sub ($n) { ... } )>
+
+C<nursery( )> is Acme::Parataxis's structured-concurrency block (L<Acme::Parataxis::Nursery>). Everything you
+C<->spawn> inside it is a child of that block: C<nursery( )> does not return until every child is done, the moment any
+child fails B<all> of its siblings are cancelled and drained before it returns, and the block value (when successful)
+is whatever the block returned.
+
+    async {
+        nursery( sub ($n) {
+            $n->spawn( sub { await_sleep( 50 ); $s1_done = 1 } );
+            $n->spawn( sub { await_sleep( 50 ); $s2_done = 1 } );
+            $n->spawn( sub { die 'boom' } );    # cancels its siblings, then the nursery rethrows
+        } );
+    };
+
+On failure the aggregate croaks with L<C<Acme::Parataxis::Error::Nursery>|Acme::Parataxis::Error::Nursery>:
+C<->failures> lists every child's error (the real one plus the C<Cancelled> unwinds of the siblings it cancelled) and
+C<->primary> is the first real failure. A block error is rethrown unchanged after the children are drained; a
+user-fibre token can cancel the whole group (call C<->token->cancel>), and cancellation propagates into nested waits
+and tokens (M4 subtest 6, L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout>) via the C<_join>
+parent-interrupt branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery
+they were spawned into and the inner nursery's C<_join> awaits them as long as they stay registered.
+
 =head1 Scheduler Functions
 
 The following functions are the primary interface for the integrated cooperative scheduler.
@@ -306,6 +329,35 @@ not the dynamic scope.
 
 Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
 the fiber. If the fiber is never actually parked, the hook is silently dropped.
+
+=head2 Sync primitives
+
+The L<Acme::Parataxis::Sync> family gives cooperative fibers the classic synchronization tools, all built on the same
+park/wake machinery as everything else:
+
+=over
+
+=item * L<Acme::Parataxis::Sync::Mutex> - a non-reentrant lock with true owner tracking
+(C<lock>, C<try_lock>, C<unlock>, C<guard>); releasing from a non-owner croaks.
+
+=item * L<Acme::Parataxis::Sync::WaitGroup> - a job counter; C<add>/C<done> adjust it and
+C<wait> parks until it reaches zero.
+
+=item * L<Acme::Parataxis::Sync::Barrier> - C<$n> parties meeting via C<arrive_and_wait>;
+all proceed at the phase boundary, and the barrier re-arms for the next round.
+
+=item * L<Acme::Parataxis::Sync::Once> - an initializer run exactly once across racing
+fibers; late callers wait for the runner instead of re-running the action.
+
+=back
+
+Every one of these waits is a scheduled park, so C<with_timeout> and cancellation tokens abort it cleanly and the
+waiter unregisters itself from the primitive first. Example:
+
+    async {
+        my $m = Acme::Parataxis::Sync::Mutex->new;
+        with_timeout( 200, sub { $m->lock } );   # a timeout instead of a forever-wait
+    };
 
 =head1 Thread Pool Configuration
 

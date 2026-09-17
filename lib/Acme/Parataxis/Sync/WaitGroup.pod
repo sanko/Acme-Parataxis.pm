@@ -1,0 +1,74 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync::WaitGroup - Wait for a collection of jobs to finish
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::WaitGroup;
+
+    my $wg = Acme::Parataxis::Sync::WaitGroup->new;
+
+    async {
+        $wg->add(3);            # three jobs about to start
+        my $j1 = fiber { ...; $wg->done };
+        my $j2 = fiber { ...; $wg->done };
+        my $j3 = fiber { ...; $wg->done };
+        $wg->wait;              # parks until all three done() calls land
+        $_->await for ( $j1, $j2, $j3 );
+    };
+
+=head1 DESCRIPTION
+
+A counter of outstanding jobs shared between fibers. C<add($n)> adds B<n> units, C<done()> removes one, and C<wait()>
+parks the current fiber until the counter reaches zero. This is the cooperative siblings of C<Thread::Queue> and
+friends for fan-out/fan-in: spawn N fibers, each calling C<done> when its job completes, and one fiber C<wait>s for all
+of them.
+
+The group carries no job state itself - use it across jobs spawned by any fibers in the same scheduler, including
+across separate C<async> blocks. A C<wait> is interruptible, so C<with_timeout( $ms, sub { $wg->wait } )> times out;
+the cancelled waiter unregisters itself and the group stays usable.
+
+=head1 METHODS
+
+=head2 C<new( [ count =E<gt> $n ] )>
+
+Creates a group. The optional C<count> primes the counter (default 0).
+
+=head2 C<add( $n )>
+
+Adds C<$n> to the counter (it may be negative, as C<done> uses -1). Croaks if the counter would drop below zero, or if
+C<$n> is not an integer.
+
+=head2 C<done()>
+
+Same as C<add(-1)>. Calling it when nothing is outstanding croaks.
+
+=head2 C<wait()>
+
+Parks the current fiber until the counter reaches zero, then returns true. Returns immediately (without parking) when
+the counter is already zero. Croaks outside a scheduled fiber.
+
+=head2 C<remaining()>
+
+Returns the current counter value. Useful for diagnostics, not for waiting on.
+
+=head2 C<waiters()>
+
+Returns how many fibers are currently parked in C<wait>.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+

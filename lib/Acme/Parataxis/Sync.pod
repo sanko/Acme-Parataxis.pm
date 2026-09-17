@@ -1,0 +1,57 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync - Base class for the synchronization-primitive family
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::Mutex;
+    use Acme::Parataxis::Sync::WaitGroup;
+    use Acme::Parataxis::Sync::Barrier;
+    use Acme::Parataxis::Sync::Once;
+
+    my $m  = Acme::Parataxis::Sync::Mutex->new;
+    my $wg = Acme::Parataxis::Sync::WaitGroup->new;
+
+    async {
+        $wg->add(1);
+        fiber {
+            $m->lock;
+            my $guard = $m->guard;
+            $wg->done;
+        };
+        $wg->wait;
+    };
+
+=head1 DESCRIPTION
+
+There is nothing to construct base class objects with - it exists so every member of the Sync family
+(L<Acme::Parataxis::Sync::Mutex>, L<Acme::Parataxis::Sync::WaitGroup>, L<Acme::Parataxis::Sync::Barrier>,
+L<Acme::Parataxis::Sync::Once>) shares one wait mechanism. Every primitive parks the current fiber via the scheduler
+and wakes parked fibers through it; an interrupted wait unregisters itself from the primitive it was parked on before
+unwinding, so a cancelled wait never leaves a stale id behind that a later wake could fire at a reused fiber.
+
+All waits are cooperative: inside a scheduled fiber (the body of C<async> or C<fiber>), they suspend only that fiber,
+never the scheduler or another fiber. All of them croak when called outside a scheduled fiber.
+
+=head2 C<done()> and cancellations
+
+Each wait accepts the scheduler's cancellation machinery, so C<with_timeout> and C<Acme::Parataxis::CancellationToken>
+abort a parked C<lock>, C<wait>, C<arrive_and_wait>, or C<do> at its park re-entry, unregistering the waiter first. See
+L<Acme::Parataxis> for C<with_timeout>.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+

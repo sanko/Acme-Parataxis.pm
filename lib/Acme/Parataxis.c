@@ -377,6 +377,7 @@ typedef struct {
     value_t output;    /**< Result data populated by the worker */
     int timeout_ms;    /**< Timeout duration for I/O tasks */
     int status;        /**< Current lifecycle state (JOB_*) */
+    volatile int recall; /**< Set to 1 when the owner fiber wants an armed sleep abandoned early */
 } job_t;
 
 // Global Registry and State
@@ -612,12 +613,31 @@ void * worker_thread(void * arg) {
 
             if (job->type == TASK_SLEEP) {
                 int ms = (int)job->input.i;
+                int elapsed = 0;
+                /* Sleep in small quanta, checking the recall flag under the queue lock so an armed sleep
+                   can be abandoned early if the owning fiber is interrupted (deadline/timeout/cancel).
+                   The full request is still honoured when no recall arrives. */
+                const int quantum = (ms > 4) ? 4 : ms;
+                int recalled = 0;
+                while (elapsed < ms) {
+                    LOCK(queue_lock);
+                    recalled = job->recall;
+                    UNLOCK(queue_lock);
+                    if (recalled)
+                        break;
+                    int slice = (ms - elapsed > quantum) ? quantum : (ms - elapsed);
 #ifdef _WIN32
-                Sleep(ms);
+                    Sleep(slice);
 #else
-                usleep(ms * 1000);
+                    usleep(slice * 1000);
 #endif
-                job->output.i = ms;
+                    elapsed += slice;
+                }
+                LOCK(queue_lock);
+                recalled = job->recall;
+                UNLOCK(queue_lock);
+                /* output.i = -1 signals an early recall (interrupted); otherwise the full duration elapses. */
+                job->output.i = (recalled || elapsed < ms) ? -1 : ms;
             }
             else if (job->type == TASK_GET_CPU) {
                 int cpu = get_current_cpu();
@@ -742,6 +762,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].input.i = arg;
         job_slots[idx].timeout_ms = timeout_ms;
         job_slots[idx].status = JOB_NEW;
+        job_slots[idx].recall = 0;
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
             job_refcount[current_fiber_id]++;
@@ -778,6 +799,35 @@ DLLEXPORT int check_for_completion() {
  * @return int Number of outstanding jobs.
  */
 DLLEXPORT int get_outstanding_jobs() { return outstanding_jobs; }
+
+/**
+ * @brief Recalls (abandons early) every armed TASK_SLEEP job owned by the given fiber.
+ *
+ * Used when a fiber parked in `await_sleep` is interrupted; the worker notices the recall flag
+ * within one sleep quantum and completes the job early, so the fiber can fail-fast and the
+ * scheduler does not stay alive until the sleep would have expired naturally.
+ *
+ * @param fid The fiber whose armed sleeps should be recalled.
+ * @return int The number of armed sleeps that were recalled.
+ */
+DLLEXPORT int recall_sleep_jobs_for_fiber(int fid) {
+    if (!threads_initialized)
+        return 0;
+    int count = 0;
+    LOCK(queue_lock);
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (job_slots[i].fiber_id != fid)
+            continue;
+        if (job_slots[i].type != TASK_SLEEP)
+            continue;
+        if (job_slots[i].status != JOB_NEW && job_slots[i].status != JOB_BUSY)
+            continue;
+        job_slots[i].recall = 1;
+        count++;
+    }
+    UNLOCK(queue_lock);
+    return count;
+}
 
 /**
  * @brief Retrieves the result of a completed job as a Perl SV.

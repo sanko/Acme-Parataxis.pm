@@ -10,14 +10,11 @@ use feature 'class';
 # Keys are a monotonic process-wide id, never a refaddr: a recycled memory address must not
 # alias a newer Local's slot.
 my $NEXT_ID = 0;
-
 class Acme::Parataxis::Local v0.1.0 {
     use Acme::Parataxis;
     use Carp qw[croak];
-
-    field $id;            # process-wide unique slot key
+    field $id;    # process-wide unique slot key
     field $default : param = undef;
-
     ADJUST { $id = ++$NEXT_ID }
 
     method get () {
@@ -28,12 +25,12 @@ class Acme::Parataxis::Local v0.1.0 {
         return $stash->{$id};
     }
 
-    method set ( $value ) {
+    method set ($value) {
         my $fid = Acme::Parataxis->current_fid;
         croak 'Local->set must be called from inside a scheduled fiber' if $fid < 0;
         Acme::Parataxis::_fiber_locals( Acme::Parataxis->by_id($fid) )->{$id} = $value;
         return $value;
     }
-}
-#
-1;
+    }
+    #
+    1;

@@ -1,0 +1,89 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync::Mutex - A non-reentrant mutex with true owner tracking
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::Mutex;
+
+    my $m = Acme::Parataxis::Sync::Mutex->new;
+
+    async {
+        $m->lock;
+        ...;             # critical section
+        $m->unlock;
+
+        { my $guard = $m->guard; ... }   # or a scoped guard
+    };
+
+=head1 DESCRIPTION
+
+A mutual-exclusion lock shared between fibers. The lock keeps track of B<who> holds it, and only that fiber may release
+it:
+
+=over
+
+=item * a fiber that already holds the lock croaks on a second C<lock>/C<try_lock>
+(the lock is not reentrant);
+
+=item * releasing from a fiber that is not the owner croaks C<not the owner>;
+
+=item * releasing a lock nobody holds croaks C<not locked>.
+
+=back
+
+Everything is cooperative: a C<lock> that finds the lock taken parks the current fiber until the owner releases, then
+the lock is handed B<directly> to that waiter (FIFO), so the next holder is decided at release time and nobody can cut
+in line. A parked C<lock> is interruptible like any park, so C<with_timeout( $ms, sub { $m->lock } )> times out instead
+of blocking forever.
+
+=head1 METHODS
+
+=head2 C<new()>
+
+Creates a free lock.
+
+=head2 C<lock()>
+
+Acquires the lock, parking until it is handed over. Returns true. Croaks outside a scheduled fiber, on re-entering from
+the same fiber, and if a critical section or cleanup croaks.
+
+=head2 C<try_lock()>
+
+Acquires the lock if it is free, returning true. Returns false instead of parking when another fiber holds it (never
+steals, never parks). Croaks outside a scheduled fiber and on same-fiber re-entry.
+
+=head2 C<unlock()>
+
+Releases the lock to the next parked waiter (or frees it). Only the owning fiber may call it. Croaks outside a
+scheduled fiber, when the lock is not locked, and when the caller is not the owner.
+
+=head2 C<guard()>
+
+Calls C<lock> and returns an object that releases the lock when it goes out of scope - including when the scope unwinds
+on an exception. Prefer this over pairing C<lock> and C<unlock> by hand.
+
+=head2 C<owner()>
+
+Returns the fiber id currently holding the lock, or C<undef> when it is free.
+
+=head2 C<waiters()>
+
+Returns how many fibers are currently parked waiting for the lock.
+
+=head1 AUTHOR
+
+Sanko Robinson <sanko@cpan.org>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+
