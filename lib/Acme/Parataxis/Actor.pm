@@ -1,0 +1,104 @@
+use v5.40;
+use Acme::Parataxis;
+use Acme::Parataxis::Channel;
+use Acme::Parataxis::Future;
+use Carp qw[croak];
+
+package Acme::Parataxis::Actor v0.1.0 {
+    our @ISA = ();
+    use Acme::Parataxis qw[fiber];
+    use Acme::Parataxis::Channel;
+    use Acme::Parataxis::Future;
+    use Carp qw[croak];
+
+    # Thin actors: a dedicated fiber owns a Channel mailbox and runs one user handler per message.
+    # `ask` tags a message with a Future so the handler's return value (or die) travels back to the
+    # caller; `send` is fire-and-forget. The mailbox is a plain bounded channel, so a slow handler
+    # gives the *sender* backpressure instead of growing a queue without bound (M7, supervision is
+    # deliberately out of scope -- see TODO.md).
+    my $STOP = \do { my $x = 1 };    # envelope value that tells the loop to shut down gracefully
+
+    sub spawn ( $class, $code, $capacity = 16 ) {
+        croak 'Actor->spawn() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'Actor->spawn() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        croak "Actor->spawn() mailbox capacity must be >= 1 (got $capacity)" unless $capacity >= 1;
+        my $self = bless {
+            code     => $code,
+            cap      => $capacity,
+            mailbox  => Acme::Parataxis::Channel->new( capacity => $capacity ),
+            stopping => 0,
+            done     => 0,
+            fiber    => undef,
+        }, $class;
+        $self->{fiber} = fiber { $self->_run };
+        return $self;
+    }
+
+    sub _run ($self) {
+        my $mb = $self->{mailbox};
+        while (1) {
+            my $env = $mb->get;
+            my ( $reply, $value ) = @$env;
+            last if defined $value && ref $value && $value == $STOP;
+            $self->_dispatch( $reply, $value );
+        }
+
+        # Graceful stop: everything already queued before the stop marker has been answered; fail any
+        # asks that slipped in after it so their awaiters wake instead of hanging on a dead actor.
+        while (1) {
+            my ( $ok, $env ) = $mb->try_get;
+            last unless $ok;
+            my ( $reply, $value ) = @$env;
+            $reply->set_error("actor stopped before this message was handled") if defined $reply;
+        }
+        $self->{done} = 1;
+        return;
+    }
+
+    sub _dispatch ( $self, $reply, $value ) {
+        my $err;
+        my $ok = eval {
+            my $rv = $self->{code}->( $self, $value );
+            $reply->set_result($rv) if defined $reply;
+            1;
+        };
+        if ( !$ok ) {
+            $err = $@;
+            if ( defined $reply ) {
+                eval { $reply->set_error($err); 1 }
+            }
+            else { warn "Acme::Parataxis::Actor: handler died: $err" }
+        }
+        return;
+    }
+
+    sub send ( $self, $value ) {
+        $self->_check_alive;
+        $self->{mailbox}->put( [ undef, $value ] );
+        return 1;
+    }
+
+    sub ask ( $self, $value ) {
+        $self->_check_alive;
+        my $reply = Acme::Parataxis::Future->new;
+        $self->{mailbox}->put( [ $reply, $value ] );
+        return $reply;
+    }
+
+    sub stop ($self) {
+        return if $self->{done};
+        $self->{stopping} = 1;
+        $self->{mailbox}->put( [ undef, $STOP ] );
+        return $self;
+    }
+    sub is_alive ($self) { return !$self->{done} }
+    sub fid      ($self) { return $self->{fiber}->fid }
+
+    sub _check_alive ($self) {
+        croak 'send()/ask(): this actor is no longer running' if $self->{done};
+        croak 'send()/ask(): this actor is shutting down'     if $self->{stopping};
+        return;
+    }
+}
+#
+1;

@@ -657,6 +657,27 @@ queue, so the body is plain synchronous code and the generator works from any fi
 
     while ( defined( my $n = $fib->next ) ) { say $n }   # 0 1 1 2 3 5 ...
 
+=head2 Actors
+
+An L<Acme::Parataxis::Actor> is a fiber that owns a mailbox and runs one handler per message, with request/reply built
+in. C<ask( $msg )> returns a future that resolves with the handler's return value (or fails with its error); C<send> is
+fire-and-forget.
+
+    use Acme::Parataxis::Actor;
+
+    my $echo = Acme::Parataxis::Actor->spawn( sub ($self, $msg) {
+        return ref $msg ? uc( $msg->{text} ) : "unknown: $msg";
+    } );
+
+    my $reply = $echo->ask( { text => 'hello' } );
+    say $reply->await;        # HELLO
+    $echo->send( 'log' );
+    $echo->stop;
+
+Because the mailbox is a bounded channel, slow handlers provide backpressure to senders, and C<ask> works with
+C<with_timeout> and cancellation just like any other block. Supervision (restart-on-failure, OTP-style) is out of
+scope; a handler die fails its own ask (or warns, for a C<send>) and the actor keeps going.
+
 =head1 Best Practices & Gotchas
 
 =over

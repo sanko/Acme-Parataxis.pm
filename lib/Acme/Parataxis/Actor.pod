@@ -1,0 +1,90 @@
+=head1 NAME
+
+Acme::Parataxis::Actor - A thin actor: a fiber with a mailbox
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async];
+    use Acme::Parataxis::Actor;
+
+    async {
+        my $echo = Acme::Parataxis::Actor->spawn( sub ($self, $msg) {
+            return 'pong' if $msg->{cmd} eq 'ping';
+            return $msg;
+        } );
+
+        my $reply = $echo->ask( { cmd => 'ping' } );
+        say $reply->await;                       # pong
+
+        $echo->send( { cmd => 'log' } );         # fire-and-forget
+        $echo->stop;                             # graceful shutdown
+    };
+
+=head1 DESCRIPTION
+
+An actor is a dedicated fiber that owns a bounded message mailbox and runs one handler per message. Each connection to
+it is a single call: C<ask> tags a message with a L<Future|Acme::Parataxis::Future> and returns it, so the handler's
+return value (or a die) travels back to the caller; C<send> hands a message over with no reply expected.
+
+The mailbox is a plain L<Acme::Parataxis::Channel>, so a slow handler gives the sender backpressure instead of growing
+an unbounded queue: waiting senders park cooperatively like any other block, and the usual toolkit
+(L<Acme::Parataxis::with_timeout| Acme::Parataxis::with_timeout>, cancellation tokens,
+L<Acme::Parataxis::nursery|Acme::Parataxis>) applies to C<ask> just as it does to any fiber wait.
+
+Handlers do not need plumbing: they run in the actor's fiber, so C<$self->ask>, C<$self->send> and C<$self->stop> are
+available inside them, and handler code is plain cooperative code (it may C<await_sleep>, await futures, and so on).
+
+=head1 CONSTRUCTOR
+
+=head2 C<Actor-E<gt>spawn( sub ($self, $msg) { ... }, [ $capacity ] )>
+
+Starts a new actor and returns immediately. The handler receives the actor and the message; its return value becomes
+the answer to an C<ask>, and it is discarded for a C<send>. C<$capacity> (default 16) is the mailbox size before
+senders start parking.
+
+Must be called from inside a scheduled fiber (an C<async> block, a C<fiber>, a nursery child, ...).
+
+=head1 METHODS
+
+=head2 C<ask( $msg )>
+
+Queues C<$msg> expecting an answer and returns a L<Future|Acme::Parataxis::Future>. The future resolves with the
+handler's return value, or fails with the handler's error (the actor keeps running). Compose with C<E<gt>await> or
+C<E<gt>on_ready>, and wrap the await in L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout> for a bounded
+round-trip.
+
+=head2 C<send( $msg )>
+
+Queues C<$msg> with no reply. Returns true once queued (parking if the mailbox is full). If the handler dies on a
+fire-and-forget message, the failure is reported with C<warn> and the actor keeps running.
+
+=head2 C<stop( )>
+
+Requests a graceful shutdown: messages already queued are still handled, then the actor fiber finishes. C<send>/C<ask>
+issued while shutting down croak, and croak after the actor is gone.
+
+=head2 C<is_alive( )>
+
+False once the actor has shut down.
+
+=head2 C<fid( )>
+
+The fiber id of the actor's dedicated fiber.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis>, L<Acme::Parataxis::Channel>, L<Acme::Parataxis::Future>, L<Acme::Parataxis::Generator>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut
