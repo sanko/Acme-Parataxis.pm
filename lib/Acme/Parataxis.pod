@@ -639,6 +639,24 @@ resumed by the scheduler when the signal fires.
         $sig->send;
     };
 
+=head2 Lazy Iterators
+
+An L<Acme::Parataxis::Generator> is a stackful, lazily-pulled sequence: the body runs in a private fiber and C<yield>s
+values one at a time, each C<< ->next >> resuming it from where it left off. The fiber never enters the scheduler run
+queue, so the body is plain synchronous code and the generator works from any fiber or from the main context.
+
+    use Acme::Parataxis::Generator;
+
+    my $fib = Acme::Parataxis::Generator->new( sub ($y) {
+        my ( $a, $b ) = ( 0, 1 );
+        while ( $a < 100 ) {
+            $y->($a);
+            ( $a, $b ) = ( $b, $a + $b );
+        }
+    } );
+
+    while ( defined( my $n = $fib->next ) ) { say $n }   # 0 1 1 2 3 5 ...
+
 =head1 Best Practices & Gotchas
 
 =over

@@ -14,10 +14,10 @@ A milestone's status line names the commit where it landed on `dev`.
 | M0 — waiter removal, wait_reason, on_wake | [x] done | `7a57be5` | t/031, t/032 |
 | **M1 — cancellation tokens & with_timeout** | **[x] done** | **`a9713df`** | **t/033, t/034** |
 | M2 — fiber-local storage | [x] done | `4540ed0` | t/035 |
-| **M3 — Sync family (WaitGroup/Mutex/Barrier/Once)** | **[x] done** | **uncommitted (user commits)** | **t/036–t/039** |
-| M4 — Nursery (structured concurrency) | blocked (R1) | — | t/040 (R1 flake) |
-| **M5 — Channel select** | **[x] done** | **uncommitted (this commit)** | **t/041** |
-| M6 — Generator | deferred | — | — |
+| **M3 — Sync family (WaitGroup/Mutex/Barrier/Once)** | **[x] done** | **`751820d`** | **t/036–t/039** |
+| **M4 — Nursery (structured concurrency)** | **[x] done** | **`751820d`** | **t/040, t/042** |
+| **M5 — Channel select** | **[x] done** | **`aafac21`** | **t/041** |
+| **M6 — Generator** | **[x] done** | **this commit** | **t/043** |
 | M7 — Thin actors | deferred | — | — |
 | M8 — Diagnostics & deadlock tracing | deferred | — | — |
 | M9 — Scalable I/O (epoll/kqueue/IOCP) | long-term | — | — |
@@ -147,7 +147,7 @@ span context, ambient DB handles that must not leak across fibers.
 - [x] Docs (`Local.pod`, `Parataxis.pod` section), Changes.md, MANIFEST.
 - [x] Full suite green (35 files / 277) + tidyall clean; committed `4540ed0` on `dev`.
 
-## Milestone 3 — Sync family: WaitGroup, Mutex, Barrier, Once (**done** — commit pending, user commits)
+## Milestone 3 — Sync family: WaitGroup, Mutex, Barrier, Once (**done** — `751820d`)
 
 Landed: `Acme::Parataxis::Sync` (base: `_fid`/`_park`/`_wake`) plus `::Sync::Mutex`,
 `::Sync::WaitGroup`, `::Sync::Barrier`, `::Sync::Once`, each with its own POD, and
@@ -219,13 +219,13 @@ Implementation notes worth keeping:
 - `is_deeply` is not in this repo's Test2 import set (`Test2::V1 -ipP`) — use
   `is join(...)`-style comparisons.
 
-## Milestone 4 — Nursery (structured concurrency) (**in progress**)
+## Milestone 4 — Nursery (structured concurrency) (**done** — `751820d`)
 
-Landed: `Acme::Parataxis::Nursery` (new file, uncommitted), `nursery()` in Parataxis.pm,
-t/040 with 10 subtests. The M1 interrupt machinery is what makes teardown safe: an aborted
-child that is still parked is interrupted (not destroyed mid-park), unwinds and dies from
-inside its own resume — so the M0 "do not destroy mid-park fibers" crash is sidestepped,
-not fixed.
+Landed: `Acme::Parataxis::Nursery` (new file), `nursery()` in Parataxis.pm,
+t/040 (10 subtests) and t/042 (3 subtests: R2 re-park regression). The M1 interrupt
+machinery is what makes teardown safe: an aborted child that is still parked is
+interrupted (not destroyed mid-park), unwinds and dies from inside its own resume — so the
+M0 "do not destroy mid-park fibers" crash is sidestepped, not fixed.
 
 API sketch:
 
@@ -265,36 +265,32 @@ Progress:
       Error::Timeout`; probe: `t_err=Timeout done=0`. Verified against old code: only the
       fixed build exercises the parent-interrupt branch.
 - [x] t/040 subtest 7 — destructors of in-flight children run during cancellation.
-- [ ] t/040 subtest 2 — **flake: "a failing child cancels its siblings".** ~1-2 in 12 runs,
-      both on the fixed *and* the pre-fix code (pre-existing, unrelated to the `_join`
-      rewrite). Failure signature: `kinds=plain` (only the 'boom' error), `s1=1 s2=1` (both
-      50ms sleepers ran to completion). Root trace: the 1ms `die 'boom'` child's sleep job
-      fires ~156ms late under scheduler load — after the 50ms siblings have already
-      completed and unregistered. The `_observe` token cancel then interrupts nothing
-      (`fids=` empty) because no children remain registered. This is C scheduler sleep
-      latency (armed sleep jobs wake late under load), not nursery join logic.
+- [x] t/040 subtest 2 — **"a failing child cancels its siblings".** De-flaked test-side:
+      the `die 'boom'` child now fails immediately instead of `await_sleep(1)` first.
+      Because `spawn` birth-parks, an immediate `die` still surfaces through the scheduler
+      (never inline into the block), and the two 50ms sleepers are guaranteed to be parked
+      when the cancel lands — no dependency on sleep-timer granularity (R1). 10/10 green;
+      the underlying C latency stays logged as R1.
 - [x] t/040 subtest 9 — no orphan fibers on success or failure exit path (live_fiber_count
       back to baseline).
 - [x] t/040 subtest 10 — `nursery()` and `->spawn` croak outside a scheduled fiber.
 
 Acceptance from the plan: all-children-join ✅; failure cancels siblings and rethrows ✅
-(after the subtest-2 flake is de-flaked); cancellation propagated to nested tokens ✅;
-destructors run ✅; no orphan fibers on any exit path ✅.
+(de-flaked test-side); cancellation propagated to nested tokens ✅; destructors run ✅;
+no orphan fibers on any exit path ✅.
 
-Open items before M4 is "done":
-
-- [ ] **Subtest-2 flake (pre-existing):** make the C scheduler wake armed sleep jobs
-      promptly even under load, so a 1ms `await_sleep` beats 50ms siblings deterministically
-      (deadline timer observed firing at age 28-61ms vs the requested 10ms). Either fix in
-      C (sleep quantum / job recall behaviour) or make the test thresholds robust to coarse
-      sleeper granularity.
+- [x] t/042 — direct regression for the R2 re-park branch (see R2 below): a nursery
+      cancelling a child parked in a `with_timeout` await, and an enclosing `with_timeout`
+      deadline firing while the child is parked in an inner nursery join. Both verify the
+      still-parked coroutine is reaped without crashing and no fiber leaks. Negative
+      control confirmed load-bearing: disabling the branch reproduces the 0xC0000005 crash.
 
 **Note:** nursery teardown of aborted children that are still parked bumps into the M0
 "do not destroy mid-park fibers" crash — plan to fix that here with the M1 interrupt
 path (an interrupted fiber unwinds and dies from inside its own resume, which the runtime
 already reaps).
 
-## Milestone 5 — Channel `select` (CSP multiplexing) (**done**, commit pending — this commit)
+## Milestone 5 — Channel `select` (CSP multiplexing) (`[x] done`, `aafac21`)
 
 Landed: `select` as a plain package sub on `Acme::Parataxis::Channel` (perlclass keeps methods instance-bound),
 `try_get`/`try_put` non-blocking ops, a private per-channel `@select_waiters` list, `select_waiters()` introspection,
@@ -317,24 +313,44 @@ Acceptance (all green in t/041): get-ready vs put-ready; random choice under rep
 default; shutdown unblocks selectors with remaining items; waiter lists empty after every return; argument
 validation. Subtests 9-10 cover the deadlock/share-the-channel cases.
 
-## Milestone 6 — Generator (stackful iterator) (**deferred**)
+## Milestone 6 — Generator (stackful iterator) (**done** — t/043)
 
-API sketch:
+API shipped as sketched: `Acme::Parataxis::Generator->new( sub ($yield) { ... } )`,
+`->next`, `->is_done`. Acceptance all green in t/043.
 
-    my $gen = Acme::Parataxis::Generator->new( sub ($yield) {
-        $yield->($_) for @large_tree;
-    });
-    while (defined(my $v = $gen->next)) { ... }
+As-built design (deviates from the original sketch, each change empirically driven):
 
-Design: a producer fiber suspended by symmetric transfer. `coro_transfer` already exists,
-so the mechanics are available — but the producer must be kept *out of the scheduler run
-queue*, and interactions between transfer-based coroutines and the main loop need care.
-Yields work deep inside nested subs without `yield from` — that's the selling point, not
-bounded_depth iteration. Keep in mind it pulls against the scheduler model, so it lives
-outside the nursery/cancellation world unless we teach it to park.
-
-Acceptance: deep-nested yield; lazy pull (no work before first `next`); `next` after
-exhaustion returns undef; DESTROY releases the fiber.
+- Pull is *asymmetric*: each `->next` resumes the private fiber with the C `coro_call`
+  (not `coro_transfer`), and each `$yield->(...)` parks it back; the producer never
+  enters the scheduler run queue. Exhaustion and body errors finish the fiber through
+  the normal scheduler teardown.
+- Errors are relayed, never thrown across a resume boundary: the fiber runs the body
+  inside a fiber-local `eval {}` (the scheduler's own `G_EVAL` trap provably misses a
+  die that fires on a resumed trip), and the caught `$@` is parked in a lexical that
+  `next` dereferences and rethrows on the caller's stack.
+- **Every generator lands on a non-first fiber slot.** Windows longjmp across the very
+  first fiber a process allocates (fid 0) defeats every anchored JMPENV: a resume-die
+  escapes as an uncaught die (exit 255) or 0xC0000005, in a code-shape-dependent way
+  (any perl-visible store/return escapes; `print`/no-op work). The `coro_call` C guard
+  does not help (the longjmp bypasses the anchored chain entirely). Fix: the first
+  `Generator->new` parks one permanently parked reserved fiber (fid 0) and generators
+  always start at fid >= 1, where the resume-die path has been stable since the M1
+  suite. The underlying JMPENV/Windows-fiber mechanism was never fully explained —
+  documented in Generator.pm/pod.
+- **Abandoned generators drain, they do not get torn down mid-eval.** Calling
+  `destroy_coro` on a suspended generator whose fiber carries an in-flight perl
+  `eval{}`/closure frame poisons the perl state of *later* generators (0xC0000005);
+  a plain suspended fiber destroys cleanly, and the original leak design never
+  poisoned anything. DESTROY therefore resumes the fiber with a one-element arrayref
+  drain marker; the yield closure `die`s on it; the fiber-local eval swallows it; the
+  fiber finishes normally (perl unwinds its own scopes); `coro_call` reaps it. Vetted
+  by torture probes (3x full run, destroyed-suspended, postdestroy). Residual risk,
+  unexplored: the `destroy_coro` fallback in DESTROY for a drain that somehow fails.
+- The reserved fiber makes `get_live_fiber_count()` read 1 (not 0) once any generator
+  has been created; t/043's leak checks account for it.
+- Known cosmetic: during process-wide global destruction a drain die can surface as
+  "(in cleanup)" noise unless absorbed; DESTROY wraps the resume in `eval { ...; 1 }`
+  which silences it while exit code stays 0.
 
 ## Milestone 7 — Thin actors (supervision deferred) (**deferred**)
 
@@ -400,12 +416,14 @@ until its natural expiry. Two concrete consequences:
    and unregistered. `with_timeout` returns normally instead of throwing
    `Error::Timeout`.
 
-2. **t/040 subtest 2 — intermittent flake (~1-12/12):** `await_sleep(1)` for the
-   `die 'boom'` child fires at ~156ms under load, long after both 50ms siblings have
-   completed and unregistered. The `_observe` token cancel hits `fids=` (empty), so
-   siblings were never cancelled. Failure list has only the boom error (`plain`) instead
-   of `cancelled,cancelled,plain`. Confirmed present on both fixed and pre-fix code
-   (same rate) — purely scheduler timing, not nursery logic.
+2. **t/040 subtest 2 — was an intermittent flake (~1-12/12), now de-flaked test-side**
+   (the boom child fails immediately instead of `await_sleep(1)` first). Originally
+   `await_sleep(1)` for the `die 'boom'` child fired at ~156ms under load, long after both
+   50ms siblings had completed and unregistered; the `_observe` token cancel then hit
+   `fids=` (empty), so siblings were never cancelled and the failure list had only the boom
+   error (`plain`) instead of `cancelled,cancelled,plain`. Confirmed present on both fixed
+   and pre-fix code (same rate) — purely scheduler timing, not nursery logic. The C latency
+   itself remains open above.
 
 3. **t/006_parallel.t test 2 — baseline sleep-timing regression:** `await_sleep(1000)`
    measures ~4s whenever an uncommitted scheduler experiment
@@ -429,8 +447,10 @@ source.
 while the child is still parked, the child is interrupted and will die on its next
 resume, but its coroutine cannot be destroyed mid-park (the runtime crashes). The
 re-park branch re-parks the parent, registered for the child's death, so the scheduler
-reaps the child's coroutine before this frame unwinds. This branch needs a focused
-test: a `with_timeout` whose deadline fires while the child is parked in an inner
-`nursery { }` join, verifying the child's coroutine is reaped without crashing. (M4
-subtest 6 exercises this indirectly but should be supplemented with a direct unit
-test.)
+reaps the child's coroutine before this frame unwinds. **Covered by t/042** (three
+subtests: nursery-cancel of a child parked in a `with_timeout` await; an enclosing
+`with_timeout` deadline firing while the child is parked in an inner nursery join; and a
+post-teardown sanity check that later `with_timeout` calls still work). Each asserts the
+grandchild is cancelled, the still-parked coroutine is reaped without crashing, and the
+live-fiber count returns to baseline. Verified load-bearing: disabling the branch
+reproduces the 0xC0000005 crash, so M4 subtest 6 is no longer the only witness.

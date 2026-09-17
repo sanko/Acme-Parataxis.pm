@@ -1,0 +1,88 @@
+=head1 NAME
+
+Acme::Parataxis::Generator - A stackful, lazily-pulled iterator
+
+=head1 SYNOPSIS
+
+    use Acme::Parataxis::Generator;
+
+    my $fib = Acme::Parataxis::Generator->new( sub ($y) {
+        my ( $a, $b ) = ( 0, 1 );
+        while ( $a < 100 ) {
+            $y->($a);
+            ( $a, $b ) = ( $b, $a + $b );
+        }
+    } );
+
+    my $total = 0;
+    while ( defined( my $n = $fib->next ) ) { $total += $n }   # 0 1 1 2 3 5 ...
+
+=head1 DESCRIPTION
+
+A generator runs its body in a private fiber: each call to C<yield> (the C<$y> function passed to the body) suspends
+the fiber, and the following C<< ->next >> resumes it exactly where it left off, with every lexical intact. This makes
+the body plain synchronous code - loops, C<return>s, nested subroutine calls and deep recursion all "just work", and
+values can be yielded from any depth.
+
+The generator fiber never enters the scheduler run queue, so a generator can be pulled from the main context, from any
+fiber, and from fibers spawned inside L<Acme::Parataxis::nursery|Acme::Parataxis> blocks with no special setup.
+
+=head1 CONSTRUCTOR
+
+=head2 C<Generator-E<gt>new( sub ($y) { ... } )>
+
+Returns a generator. C<$y> is the yield function: call C<< $y->($value) >> to produce the next value and suspend until
+the next pull. The body may return a final value (ignored) or throw.
+
+The first generator created in a process parks one reserved fiber so that every generator lands on a stable, non-first
+slot (see L</HOW IT WORKS>).
+
+=head1 METHODS
+
+=head2 C<next( )>
+
+Resumes the body and returns the yielded value. After the body finishes, returns C<undef>; repeated calls stay
+C<undef>. If the body threw, the exception is rethrown on the caller's stack at the C<next> that provokes it, and the
+generator is done afterwards (later C<next> calls are C<undef>).
+
+=head2 C<is_done( )>
+
+True once the body has finished (normally or by throwing).
+
+=head1 HOW IT WORKS
+
+=over
+
+=item * B<Asymmetric pull.> Each C<next> resumes the private fiber with a fresh scheduler call (the runtime's
+C<coro_call>), and each C<yield> parks it back. Exhaustion finishes the fiber through the normal scheduler teardown.
+
+=item * B<Errors cross the resume.> The body runs inside a fiber-local C<eval>; a die raised on a resumed trip is caught
+there (the scheduler's own error trap can miss a die that fires across a resumption) and parked in a lexical that
+C<next> dereferences and rethrows, so no die ever escapes across a resumption boundary.
+
+=item * B<Abandoned generators drain.> Discarding a generator whose fiber is suspended mid-yield resumes it with a
+drain marker; the yield function dies on it, the fiber stops and finishes normally, and perl unwinds its own scopes.
+This is deliberately preferred over tearing a suspended, eval-bearing fiber down mid-shot.
+
+=item * B<Reserved first fiber.> On Windows, resuming a die path through the very first fiber a process ever allocates
+can defeat every anchored error trap, so the module keeps one permanently parked fiber and generators always start on a
+later slot.
+
+=back
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis>, L<Acme::Parataxis::Future>, L<Acme::Parataxis::Channel>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut
