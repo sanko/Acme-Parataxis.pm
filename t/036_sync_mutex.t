@@ -116,8 +116,15 @@ subtest 'an interrupted lock() unregisters so the next holder is served' => sub 
     my $err;
     async {
         my $a = fiber {
+
+            # A long hold widens the scheduling margin so the 10ms deadline in the
+            # with_timeout below cannot lose the race: the block must never acquire
+            # the lock (it finishes without unlocking, stranding the owner on a dead
+            # fiber and deadlocking the next waiter). macOS/Windows flakes fired the
+            # timer up to ~24ms late, right as a 30ms hand-off completed (pthread
+            # deadlock here, "not reentrant" on fid reuse there).
             $m->lock;
-            await_sleep(30);
+            await_sleep(2000);
             $log .= 'A';
             $m->unlock;
         };

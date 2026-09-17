@@ -974,6 +974,61 @@ DLLEXPORT SV * maybe_yield() {
 }
 
 /**
+ * @brief DEBUGGING-only: name a CV whose pad @_ (slot 0) is AvREAL.
+ *
+ * A fiber that parks while a shared subroutine's @_ slot is AvREAL leaves that state in the CV's shared PadList.
+ * When a different fiber later enters the same CV at the same depth, pp_entersub's assert(!AvREAL(av)) panics in
+ * DEBUGGING builds. Printing the offending CV name + depth + where, at the moment the state is created or cleaned,
+ * localizes the R4/M0-class corruption beyond pp_hot.c's bare "(on line N")" message.
+ */
+static void para_report_avreal_pad(pTHX_ CV * cv, I32 depth, const char * where) {
+    if (!cv || SvTYPE((SV *)cv) != SVt_PVCV)
+        return;
+    const char * pkg = (CvSTASH(cv) && HvNAME_get(CvSTASH(cv))) ? HvNAME_get(CvSTASH(cv)) : "?";
+    const char * name = "?";
+    GV * gv = CvGV(cv);
+    if (gv && isGV_with_GP(gv) && GvNAME_HEK(gv))
+        name = GvNAME(gv);
+#ifdef DEBUGGING
+    fprintf(stderr, "PARATAXIS_PAD: %s %s::%s depth=%ld\n", where, pkg, name, (long)depth);
+#else
+    PERL_UNUSED_VAR(pkg);
+    PERL_UNUSED_VAR(name);
+#endif
+}
+
+/**
+ * @brief DEBUGGING-only: report every just-parked fiber sub-frame whose pad @_ (slot 0) is AvREAL.
+ *
+ * Called from swap_perl_state after the depositing fiber's context stack has been recaptured, i.e. for every
+ * park/yield. A hit names the fiber-victim CV whose reified @_ slot will later trip pp_entersub when another fiber
+ * enters the same CV at the same depth.
+ */
+static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char * where) {
+    if (!from || !from->si || !from->si->si_cxstack)
+        return;
+    for (I32 i = 0; i <= from->si->si_cxix; i++) {
+        PERL_CONTEXT * cx = &(from->si->si_cxstack[i]);
+        if (CxTYPE(cx) != CXt_SUB && CxTYPE(cx) != CXt_FORMAT)
+            continue;
+        CV * cv = cx->blk_sub.cv;
+        I32 depth = cx->blk_sub.olddepth + 1;
+        PADLIST * pl = (cv && SvTYPE((SV *)cv) == SVt_PVCV) ? CvPADLIST(cv) : NULL;
+        if (!pl || depth <= 0 || depth > PadlistMAX(pl))
+            continue;
+        AV * pad = (AV *)PadlistARRAY(pl)[depth];
+        if (!pad || SvTYPE((SV *)pad) != SVt_PVAV)
+            continue;
+        SV ** array = AvARRAY(pad);
+        if (!array || AvMAX(pad) < 0)
+            continue;
+        SV * args = array[0];
+        if (args && SvTYPE(args) == SVt_PVAV && AvREAL(args))
+            para_report_avreal_pad(aTHX_ cv, depth, where);
+    }
+}
+
+/**
  * @brief Restores subroutine call depths and cleans argument pads.
  *
  * This function iterates the context stack and restores CvDEPTH for active subroutines in two passes to safely handle
@@ -1019,6 +1074,8 @@ static void _activate_current_depths(pTHX_ para_fiber_t * to) {
                         if (array && AvMAX(next_pad) >= 0) {
                             SV * args = array[0];
                             if (args && SvTYPE(args) == SVt_PVAV) {
+                                if (AvREAL(args))
+                                    para_report_avreal_pad(aTHX_ cv, next_depth, "pass2-cleaning");
                                 AvFILLp((AV *)args) = -1;
                                 AvREIFY_only((AV *)args);
                             }
@@ -1043,6 +1100,10 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     dTHX;
     /* Save current state into 'from' context */
     from->si = PL_curstackinfo;
+
+    // R4 localization: the just-deposited fiber's live frames are still intact here; any sub-frame whose pad @_
+    // slot 0 is AvREAL is the state that will later trip pp_entersub for another fiber entering the same CV.
+    para_report_reified_at_switch(aTHX_ from, "park");
 
     // The Argument Stack (Main Perl stack)
     from->curstack = PL_curstack;
