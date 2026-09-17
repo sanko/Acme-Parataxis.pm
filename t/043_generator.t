@@ -130,5 +130,31 @@ subtest 'the private fiber is reusable across exhaustion and a later generator' 
     is $gen2->next, 9, 'a fresh generator creates a fresh fiber';
     ok !defined( $gen2->next ), 'and exhausts normally';
 };
+subtest 'a body that dies with the old sentinel string still surfaces (no silent drain swallow)' => sub {
+    my $gen = Acme::Parataxis::Generator->new(
+        sub ($y) {
+            $y->('ok');
+            die '__PARATAXIS_GENERATOR_DRAIN__';
+        }
+    );
+    is $gen->next, 'ok', 'the first value delivers';
+    my $err = eval { $gen->next; 1 };
+    ok !$err, 'the die surfaces instead of being mistaken for a drain';
+    like "$@", qr/__PARATAXIS_GENERATOR_DRAIN__/, 'the exact message is preserved';
+    ok $gen->is_done, 'the generator is done after the failure';
+};
+subtest 'yielding the sentinel lookalike string is ordinary data' => sub {
+    my $base = Acme::Parataxis::get_live_fiber_count();
+    {
+        my $kept = Acme::Parataxis::Generator->new(
+            sub ($y) {
+                $y->('__PARATAXIS_GENERATOR_DRAIN__');
+                $y->('tail');
+            }
+        );
+        is $kept->next, '__PARATAXIS_GENERATOR_DRAIN__', 'the lookalike yields as a plain value';
+    }
+    is Acme::Parataxis::get_live_fiber_count(), $base, 'DESTROY drained the suspended generator cleanly';
+};
 #
 done_testing;

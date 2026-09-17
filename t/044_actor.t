@@ -1,6 +1,6 @@
 use v5.40;
 use blib;
-use Acme::Parataxis qw[async with_timeout];
+use Acme::Parataxis qw[async with_timeout yield];
 use Acme::Parataxis::Actor;
 use Test2::V1 -ipP;
 $|++;
@@ -127,6 +127,29 @@ subtest 'no fiber leaks: an actor that stops returns the live count to baseline'
         $actor->stop;
     };
     is Acme::Parataxis::get_live_fiber_count(), $base, 'the actor fiber was reaped';
+};
+subtest 'an unreferenced stopped actor is collected (no self -> fiber -> closure ref cycle)' => sub {
+    my $weak;
+    async {
+        my $actor = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg->{n} } );
+        is $actor->ask( { n => 7 } )->await, 7, 'the actor answers';
+        $actor->stop;
+        weaken( $weak = $actor );
+        undef $actor;
+        yield while Acme::Parataxis::get_live_fiber_count() > 1;    # let _run finish its drain
+    };
+    is $weak, undef, 'the actor object is freed once the owner and the fiber are both done';
+};
+subtest 'an actor dropped while parked (no ->stop) is collected (DESTROY wakes the parked fiber)' => sub {
+    my $weak;
+    async {
+        my $actor = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg->{n} } );
+        is $actor->ask( { n => 3 } )->await, 3, 'the actor answers';
+        weaken( $weak = $actor );
+        undef $actor;                                               # dropped WITHOUT ->stop while the fiber is parked in ->get; DESTROY wakes it
+        yield while Acme::Parataxis::get_live_fiber_count() > 1;    # let the woken fiber drain and reap itself
+    };
+    is $weak, undef, "the dropped-while-parked actor object was freed";
 };
 #
 done_testing;

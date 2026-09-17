@@ -19,7 +19,7 @@ subtest 'destroying a fiber parked on a bare yield then reusing its id survives 
                 my $parked = fiber { yield('WAITING'); 7 };
                 ok !$parked->is_done, "round $round: the fiber is parked";
                 Acme::Parataxis::destroy_coro( $parked->fid );
-                my $g = fiber { 7 };
+                my $g = fiber {7};
                 is $g->await, 7, "round $round: a fiber created after the destroy still runs";
             }
         );
@@ -31,7 +31,7 @@ subtest 'destroying a fiber parked in a scheduled wait (await_sleep) is safe too
             my $parked = fiber { await_sleep(1000); 1 };
             ok !$parked->is_done, 'the sleeper is parked on its job';
             Acme::Parataxis::destroy_coro( $parked->fid );
-            my $g = fiber { 7 };
+            my $g = fiber {7};
             is $g->await, 7, 'a fiber created after destroying a sleep-parked fiber still runs';
         }
     );
@@ -39,10 +39,10 @@ subtest 'destroying a fiber parked in a scheduled wait (await_sleep) is safe too
 subtest 'destroying a finished fiber is unaffected (control)' => sub {
     run(
         sub {
-            my $done = fiber { 7 };
+            my $done = fiber {7};
             $done->await;
             Acme::Parataxis::destroy_coro( $done->fid );
-            my $g = fiber { 7 };
+            my $g = fiber {7};
             is $g->await, 7, 'a fiber created after destroying a finished fiber still runs';
         }
     );

@@ -48,6 +48,12 @@ defaults to C<2_000_000_000>.
 Append a value to the channel. Blocks the current fiber if the channel is at capacity, waiting until space becomes
 available.
 
+=head2 C<put_priority( $value )>
+
+    $ch->put_priority($value);
+
+Append a value to the channel. Bypasses any yield or parks even if the mailbox is full.
+
 =head2 C<get( )>
 
     my $value = $ch->get;

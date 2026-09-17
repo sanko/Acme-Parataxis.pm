@@ -30,29 +30,30 @@ package Acme::Parataxis::Actor v0.1.0 {
             done     => 0,
             fiber    => undef,
         }, $class;
-        $self->{fiber} = fiber { $self->_run };
+        my $weak = $self;    # the fiber body captures this weak copy, so a done actor is collectable
+        builtin::weaken($weak);
+        my $mb = $self->{mailbox};    # put a pin in it for a sec...
+        $self->{fiber} = fiber {
+            while (1) {
+                my $env = $mb->get;    # Park it here without holding $self
+                my ( $reply, $value ) = @$env;
+                last if defined $value && ref $value && $value == $STOP;
+                #
+                my $actor = $weak;
+                last unless defined $actor;    # Handle was dropped by user
+                $actor->_dispatch( $reply, $value );
+            }
+
+            # Drain remaining asks on stop...
+            while (1) {
+                my ( $ok, $env ) = $mb->try_get;
+                last unless $ok;
+                my ( $reply, $value ) = @$env;
+                $reply->set_error('actor stopped before this message was handled!') if defined $reply;
+            }
+            if ( my $actor = $weak ) { $actor->{done} = 1 }
+        };
         return $self;
-    }
-
-    sub _run ($self) {
-        my $mb = $self->{mailbox};
-        while (1) {
-            my $env = $mb->get;
-            my ( $reply, $value ) = @$env;
-            last if defined $value && ref $value && $value == $STOP;
-            $self->_dispatch( $reply, $value );
-        }
-
-        # Graceful stop: everything already queued before the stop marker has been answered; fail any
-        # asks that slipped in after it so their awaiters wake instead of hanging on a dead actor.
-        while (1) {
-            my ( $ok, $env ) = $mb->try_get;
-            last unless $ok;
-            my ( $reply, $value ) = @$env;
-            $reply->set_error("actor stopped before this message was handled") if defined $reply;
-        }
-        $self->{done} = 1;
-        return;
     }
 
     sub _dispatch ( $self, $reply, $value ) {
@@ -88,7 +89,9 @@ package Acme::Parataxis::Actor v0.1.0 {
     sub stop ($self) {
         return if $self->{done};
         $self->{stopping} = 1;
-        $self->{mailbox}->put( [ undef, $STOP ] );
+
+        # Non-blocking enqueue so DESTROY never yields or parks:
+        $self->{mailbox}->put_priority( [ undef, $STOP ] );
         return $self;
     }
     sub is_alive ($self) { return !$self->{done} }
@@ -98,6 +101,11 @@ package Acme::Parataxis::Actor v0.1.0 {
         croak 'send()/ask(): this actor is no longer running' if $self->{done};
         croak 'send()/ask(): this actor is shutting down'     if $self->{stopping};
         return;
+    }
+
+    sub DESTROY ($self) {
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        $self->stop unless $self->{done};
     }
 }
 #

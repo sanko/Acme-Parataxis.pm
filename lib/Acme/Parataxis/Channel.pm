@@ -8,10 +8,10 @@ class Acme::Parataxis::Channel v0.1.0 {
     use Acme::Parataxis::CancellationToken;
     use Acme::Parataxis::Semaphore;
     use Carp qw[croak];
-    field $capacity        : param //= 2_000_000_000;
-    field $sem_get         = Acme::Parataxis::Semaphore->new( count => 0 );
-    field $sem_put         = Acme::Parataxis::Semaphore->new( count => $capacity );
-    field @data            : reader;
+    field $capacity : param //= 2_000_000_000;
+    field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
+    field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity );
+    field @data : reader;
     field @select_waiters;    # [fid, op] pairs parked here by select(); op is 'get' or 'put'
     ADJUST {
         $capacity >= 1 or die "Channel capacity must be >= 1 (got $capacity)\n";
@@ -19,6 +19,13 @@ class Acme::Parataxis::Channel v0.1.0 {
 
     method put ($value) {
         $sem_put->down( 'Channel put', 3 );
+        push @data, $value;
+        $sem_get->up;
+        $self->_wake_select_waiters('get');
+        1;
+    }
+
+    method put_priority ($value) {
         push @data, $value;
         $sem_get->up;
         $self->_wake_select_waiters('get');
@@ -48,12 +55,14 @@ class Acme::Parataxis::Channel v0.1.0 {
         $self->_wake_select_waiters('put');
         return ( 1, $v );
     }
-    method size ()        { scalar @data }
+    method size () { scalar @data }
+
     method shutdown () {
         $sem_get->adjust(1_000_000_000);
         $self->_wake_select_waiters('get');
         1;
     }
+
     method adjust ($diff) {
         $sem_put->adjust($diff);
         $self->_wake_select_waiters('put');
@@ -64,8 +73,8 @@ class Acme::Parataxis::Channel v0.1.0 {
     method remove_waiter ($fid) {    # Unregisters the fiber from any internal wait queue; returns the number of entries removed.
         $sem_get->remove_waiter($fid) + $sem_put->remove_waiter($fid) + $self->_unregister_select_waiter($fid);
     }
+    method _register_select_waiter ( $fid, $op ) { push @select_waiters, [ $fid, $op ]; return $fid; }
 
-    method _register_select_waiter ($fid, $op) { push @select_waiters, [ $fid, $op ]; return $fid; }
     method _unregister_select_waiter ($fid) {
         my $before = @select_waiters;
         @select_waiters = grep { $_->[0] != $fid } @select_waiters;
@@ -78,8 +87,8 @@ class Acme::Parataxis::Channel v0.1.0 {
         for my $ent (@select_waiters) {
             my ( $fid, $want ) = @$ent;
             next if !defined Acme::Parataxis->by_id($fid);    # stale: dropped, not retained for the next wake
-            if ( $want eq $op ) { Acme::Parataxis::_scheduler_enqueue_by_id($fid) }
-            else                { push @still, $ent }
+            if   ( $want eq $op ) { Acme::Parataxis::_scheduler_enqueue_by_id($fid) }
+            else                  { push @still, $ent }
         }
         @select_waiters = @still;
         return;
@@ -97,16 +106,14 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
         my $arg = shift @args;
         if ( ref $arg eq 'ARRAY' && @$arg >= 2 ) {
             my ( $ch, $op, @rest ) = @$arg;
-            Carp::croak 'select() case channel must be an Acme::Parataxis::Channel'
-                unless ref($ch) && $ch->isa('Acme::Parataxis::Channel');
-            Carp::croak 'select() case op must be "get" or "put"' unless $op eq 'get' || $op eq 'put';
+            Carp::croak 'select() case channel must be an Acme::Parataxis::Channel' unless ref($ch) && $ch->isa('Acme::Parataxis::Channel');
+            Carp::croak 'select() case op must be "get" or "put"'                   unless $op eq 'get' || $op eq 'put';
             Carp::croak 'select() "put" case requires a value' if $op eq 'put' && @$arg < 3;
             push @cases, [ $ch, $op, $rest[0] ];
         }
         elsif ( $arg eq 'timeout' ) {
             $timeout = shift @args;
-            Carp::croak 'select() timeout must be a non-negative number of milliseconds'
-                unless defined $timeout && $timeout >= 0;
+            Carp::croak 'select() timeout must be a non-negative number of milliseconds' unless defined $timeout && $timeout >= 0;
         }
         elsif ( $arg eq 'default' ) {
             $default = shift @args;
@@ -117,7 +124,6 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
         }
     }
     Carp::croak 'select() needs at least one case' unless @cases;
-
     my $fid = Acme::Parataxis->current_fid;
     Carp::croak 'select() must be called from inside a scheduled fiber' if $fid < 0;
 
@@ -126,11 +132,13 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
     # window an await_sleep-only timeout would leave between the probe step and registration.
     my $deadline;
     my $timer_armed;
-    while (1) {
+    my ( $out_ch, $out_val, $out_die ) = ( undef, undef, undef );
+OUTER: while (1) {
+
         # Phase 1 -- probe, no yield: shuffle so no ordering starves a case, commit the first match, and let
         # default run only when nothing is ready (it never parks).
         my @order = 0 .. $#cases;
-        for ( my $i = $#order ; $i > 0 ; $i-- ) {
+        for ( my $i = $#order; $i > 0; $i-- ) {
             my $j = int rand( $i + 1 );
             @order[ $i, $j ] = @order[ $j, $i ];
         }
@@ -138,13 +146,13 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
             my ( $ch, $op, $v ) = @{ $cases[$i] };
             if ( $op eq 'get' ) {
                 my ( $ok, $got ) = $ch->try_get;
-                return ( $ch, $got ) if $ok;
+                if ($ok) { ( $out_ch, $out_val ) = ( $ch, $got ); last OUTER; }
             }
             else {
-                return ( $ch, $v ) if $ch->try_put($v);
+                if ( $ch->try_put($v) ) { ( $out_ch, $out_val ) = ( $ch, $v ); last OUTER; }
             }
         }
-        return ( undef, $default->() ) if defined $default;
+        if ( defined $default ) { ( $out_ch, $out_val ) = ( undef, $default->() ); last OUTER; }
 
         # Phase 2 -- register on every involved channel, arm the shared deadline, then park. On wake the
         # park's deregistrations were already dropped (_resume_hooks) or the per-channel wake skipped the
@@ -156,7 +164,13 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
             $deadline->register;
             unless ($timer_armed) {
                 my $ms = $timeout;
-                Acme::Parataxis::fiber { Acme::Parataxis::await_sleep($ms); $deadline->cancel };
+
+                # The timer registers on the shared deadline and swallows its own interrupt, so teardown can
+                # recall it when a case commits first instead of leaving a worker parked for the full $ms.
+                Acme::Parataxis::fiber {
+                    $deadline->register;
+                    eval { Acme::Parataxis::await_sleep($ms); $deadline->cancel; 1 };
+                };
                 $timer_armed = 1;
             }
         }
@@ -168,14 +182,25 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
         $dereg->();    # idempotent: on interrupt _park already ran it; on a natural wake this is the cleanup
         my $err = $@;
         if ( !$ok ) {
+
             # Our own deadline fired -> the API is (undef, undef) on timeout. A timeout sent by an *enclosing*
             # with_timeout/nursery did not cancel our token, so it propagates instead of being swallowed.
             if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
-                return ( undef, undef );
+                ( $out_ch, $out_val ) = ( undef, undef );
+                last OUTER;
             }
-            die $err;
+            $out_die = $err;
+            last OUTER;
         }
     }
+
+    # Every exit funnels through here so the armed timeout helper is never orphaned: drop the select fiber off
+    # the token first (a running fiber must not receive its own interrupt), then cancel to recall the timer's
+    # sleep job. A deadline that already fired makes both steps no-ops.
+    $deadline->unregister if defined $deadline;
+    $deadline->cancel     if defined $deadline;
+    die $out_die          if defined $out_die;
+    return ( $out_ch, $out_val );
 }
 #
 1;

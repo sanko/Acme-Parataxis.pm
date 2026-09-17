@@ -498,7 +498,7 @@ pure timing race, not a scheduler bug. **Fixed** by widening the "must timeout" 
 from 100ms to 2000ms (the deadline interrupts the block at ~20ms, so the test costs no
 extra time). Verified 8/8 loops and the full 46-file suite locally on Windows.
 
-### R4 — Stress `pp_entersub` assert `!AvREAL(av)` aborts the fuzz (**FIX PENDING CI VERIFY**)
+### R4 — Stress `pp_entersub` assert `!AvREAL(av)` aborts the fuzz (**FIX APPLIED & VERIFIED LOCALLY — awaiting CI Stress confirm**)
 
 The debug-perl Stress workflow (`-DDEBUGGING` build, `PARATAXIS_STRESS_ITER=400
 PARATAXIS_STRESS_SECONDS=30 cpanm -v .`) aborts with
@@ -510,13 +510,37 @@ day) passed. Local Windows (non-debug) perl can't hit the assert — t/040 with 
 passes repeatedly — so verification requires a `-DDEBUGGING` perl (only the Stress CI
 runner has one).
 
-Root-cause theory (unverified): `_activate_current_depths` Pass 2
-(`lib/Acme/Parataxis.c`, ~line 999) does `AvFILLp=-1; AvREAL_off()` on
-`PadlistARRAY(pl)[CvDEPTH(cv)+1]` slot 0 — but `CvDEPTH`/PadLists are **global per CV,
-shared across fibers**. If another fiber is concurrently active in a shared sub (yield,
-wait helpers) at `CvDEPTH+1`, this clears a LIVE `@_` slot and flips `AvREAL`; a later
-`pp_entersub` with args on that slot trips the assert. Same shared-PadList/global-CvDEPTH
-corruption class as M0, located in `_activate_current_depths` instead of `destroy_coro`.
+Root cause (now verified locally): the park-live API subs in `lib/Acme/Parataxis.pm`
+(`yield`, `with_timeout`, `nursery`, `spawn`, `await_sleep`, `await_core_id`,
+`await_read`, `await_write`, `maybe_yield`) consumed their arguments with
+`shift`/`unshift`/list-context `@_` and `yield` handed `coro_yield(\@_)` — all of which
+reify slot 0 (`av_reify`). A parked frame therefore left its shared slot-0 `@_` with
+`AvREAL` set; the next fiber to enter the same CV at the same depth tripped
+`pp_entersub`'s `assert(!AvREAL(av))` / `assert(AvFILLp(av) == -1)` (pp_hot.c:6445-6449).
+
+Verified on a local `-DDEBUGGING` perl 5.42.3 (built `win32\GNUmakefile CFG=Debug
+CCHOME=C:\Strawberry\c`, which the default perl — a non-debug build — cannot do):
+
+- **Reproduced the exact CI abort** with the pre-fix perl code: `Assertion failed:
+  !AvREAL(av), file ..\pp_hot.c, line 6447`, preceded by the identical `PARATAXIS_PAD`
+  tail that pinned the failure (pass2-cleaning yield d=8, park with_timeout d=1, park
+  await_sleep d=4, park yield d=7, park with_timeout d=1, park await_sleep d=5, park
+  yield d=8). The C-side Pass-2 `AvREIFY_only` repair below was already in that build and
+  did **not** prevent the abort — reification at park time happens after Pass 2, so
+  flipping flags in the C shim could not clean a slot the parked `@_` consumption had
+  reified again.
+- **Fix** (commit `5343d08`, `lib/Acme/Parataxis.pm`): the nine subs now read args only
+  via indexed access (`$_[N]`, `_arg_offset` helper — never shift/unshift/slices), pass a
+  fresh anonymous array to `coro_yield`, and `@_ = ();` before parking, so the pad is
+  left pristine (REIFY-only, `AvFILLp == -1`) exactly as `cx_popsub`'s
+  `Perl_clear_defarray` would. `\@_` is gone.
+- **Verified:** under the debug perl t/040 passes, zero `PARATAXIS_PAD` reify probes are
+  emitted, and the full suite is green (46 files / 342 tests, PASS). User-code `@_` and
+  5.36+ signature params are unaffected — a fitted stress (same packaged sub with args,
+  signature and plain forms, 300 fibers parked mid-body) does not assert: the module only
+  rehydrates pads for its own API CVs, never user subs.
+- **Pending:** the harness Stress re-run (`-DDEBUGGING`, `PARATAXIS_STRESS_ITER=400
+  PARATAXIS_STRESS_SECONDS=30 cpanm -v .`) on macOS/Linux CI to close this out.
 
 Evidence pinned from perl 5.42.3 source (non-`PERL_RC_STACK` builds, matching the Stress
 perl — assert is the `#else` branch at pp_hot.c:6447):
@@ -535,13 +559,11 @@ perl — assert is the `#else` branch at pp_hot.c:6447):
   REIFY" state; a later op that stores into such an array re-turns it REAL
   (av.c `Perl_av_store`), so the flip is at best a partial repair of the invariant.
 
-Debugging plan: (1) local Windows perl is not `-DDEBUGGING`, so the assert cannot fire
-here — reproducing needs the Stress runner's debug perl (t/040 with stress env passes
-locally). (2) Candidate fix: make Pass 2 restore the full `@_` invariant with
-`AvREIFY_only` (not just `AvREAL_off`) — **APPLIED** (Parataxis.c Pass 2, committed with
-the R3 fix; pending the next Stress run for verification on a `-DDEBUGGING` perl). It
-flips a possibly-live shared slot's flags, so the deeper "PadList owned by other fibers"
-hazard (M0-class) may still lurk; if Stress stays red after this, scope Pass 2 and
-`_clear_pads_in_stack` to pads of the resuming/reaped fiber only. (3) Ship a
-`DEBUGGING`-only resume-time check (verify each active shared-sub pad slot 0 is
-`!AvREAL`, abort with the offending CV name) if more Stress failures need localization.
+Resolution trail: (1) local Windows perl is not `-DDEBUGGING`, so the C-side Pass-2
+`AvREIFY_only` candidate was applied blind (committed with the R3 fix) — history win. (2)
+A local `-DDEBUGGING` perl then reproduced the abort deterministically (see the verified
+root-cause note above) and showed the C-side repair alone was insufficient: the park-live
+subs reified slot 0 *after* Pass 2. (3) The perl-side fix (non-reifying arg reads +
+`@_ = ();` before park, `5343d08`) eliminates reification at its source and passes the
+full suite under the debug perl. The Pass-2 `AvREIFY_only` flip is retained as belt-and-
+braces; no further C-side change is planned unless Stress disagrees.

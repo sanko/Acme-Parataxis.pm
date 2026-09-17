@@ -5,7 +5,7 @@ use Acme::Parataxis;
 package Acme::Parataxis::Generator v0.1.0 {
     our @ISA = ();
     our $RESERVED;
-    our $DRAIN = '__PARATAXIS_GENERATOR_DRAIN__';
+    our $DRAIN = \do { my $x = 1 };    # an opaque scalar ref, so no user yield/die value can collide with the marker
     use Carp qw[croak];
 
     # Stackful lazy iterator backed by a private fiber (online note: the producer never
@@ -38,7 +38,7 @@ package Acme::Parataxis::Generator v0.1.0 {
         # the closure dies with it so the body stops on the next suspension boundary.
         my $yield = sub ($value) {
             my $got = Acme::Parataxis::coro_yield( [$value] );
-            die $got->[0] if ref $got eq 'ARRAY' && @$got == 1 && $got->[0] eq $DRAIN;
+            die $got->[0] if ref $got eq 'ARRAY' && @$got == 1 && ref( $got->[0] ) eq 'SCALAR' && $got->[0] == $DRAIN;
             return;
         };
 
@@ -62,7 +62,7 @@ package Acme::Parataxis::Generator v0.1.0 {
         my $rv = Acme::Parataxis::coro_call( $fiber->fid, [] );
         return ( ref $rv eq 'ARRAY' ) ? $rv->[0] : undef unless $fiber->is_done;
         my $err = ${ $self->{err_ref} };
-        die $err if defined $err && $err ne $DRAIN;
+        die $err if defined $err && !( ref($err) eq 'SCALAR' && $err == $DRAIN );
         return undef;
     }
 

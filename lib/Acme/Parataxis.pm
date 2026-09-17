@@ -197,9 +197,7 @@ package Acme::Parataxis v0.1.0 {
     # the same depth.
     sub _arg_offset {
         my $self = $_[0];
-        return ( defined $self
-                && ( ( ref $self || $self ) eq __PACKAGE__ || ( builtin::blessed($self) && $self->isa(__PACKAGE__) ) ) ) ? 1
-                : 0;
+        return ( defined $self && ( ( ref $self || $self ) eq __PACKAGE__ || ( builtin::blessed($self) && $self->isa(__PACKAGE__) ) ) ) ? 1 : 0;
     }
 
     sub yield {
@@ -328,7 +326,7 @@ package Acme::Parataxis v0.1.0 {
     # interrupted) teardown recalls the timer's armed sleep and the worker is freed instead of staying occupied for
     # the whole bound; the timer is not armed at all when the block finishes inline (never parks) or when $ms is 0.
     sub with_timeout {
-        my $o  = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $ms = $_[$o];
         croak 'with_timeout() requires a duration in milliseconds' unless defined $ms && $ms >= 0;
@@ -432,7 +430,7 @@ package Acme::Parataxis v0.1.0 {
     # the scheduler and is aggregated as Acme::Parataxis::Error::Nursery rather than thrown here.
     # If $code itself dies, its children are cancelled and drained before its error is rethrown.
     sub nursery {
-        my $o  = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $code = $_[$o];
         croak 'nursery() requires a CODE ref' unless ref $code eq 'CODE';
@@ -495,7 +493,7 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub await_sleep {
-        my $o  = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $ms = $_[$o] // 0;
         @_ = ();
@@ -510,7 +508,7 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub await_read {
-        my $o  = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $fh      = $_[$o];
         my $timeout = $_[ $o + 1 ] // 5000;
@@ -523,7 +521,7 @@ package Acme::Parataxis v0.1.0 {
     }
 
     sub await_write {
-        my $o  = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $fh      = $_[$o];
         my $timeout = $_[ $o + 1 ] // 5000;
@@ -806,7 +804,15 @@ package Acme::Parataxis v0.1.0 {
         else                         { push @{ $self->[F_CALLBACKS] }, $cb }
     }
 
-    sub await ($self) {
+    sub await ($target) {
+
+        # await() is exported as a plain function; await($fut) must delegate to the await-capable receiver's own
+        # method (e.g. Future), while fiber objects (which ARE Acme::Parataxis) keep the arrayref-slot path.
+        # The signature keeps @_ unreified here: await() parks and is resumed on this same pad.
+        if ( builtin::blessed($target) && $target->can('await') && !$target->isa(__PACKAGE__) ) {
+            return $target->await;
+        }
+        my $self  = $target;
         my $ready = $self->[F_IS_READY];
         if ( !$ready ) {
             croak 'await() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;

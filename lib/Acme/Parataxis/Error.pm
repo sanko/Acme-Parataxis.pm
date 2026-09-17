@@ -45,22 +45,20 @@ package Acme::Parataxis::Error v0.1.0 {
     # the real culprit, not the siblings it brought down). Plain-string dies survive too.
     package Acme::Parataxis::Error::Nursery v0.1.0 {
         use parent 'Acme::Parataxis::Error';
+
         sub new ( $class, %args ) {
             my $failures = delete $args{failures};
             $failures = [] unless ref $failures eq 'ARRAY';
-            my @natural = grep { my $k = eval { $_->kind }; !defined($k) || $k ne 'cancelled' } @$failures;
+            my @natural = grep {
+                my $k = eval { $_->kind };
+                !defined($k) || $k ne 'cancelled'
+            } @$failures;
             my $primary = $natural[0] // $failures->[0];
             my $message = defined $primary ? "nursery failure: $primary" : 'nursery failure';
-            bless {
-                message     => $message,
-                label       => 'nursery failure',
-                wait_reason => undef,
-                failures    => $failures,
-                primary     => $primary,
-                %args,
-            }, $class;
+            bless { message => $message, label => 'nursery failure', wait_reason => undef, failures => $failures, primary => $primary, %args, },
+                $class;
         }
-        sub kind     ($self) { 'nursery' }
+        sub kind     ($self) {'nursery'}
         sub failures ($self) { @{ $self->{failures} // [] } }    # every child's error, in spawn order
         sub primary  ($self) { $self->{primary} }                # first natural (non-cancelled) failure
     }

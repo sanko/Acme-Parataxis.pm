@@ -93,6 +93,18 @@ subtest 'await: multiple fibers may await the same future' => sub {
     is \%res, { A => T(), B => T(), C => T() }, 'every waiter was resumed';
     is \@got, [ 'ready', 'ready', 'ready' ], 'all observed the same result';
 };
+subtest 'await: the exported await() delegates to an await-capable receiver' => sub {
+    my $f = Acme::Parataxis::Future->new;
+    my $got;
+    async {
+        fiber { yield; $f->set_result('via-function') };
+        $got = await($f);    # the plain (exported) await, not $f->await
+    };
+    is $got, 'via-function', 'await($future) parked through Future::await';
+    my $g = Acme::Parataxis::Future->new;
+    $g->set_result('instant');
+    is await($g), 'instant', 'await() on an already-ready future needs no fiber';
+};
 subtest 'clear_result: resets the future for reuse' => sub {
     my $f     = Acme::Parataxis::Future->new;
     my $fired = 0;
