@@ -69,6 +69,8 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <time.h>
+#include <errno.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -505,11 +507,25 @@ static int system_initialized = 0;
 #define PARA_COND_SIGNAL(c) WakeConditionVariable(&c)
 #define PARA_COND_BROADCAST(c) WakeAllConditionVariable(&c)
 #define PARA_COND_INIT(c) InitializeConditionVariable(&c)
+#define PARA_COND_TIMEDWAIT(c, m, ms) SleepConditionVariableCS(&c, &m, (ms))
 #else
 #define PARA_COND_WAIT(c, m) pthread_cond_wait(&c, &m)
 #define PARA_COND_SIGNAL(c) pthread_cond_signal(&c)
 #define PARA_COND_BROADCAST(c) pthread_cond_broadcast(&c)
 #define PARA_COND_INIT(c) pthread_cond_init(&c, NULL)
+
+/**
+ * @brief Timed wait on the queue condition variable (POSIX).
+ *
+ * Waits until \p deadline (absolute, in the same CLOCK_REALTIME clock a condition variable created with
+ * a NULL attribute uses) or until signalled/broadcast. Returns nonzero when the wait was interrupted by
+ * a signal or broadcast, zero when it timed out. Spurious wakeups are reported as nonzero too, so
+ * callers must re-check their predicate and re-wait against the same deadline.
+ */
+static int para_cond_timedwait(pthread_cond_t * cond, pthread_mutex_t * lock, const struct timespec * deadline) {
+    return pthread_cond_timedwait(cond, lock, deadline) != ETIMEDOUT;
+}
+#define PARA_COND_TIMEDWAIT(c, m, deadline) para_cond_timedwait(&c, &m, (deadline))
 #endif
 
 /** @brief Threshold for automatic preemption (0 to disable) */
@@ -613,31 +629,43 @@ void * worker_thread(void * arg) {
 
             if (job->type == TASK_SLEEP) {
                 int ms = (int)job->input.i;
-                int elapsed = 0;
-                /* Sleep in small quanta, checking the recall flag under the queue lock so an armed sleep
-                   can be abandoned early if the owning fiber is interrupted (deadline/timeout/cancel).
-                   The full request is still honoured when no recall arrives. */
-                const int quantum = (ms > 4) ? 4 : ms;
                 int recalled = 0;
-                while (elapsed < ms) {
-                    LOCK(queue_lock);
-                    recalled = job->recall;
-                    UNLOCK(queue_lock);
-                    if (recalled)
-                        break;
-                    int slice = (ms - elapsed > quantum) ? quantum : (ms - elapsed);
-#ifdef _WIN32
-                    Sleep(slice);
-#else
-                    usleep(slice * 1000);
-#endif
-                    elapsed += slice;
-                }
                 LOCK(queue_lock);
+                if (ms > 0 && !job->recall && threads_keep_running) {
+                    /* Timed condition-variable wait instead of quantized polling: the OS sleeps for (almost) the whole
+                     * remainder in one call, so a 1000 ms arm costs ~1000 ms on any platform (the old 4 ms quantum
+                     * inflated Windows sleeps ~4x through the ~15.6 ms system timer tick). The wait releases
+                     * queue_lock, so notifying threads (submit/recall/shutdown) are never blocked by a sleeping worker.
+                     * Recall and shutdown wakes are observed by re-checking the predicate; the deadline is fixed, so
+                     * spurious or broadcast wakeups just re-wait to it. */
+#ifdef _WIN32
+                    /* Absolute deadline as ms since boot; unsigned subtraction is wrap-safe. */
+                    DWORD deadline = GetTickCount() + (DWORD)ms;
+                    while (!job->recall && threads_keep_running) {
+                        DWORD remaining = deadline - GetTickCount();
+                        if ((int)remaining <= 0)
+                            break;
+                        PARA_COND_TIMEDWAIT(queue_cond, queue_lock, remaining);
+                    }
+#else
+                    struct timespec deadline;
+                    clock_gettime(CLOCK_REALTIME, &deadline);
+                    deadline.tv_sec += ms / 1000;
+                    deadline.tv_nsec += (long)(ms % 1000) * 1000000L;
+                    if (deadline.tv_nsec >= 1000000000L) {
+                        deadline.tv_sec++;
+                        deadline.tv_nsec -= 1000000000L;
+                    }
+                    while (!job->recall && threads_keep_running &&
+                           PARA_COND_TIMEDWAIT(queue_cond, queue_lock, &deadline)) {
+                        /* woken (recall, spurious, or shutdown); re-check and re-wait to the same deadline */
+                    }
+#endif
+                }
                 recalled = job->recall;
                 UNLOCK(queue_lock);
-                /* output.i = -1 signals an early recall (interrupted); otherwise the full duration elapses. */
-                job->output.i = (recalled || elapsed < ms) ? -1 : ms;
+                /* output.i = -1 signals an early recall (interrupted or shutdown); otherwise the full duration elapses. */
+                job->output.i = (recalled || !threads_keep_running) ? -1 : ms;
             }
             else if (job->type == TASK_GET_CPU) {
                 int cpu = get_current_cpu();
@@ -803,9 +831,10 @@ DLLEXPORT int get_outstanding_jobs() { return outstanding_jobs; }
 /**
  * @brief Recalls (abandons early) every armed TASK_SLEEP job owned by the given fiber.
  *
- * Used when a fiber parked in `await_sleep` is interrupted; the worker notices the recall flag
- * within one sleep quantum and completes the job early, so the fiber can fail-fast and the
- * scheduler does not stay alive until the sleep would have expired naturally.
+ * Used when a fiber parked in `await_sleep` is interrupted; the recall flags are set under the queue
+ * lock and queue_cond is broadcast so the owning worker aborts its timed wait immediately
+ * (sub-millisecond) instead of sleeping out the remainder of its armed duration. That lets the fiber
+ * fail-fast and keeps the scheduler from staying alive until the sleep would have expired naturally.
  *
  * @param fid The fiber whose armed sleeps should be recalled.
  * @return int The number of armed sleeps that were recalled.
@@ -825,6 +854,8 @@ DLLEXPORT int recall_sleep_jobs_for_fiber(int fid) {
         job_slots[i].recall = 1;
         count++;
     }
+    if (count > 0)
+        PARA_COND_BROADCAST(queue_cond); /* Wake the armed worker(s) immediately instead of waiting for the next job signal */
     UNLOCK(queue_lock);
     return count;
 }

@@ -13,7 +13,19 @@ class Acme::Parataxis::Sync::Mutex v0.1.0 : isa(Acme::Parataxis::Sync) {
         if ( !defined $owner ) { $owner = $fid; return 1 }
         croak 'Mutex is not reentrant: this fiber already holds the lock' if $owner == $fid;
         push @waiters, $fid;
-        $self->_park( 'Mutex lock', sub { $self->remove_waiter($fid) } );
+        $self->_park(
+            'Mutex lock',
+            sub {
+                # An unlock() may have handed the lock to us just as an interrupt (deadline/cancel) fired. That hand-off
+                # is never collected -- the interrupt throws before lock() returns -- so pass it on so ownership is not
+                # left stranded on a fid that is about to die (and later be reused).
+                if ( defined $owner && $owner == $fid ) {
+                    $owner = undef;
+                    $self->_serve;
+                }
+                $self->remove_waiter($fid);
+            }
+        );
         return 1;    # unlock() handed the lock to us before waking us
     }
 
@@ -31,6 +43,13 @@ class Acme::Parataxis::Sync::Mutex v0.1.0 : isa(Acme::Parataxis::Sync) {
         my $fid = $self->_fid('Mutex unlocks must occur inside a scheduled fiber');
         croak 'Mutex is not locked'                              unless defined $owner;
         croak 'Mutex release from a fiber that is not the owner' unless $owner == $fid;
+        $self->_serve;
+        return 1;
+    }
+
+    # Hand the lock to the next living waiter, or free it. owner is set before the waiter is woken so nobody else can
+    # steal the lock between the hand-off and the waiter running to collect it.
+    method _serve {
         my $next;
         while (@waiters) {
             my $waiter = shift @waiters;

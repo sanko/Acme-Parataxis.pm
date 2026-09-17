@@ -678,6 +678,20 @@ Because the mailbox is a bounded channel, slow handlers provide backpressure to 
 C<with_timeout> and cancellation just like any other block. Supervision (restart-on-failure, OTP-style) is out of
 scope; a handler die fails its own ask (or warns, for a C<send>) and the actor keeps going.
 
+=head2 Diagnostics
+
+Every fiber that parks in a wait records where and why (M0's wait_reason), and C<dump_fibers> exposes it: each live
+fiber with its state (C<WAITING> / C<READY> / C<RUNNING> / C<RUNNABLE>) and, when parked, the wait reason together with
+the source site where it yielded.
+
+    my $fibers = Acme::Parataxis->dump_fibers;       # data only
+    Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable report
+
+C<dump_fibers()> returns an arrayref of C<< { fid, state, reason => [ reason, file, line ] } >> records. It is safe to
+call at any time, including top level; outside a run it reports fibers leaked by an earlier deadlocked run. The
+scheduler's fatal deadlock message ("no runnable work and no outstanding jobs") is the same report, listing every
+parked fiber of the deadlocked run with its reason and site.
+
 =head1 Best Practices & Gotchas
 
 =over

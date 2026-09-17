@@ -17,10 +17,10 @@ A milestone's status line names the commit where it landed on `dev`.
 | **M3 — Sync family (WaitGroup/Mutex/Barrier/Once)** | **[x] done** | **`751820d`** | **t/036–t/039** |
 | **M4 — Nursery (structured concurrency)** | **[x] done** | **`751820d`** | **t/040, t/042** |
 | **M5 — Channel select** | **[x] done** | **`aafac21`** | **t/041** |
-| **M6 — Generator** | **[x] done** | **this commit** | **t/043** |
-| M7 — Thin actors | deferred | — | — |
-| M8 — Diagnostics & deadlock tracing | deferred | — | — |
-| M9 — Scalable I/O (epoll/kqueue/IOCP) | long-term | — | — |
+| **M6 — Generator** | **[x] done** | **`2198148`** | **t/043** |
+| **M7 — Thin actors** | **[x] done** | **`7c3ae27`** | **t/044** |
+| **M8 — Diagnostics & deadlock tracing** | **[x] done** | **this commit** | **t/045** |
+| M9 — Scalable I/O (epoll/kqueue/IOCP) | not in core plan | — | — |
 | Explicitly out of scope | keep list stable | — | — |
 
 ## Principles (decisions that shape everything below)
@@ -352,38 +352,75 @@ As-built design (deviates from the original sketch, each change empirically driv
   "(in cleanup)" noise unless absorbed; DESTROY wraps the resume in `eval { ...; 1 }`
   which silences it while exit code stays 0.
 
-## Milestone 7 — Thin actors (supervision deferred) (**deferred**)
+## Milestone 7 — Thin actors (supervision deferred) (**done** in `7c3ae27` — t/044)
 
-API sketch:
+API shipped as sketched: `Actor->spawn( sub ($self, $msg) { ... }, [$capacity] )`,
+`->ask($msg)` (returns a reply `Future`), `->send($msg)` (fire-and-forget),
+`->stop`, `->is_alive`, `->fid`. All green in t/044 (9 subtests).
 
-    my $actor = Acme::Parataxis::Actor->spawn( sub ($self, $msg) {
-        return 'pong' if $msg->{cmd} eq 'ping';
-    });
-    my $reply = $actor->ask({ cmd => 'ping' })->await;   # Future
-    $actor->send({ cmd => 'log' });                      # fire-and-forget
+As-built notes:
 
-Scope guardrail: fiber + mailbox (`Channel`) + `send`/`ask`+timeout. **Out of scope for
-now:** OTP-style supervision (restart strategies, links, exit signal propagation) — a
-separate project that would dominate the roadmap. Revisit only if a concrete use-case
-demands it.
+- The actor is a dedicated fiber owning a bounded `Channel` mailbox (default capacity
+  16); the loop is `get` -> dispatch -> repeat. `ask` tags the envelope with a reply
+  `Future` and returns it; the handler's return value is `set_result` on it, a handler
+  die is `set_error` on it (the actor keeps running). A `send`'s handler die is surfaced
+  with `warn`. Since the actor parks on the channel semaphore, every scheduler nicety
+  (with_timeout, cancellation, nursery) works around an `ask` unchanged.
+- Backpressure is free: the bounded mailbox makes a too-fast sender park like any other
+  blocked fiber.
+- Graceful `stop` puts a unique stop marker into the mailbox; the loop keeps answering
+  everything queued before the marker, then fails any asks that slipped in after it
+  (so an awaiter never hangs on a dead actor) and finishes. `send`/`ask` croak while
+  shutting down and after death. The marker is a scalar-ref sentinel compared by
+  `ref && ==`, so arbitrary string/number/ref messages never collide with it.
+- The marker check must guard `ref $value` before the `==` (a plain string message would
+  otherwise warn under numeric eq).
+- A deadlock hazard to document (not a bug): a handler that `ask`s *its own* actor and
+  awaits the reply blocks forever, because the actor is busy inside that handler.
+- An actor keeps the enclosing scheduler run alive until it stops (its loop fiber stays
+  parked on the mailbox `get`); tests always `->stop` before their `async` block ends and
+  assert the live-fiber count returns to baseline.
+- `spawn` croaks outside a scheduled fiber (a parked-to-never-run actor would hang the
+  process if created at top level).
 
-## Milestone 8 — Diagnostics & deadlock tracing (**deferred**)
+Scope guardrail unchanged: no OTP-style supervision (restart strategies, links, exit
+signals) — that stays a separate project. A handler failure is message-scoped by design.
 
-- [ ] `Acme::Parataxis->dump_fibers`: every living fiber, state (RUNNING/WAITING/…), the
-      resource it's parked on (reason string from M0), and the caller site where it yielded.
-- [ ] Enrich `FATAL: deadlock detected` (Parataxis.pm:315) into a report listing each
-      waiting fiber + reason + site, e.g. "Fiber #4 waiting on Channel 0x… (worker.pl
-      line 87)".
-- [ ] Cheap first cut rides entirely on M0's wait-reason; a Perl-level stack capture at
-      the yield site is a nice-to-have later.
+## Milestone 8 — Diagnostics & deadlock tracing (**done** — t/045)
 
-## Milestone 9 — Scalable I/O: epoll / kqueue / IOCP (**long-term, not blocking**)
+All three bullets shipped. As-built notes:
 
-Honest framing: this is a rewrite of the readiness path, not a feature. `select()` caps at
-`FD_SETSIZE` (~1024), which matches the current 1024-fiber cap — not yet a wall. Keep
-worker threads for compute and blocking FS; move network readiness onto the main scheduler
-via epoll/kqueue/IOCP, and/or ship an integration shim to drive/embed
-AnyEvent/IO::Async/EV. Schedule after everything above; nothing gates on it.
+- `dump_fibers([$fh])` (exported): snapshot of every live fiber as
+  `{ fid, state, reason => [reason, file, line] }` records; state is WAITING (parked, carries its wait_reason),
+  READY (in the scheduler run queue), RUNNING (the fiber taking the snapshot), or RUNNABLE
+  (live but neither parked nor queued — a fiber surrendered mid-quantum). With a filehandle the same
+  report is printed (default: data only). Safe at top level: it reports fibers leaked by an earlier
+  deadlocked run, which is the post-mortem entry point.
+- The `FATAL: deadlock detected` branch of `run()` now dies with the same report restricted to fibers
+  of the current run (preset/leaked fibers from older deadlocked runs are counted but omitted):
+  path in `run()` builds the body from `_fiber_snapshot()` filtered by `%PRESET_FIBERS`.
+- The cheap-first-cut stance paid off: the entire milestone rides on M0's wait_reason, no C changes,
+  no stack capture. `wait_reason` sites are exact for direct waits (`await_sleep`, `await_read`,
+  `await_write`, `fiber await`, `Future await`, `Channel get/put`, `Channel select`, semaphore down...)
+  because the `_park` level targeting was tuned so the recorded frame is the *user's* call site
+  (`Channel get` and `Semaphore down` land on the user line, not the module line — verified in t/045).
+- A fiber that parks inline inside `fiber { ... }` (spawn runs its body until the first park) records its
+  wait_reason with the fiber body's *source* line, not the spawn site — `caller(0)` inside the body lies
+  (it is the spawn frame), so t/045 asserts the site by `__LINE__` arithmetic instead.
+- Leaked fibers from a deadlocked run keep their wait_reason forever, which is what makes the post-mortem
+  dump useful; DESTROY does not reap them (the design M0 made to keep the C table stable). Nice-to-have for
+  later (explicitly deferred in the bullet): a Perl-level stack capture of the yield site — wait_reason's
+  single [file, line] is the frame where the *wait* was entered, not a full backtrace.
+- Coverage: t/045 (4 subtests) — sem-blocked + sleep-blocked classification with exact sites, RUNNING for
+  the dumping fiber, READY for a yielded-back fiber, clean empty top-level state, the deadlock report's
+  contents, and the post-mortem dump of the leaked fiber.
+
+## Milestone 9 — Scalable I/O: epoll / kqueue / IOCP (**not part of the core plan**)
+
+Kept on the list for context only. Will **not** be implemented in this project (own
+decision, 2026-09-17): it is effectively a rewrite of the readiness path, and the current
+`select()`-based scheduler with worker-thread FALLBACK covers the project's goals. Do not
+schedule or block on this; treat its bullets as informational.
 
 ## Explicitly out of scope (don't build unless asked)
 
@@ -398,48 +435,34 @@ Pre-existing bugs that must be fixed before a public release. They block suite-l
 green and affect correctness or resource safety; unrelated to the milestones that
 introduced them.
 
-### R1 — C scheduler sleep-latency: `await_sleep` wakes late under load
+### R1 — C scheduler sleep-latency: `await_sleep` wakes late under load (RESOLVED)
 
-The C sleep job table dispatches armed sleeps in 4ms quanta via `usleep(slice * 1000)`
-(`lib/Acme/Parataxis.c:617-632`). Under concurrent load (many fibers, heavy trace
-output, or back-to-back test runs), the 4ms quantum stretches and `await_sleep(N)` can
-wake at 5–10× the requested time. The `recall_sleep_jobs_for_fiber` fast-path (C:813)
-works when an interrupt fires *while* the sleep is active, but a timer that is still
-armed when its fiber completes (e.g. `with_timeout`'s deadline timer) stays in the table
-until its natural expiry. Two concrete consequences:
+**Fixed in C:** the worker's `TASK_SLEEP` branch (`lib/Acme/Parataxis.c`) now waits on the
+queue condition variable with a timed wait instead of polling in 4ms quanta:
+`SleepConditionVariableCS` on Windows (absolute `GetTickCount` deadline, wrap-safe) and
+`pthread_cond_timedwait` on POSIX (`clock_gettime(CLOCK_REALTIME)` deadline, re-checking
+`job->recall`/`threads_keep_running` per wake). `recall_sleep_jobs_for_fiber` broadcasts
+the queue condvar, so an interrupted sleep aborts in sub-millisecond time.
 
-1. **t/034 subtest 5 — deterministic failure (8/8):** third iteration of
-   `with_timeout(20, sub { await_sleep(100) })` completes inline (child_done=1,
-   deadline_cancelled=empty), meaning the 100ms sleep returned before the 20ms deadline
-   timer's `await_sleep(20)` woke and cancelled the token. The deadline fires at
-   `age=15ms` with `fids=` (no registered fibers) because the child already completed
-   and unregistered. `with_timeout` returns normally instead of throwing
-   `Error::Timeout`.
+Verified on Windows/Strawberry Perl: `await_sleep(1000)` ≈ 1.01s (was ~4s), `await_sleep(100)` = 100ms
+(was ~400ms), `await_sleep(20)` ≈ 40ms (was 60–100ms; one OS tick granularity remains).
+t/034 subtest 5 (deadline 20ms vs inner 100ms) passes 8/8 in loops and the full 45-test
+suite is green when run without CPU contention. The t/040 subtest-2 flake and the t/006
+baseline regression both trace to the same quantum cost and are resolved by it.
 
-2. **t/040 subtest 2 — was an intermittent flake (~1-12/12), now de-flaked test-side**
-   (the boom child fails immediately instead of `await_sleep(1)` first). Originally
-   `await_sleep(1)` for the `die 'boom'` child fired at ~156ms under load, long after both
-   50ms siblings had completed and unregistered; the `_observe` token cancel then hit
-   `fids=` (empty), so siblings were never cancelled and the failure list had only the boom
-   error (`plain`) instead of `cancelled,cancelled,plain`. Confirmed present on both fixed
-   and pre-fix code (same rate) — purely scheduler timing, not nursery logic. The C latency
-   itself remains open above.
+Two accompanying fixes keep the timing issue from resurfacing:
 
-3. **t/006_parallel.t test 2 — baseline sleep-timing regression:** `await_sleep(1000)`
-   measures ~4s whenever an uncommitted scheduler experiment
-   (`recall_sleep_jobs_for_fiber`, a 4ms-quantum `Sleep(slice)` dispatch loop in the C
-   scheduler) is in the build. On Windows each `Sleep(4)` rounds up to the OS tick
-   (~15.6ms), so the 4ms quantum actually costs 4x. This is the *experiment*, not the
-   baseline: reverting `lib/Acme/Parataxis.c` restores 1.0-1.03s sleeps, and the failure
-   is independent of the M5 run()-deadlock fix. Keep the experiment out of any release
-   build until the quantum path is fixed or dropped.
-
-**Fix:** either improve the C sleep dispatch (tighter quanta, or add a fast-path
-recall when a token is cancelled that is not the timer's own token), or make the
-affected tests robust to coarse granularity (e.g. increase deadlines relative to inner
-sleeps, or remove timing-sensitive subtests from the critical path). Both require C
-changes; note the `quantum` variable and the `usleep(slice * 1000)` loop in the C
-source.
+1. `with_timeout`'s deadline timer registers on its own deadline token
+   (`lib/Acme/Parataxis.pm`), so an early-finishing block recalls the timer's armed sleep
+   job immediately instead of leaving a worker occupied for the full bound — previously a
+   subtle starvation race (the 2000ms bound in t/034 iteration 2 pinned a worker, leaving
+   one free for iteration 3's two jobs). The timer swallows its own `Error::Timeout` via a
+   local `eval`, so the run is never unwound.
+2. A `Sync::Mutex` `lock()` handed ownership by `unlock()` at the same moment its deadline
+   fires passes the hand-off on to the next FIFO waiter instead of dying with the lock
+   owner field stuck on its (soon reused) fid ("Mutex is not reentrant" false positive).
+   Semaphore was audited and needs no equivalent fix (its permit is consumed by the woken
+   waiter at re-entry, never pre-transferred).
 
 ### R2 — with_timeout `re-park` branch: child still parked after interrupt
 

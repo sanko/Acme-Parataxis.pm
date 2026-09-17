@@ -19,7 +19,7 @@ package Acme::Parataxis v0.1.0 {
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
                 current_fid tid root maybe_yield on_wake with_timeout nursery
-                set_max_threads max_threads
+                set_max_threads max_threads dump_fibers
                 ]
         ]
     );
@@ -72,6 +72,54 @@ package Acme::Parataxis v0.1.0 {
             push @ids, $fid if defined $obj && ( ref $obj || '' ) ne '';
         }
         return @ids;
+    }
+
+    # M8 diagnostics. A snapshot of every live fiber, riding entirely on M0's wait_reason: _park records
+    # [reason, file, line] on the fiber before it yields and _resume_hooks clears it on a natural wake, so a
+    # live fiber that still carries a reason (or is in %PARKED) is blocked, not merely preempted. WAITING =
+    # parked on a wait; READY = in the scheduler run queue; RUNNING = the fiber calling the snapshot (only
+    # when taken from inside a run); RUNNABLE = live but neither parked nor queued (e.g. a generator's body
+    # or a fiber surrendered mid-quantum). A Perl-level stack capture of the yield site is a later nice-to-have;
+    # for now the recorded site is the wait_reason site (the user's call for direct waits like await_sleep, the
+    # wait's own method for Sync/Channel waits whose level targeting is tuned for their error messages).
+    sub _fiber_snapshot () {
+        my $current = get_current_parataxis_id();
+        my @rows;
+        for my $fid ( _live_fiber_ids() ) {
+            my $fiber = Acme::Parataxis::get_fiber_by_id($fid);
+            next unless $fiber && ref $fiber;
+            my $reason = $fiber->[F_WAIT_REASON];    # undef once the fiber is woken normally
+            my $state
+                = ( defined $reason || $PARKED{$fid} ) ? 'WAITING' :
+                $SCHEDULER_QUEUED{$fid}                ? 'READY' :
+                ( $current >= 0 && $fid == $current )  ? 'RUNNING' :
+                'RUNNABLE';
+            push @rows, { fid => $fid, state => $state, reason => $reason };
+        }
+        return [ sort { $a->{fid} <=> $b->{fid} } @rows ];
+    }
+
+    # Dumps every live fiber. Returns the arrayref of { fid, state, reason (wait_reason site) } records and, when
+    # called with a filehandle, also prints a human-readable report there (dump_fibers() with no argument only
+    # returns the data). Safe to call from anywhere: top-level (outside a run) reports fibers leaked by an earlier
+    # deadlocked run, inside a run it classifies each live fiber exactly.
+    sub dump_fibers {
+        my $invocant = shift;
+        if ( !defined $invocant ||
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
+            unshift @_, $invocant if defined $invocant;
+            $invocant = __PACKAGE__;
+        }
+        my $fh   = shift;
+        my $rows = _fiber_snapshot();
+        return $rows unless $fh;
+        say $fh 'Acme::Parataxis live fiber dump';
+        say $fh '  fid   state    wait reason       where';
+        for my $r (@$rows) {
+            my ( $file, $line ) = $r->{reason} ? @{ $r->{reason} }[ 1, 2 ] : ( '-', '-' );
+            say $fh sprintf '  %-4d %-8s %-17s %s:%s', $r->{fid}, $r->{state}, ( $r->{reason} && $r->{reason}[0] ) // '-', $file, $line;
+        }
+        return $rows;
     }
 
     sub _bind_functions ($l) {
@@ -263,9 +311,9 @@ package Acme::Parataxis v0.1.0 {
     # ->wait, semaphore/signal/channel ops) suspend only the block's fiber. When a token fires, the child's parked wait
     # is interrupted at its park re-entry and the child unwinds (unregistering from the tokens as it goes);
     # with_timeout rethrows the resulting error (::Timeout or ::Cancelled) in this fiber, so it can be caught with
-    # eval/try. Note that the C job table cannot cancel an armed sleep job early, so once the deadline timer is armed
-    # the run stays alive at least until it expires; the timer is not armed at all when the block finishes inline
-    # (never parks) or when $ms is 0.
+    # eval/try. The deadline timer registers on its own token, so the moment the block finishes (or is itself
+    # interrupted) teardown recalls the timer's armed sleep and the worker is freed instead of staying occupied for
+    # the whole bound; the timer is not armed at all when the block finishes inline (never parks) or when $ms is 0.
     sub with_timeout {
         my $invocant = shift;
         if ( !defined $invocant ||
@@ -303,7 +351,15 @@ package Acme::Parataxis v0.1.0 {
             return $child->result;
         }
         if ( $ms > 0 && !$tok->cancelled ) {
-            fiber { await_sleep($ms); $deadline->cancel };    # deadline timer; the scheduler stays until its sleep fires
+
+            # Deadline timer. Registering this fiber on the deadline token lets teardown's $deadline->cancel interrupt it
+            # and recall its armed sleep job immediately (the C recall broadcasts the queue condvar), so an abandoned
+            # block no longer leaves a worker sleeping out the full bound. The eval swallows the ::Timeout the interrupt
+            # throws at the timer's park re-entry, so the timer completes normally and never unwinds the run.
+            fiber {
+                $deadline->register;
+                eval { await_sleep($ms); $deadline->cancel };
+            };
         }
         my $rv;
         my $ok  = eval { $rv = $child->await; 1 };
@@ -324,8 +380,9 @@ package Acme::Parataxis v0.1.0 {
         # The child is final, so nothing else may keep waiting under these tokens. Even if *this* fiber was just
         # cancelled out from under the await (an enclosing nursery/with_timeout interrupted us, or a user token fired):
         # cancel the deadline now so a still-registered grandchild (a nested block, our own deadline timer) is itself
-        # interrupted instead of outliving its parent and running to completion. The C table cannot recall an armed
-        # sleep early, so the run may stay alive until those jobs expire but no live work continues past its parent.
+        # interrupted instead of outliving its parent and running to completion. The recall now wakes the worker
+        # immediately, so the abandoned sleep jobs abort in sub-millisecond time and no live work continues past its
+        # parent.
         # A grandchild woken this way dies observer-gated (its parent's await had registered _wake_waiter on it), so it
         # unwinds silently rather than killing the run.
         $deadline->cancel;
@@ -587,7 +644,24 @@ package Acme::Parataxis v0.1.0 {
                         $IS_RUNNING       = 0;
                         @SCHEDULER_QUEUE  = ();
                         %SCHEDULER_QUEUED = ();
-                        die 'FATAL: deadlock detected...';
+                        my $rows = _fiber_snapshot();
+                        my @mine = grep { !$PRESET_FIBERS{ $_->{fid} } } @$rows;
+                        my $body = '';
+                        for my $r (@mine) {
+                            $body .= sprintf(
+                                "  fiber #%-3d %-8s %-17s %s\n",
+                                $r->{fid}, $r->{state},
+                                $r->{reason} ? $r->{reason}[0]                               : '-',
+                                $r->{reason} ? sprintf( '%s:%d', @{ $r->{reason} }[ 1, 2 ] ) : '-'
+                            );
+                        }
+                        $body .= "  (no live fibers from this run)\n" unless @mine;
+                        my $leaked = @$rows - @mine;
+                        $body .= "  ($leaked previously leaked fiber(s) from an older deadlocked run, omitted)\n" if $leaked;
+                        die 'FATAL: deadlock detected: no runnable work and no outstanding jobs, but ' .
+                            $active_count .
+                            " live fiber(s). Parked in this run:\n" .
+                            $body;
                     }
                     $IS_RUNNING = 0 if defined $main_fiber && $main_fiber->is_done;
                 }
