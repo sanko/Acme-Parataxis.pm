@@ -486,3 +486,62 @@ subtests: nursery-cancel of a child parked in a `with_timeout` await; an enclosi
 post-teardown sanity check that later `with_timeout` calls still work). Each asserts the
 grandchild is cancelled, the still-parked coroutine is reaped, and the live-fiber count
 returns to baseline. The crash itself is regression-tested in t/046.
+
+### R3 — t/034 subtest 5 timing flake on macOS CI (**RESOLVED**)
+
+t/034 subtest 5 ("repeated timeouts after catching one still work") failed intermittently
+on macOS CI runners (both on `b524a96` gcc and `f84a6a2` clang, and historically):
+iteration 1/3 arm a 20ms deadline timer while the block path slept 100ms, so a loaded
+runner could let the block's `await_sleep(100)` finish before the timer fiber ran —
+"third too-short bound timed out again" failed with no `$errors[2]`. Determined to be a
+pure timing race, not a scheduler bug. **Fixed** by widening the "must timeout" inner sleep
+from 100ms to 2000ms (the deadline interrupts the block at ~20ms, so the test costs no
+extra time). Verified 8/8 loops and the full 46-file suite locally on Windows.
+
+### R4 — Stress `pp_entersub` assert `!AvREAL(av)` aborts the fuzz (**FIX PENDING CI VERIFY**)
+
+The debug-perl Stress workflow (`-DDEBUGGING` build, `PARATAXIS_STRESS_ITER=400
+PARATAXIS_STRESS_SECONDS=30 cpanm -v .`) aborts with
+`Assertion '!AvREAL(av)' failed, function Perl_pp_entersub, file pp_hot.c, line 6447`
+(SIGABRT, Wstat 6) inside `t/040_nursery.t`. Fails on all four Stress jobs (macOS
+a64-gcc, macOS x64-clang, Linux x64-clang, Linux x64-gcc), and is **pre-existing** (not
+from R1/M0): the same assert failed on `a9713df` (M1, 2026-09-15); `7a57be59` (M0, same
+day) passed. Local Windows (non-debug) perl can't hit the assert — t/040 with stress env
+passes repeatedly — so verification requires a `-DDEBUGGING` perl (only the Stress CI
+runner has one).
+
+Root-cause theory (unverified): `_activate_current_depths` Pass 2
+(`lib/Acme/Parataxis.c`, ~line 999) does `AvFILLp=-1; AvREAL_off()` on
+`PadlistARRAY(pl)[CvDEPTH(cv)+1]` slot 0 — but `CvDEPTH`/PadLists are **global per CV,
+shared across fibers**. If another fiber is concurrently active in a shared sub (yield,
+wait helpers) at `CvDEPTH+1`, this clears a LIVE `@_` slot and flips `AvREAL`; a later
+`pp_entersub` with args on that slot trips the assert. Same shared-PadList/global-CvDEPTH
+corruption class as M0, located in `_activate_current_depths` instead of `destroy_coro`.
+
+Evidence pinned from perl 5.42.3 source (non-`PERL_RC_STACK` builds, matching the Stress
+perl — assert is the `#else` branch at pp_hot.c:6447):
+
+- Perl *always* presents a `!AvREAL` `pad[0]` (`@_`) at a fresh `pp_entersub` with args:
+  `pad_new`/`pad_push` create each depth's slot-0 AV with `AvREIFY_only`
+  (pad.c L233, L2491), and `cx_popsub`→`Perl_clear_defarray` leaves it REIFY-only either
+  by the simple clear + `AvREIFY_only` or by abandoning to a fresh `newAV_alloc_xz` that
+  is also `AvREIFY_only` (pp_hot.c L6193-6201, L6207-6210). An `AvREAL` slot 0 therefore
+  always means the fiber-switch bookkeeping desynced a shared PadList/CvDEPTH — slot 0 was
+  left REAL by an interrupted reified `@_` (e.g. op-level `av_reify` from `\@_`/`for (@_)`)
+  and then re-entered without the normal abandon-clean that a completed `cx_popsub` would
+  have run.
+- `_activate_current_depths` Pass 2 flips only `AvREAL_off` (leaving `AvREIFY` untouched).
+  If the AV was REAL (REIFY already off), this produces perl's invalid "neither-REAL-nor-
+  REIFY" state; a later op that stores into such an array re-turns it REAL
+  (av.c `Perl_av_store`), so the flip is at best a partial repair of the invariant.
+
+Debugging plan: (1) local Windows perl is not `-DDEBUGGING`, so the assert cannot fire
+here — reproducing needs the Stress runner's debug perl (t/040 with stress env passes
+locally). (2) Candidate fix: make Pass 2 restore the full `@_` invariant with
+`AvREIFY_only` (not just `AvREAL_off`) — **APPLIED** (Parataxis.c Pass 2, committed with
+the R3 fix; pending the next Stress run for verification on a `-DDEBUGGING` perl). It
+flips a possibly-live shared slot's flags, so the deeper "PadList owned by other fibers"
+hazard (M0-class) may still lurk; if Stress stays red after this, scope Pass 2 and
+`_clear_pads_in_stack` to pads of the resuming/reaped fiber only. (3) Ship a
+`DEBUGGING`-only resume-time check (verify each active shared-sub pad slot 0 is
+`!AvREAL`, abort with the offending CV name) if more Stress failures need localization.

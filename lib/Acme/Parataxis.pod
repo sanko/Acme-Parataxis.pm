@@ -725,8 +725,9 @@ global pointers (the C<PL_*> variables) between contexts.
 
 A significant challenge in Perl green threads is the shared nature of PadLists and the global C<CvDEPTH> counter. In
 debug builds of Perl, calling a shared subroutine from multiple fibers can trigger internal assertions (like
-C<AvFILLp(av) == -1>). Parataxis includes a specialized workaround that surgically cleans the next landing pad before
-every context switch to satisfy these assertions without clobbering active lexical state.
+C<AvFILLp(av) == -1> and C<!AvREAL(av)>). Parataxis includes a specialized workaround that surgically prepares the next
+landing pad before every context switch, restoring each C<@_> slot to Perl's canonical REIFY-only, empty state, to
+satisfy these assertions without clobbering active lexical state.
 
 =head2 C<eval> vs. C<try/catch>
 

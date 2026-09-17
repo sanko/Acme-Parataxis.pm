@@ -18,7 +18,7 @@
  *
  * @section Caveats
  * Shared subroutines (CVs) with re-entrant yielding calls are handled by a specialized pad-clearing mechanism in
- * `_activate_current_depths` to satisfy Perl's internal `AvFILLp` assertions in debug builds.
+ * `_activate_current_depths` to satisfy Perl's internal `AvFILLp`/`AvREAL` assertions in DEBUGGING builds.
  */
 
 #ifdef _WIN32
@@ -996,7 +996,12 @@ static void _activate_current_depths(pTHX_ para_fiber_t * to) {
         }
     }
 
-    /* Pass 2: Clean the landing pads for the NEXT call in each CV */
+    /* Pass 2: Clean the landing pads for the NEXT call in each CV. Slot 0 of a fresh
+     * perl pad is a REIFY-only, empty AV (pad_push), so a call re-entering a shared
+     * subroutine must find its @_ slot in exactly that state for pp_entersub's
+     * assert(!AvREAL(av)) / AvFILLp(av) == -1 invariants. AvREIFY_only -- not bare
+     * AvREAL_off -- restores the full canonical state perl expects (else the slot is
+     * neither-REAL-nor-REIFY and a later av_store re-turns it AvREAL). */
     for (I32 i = 0; i <= si->si_cxix; i++) {
         PERL_CONTEXT * cx = &(si->si_cxstack[i]);
         if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
@@ -1012,7 +1017,7 @@ static void _activate_current_depths(pTHX_ para_fiber_t * to) {
                             SV * args = array[0];
                             if (args && SvTYPE(args) == SVt_PVAV) {
                                 AvFILLp((AV *)args) = -1;
-                                AvREAL_off((AV *)args);
+                                AvREIFY_only((AV *)args);
                             }
                         }
                     }

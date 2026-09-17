@@ -60,8 +60,13 @@ subtest 'repeated timeouts after catching one still work' => sub {
     my @errors;
     async {
         for my $i ( 1 .. 3 ) {
-            my $bound = ( $i % 2 ) ? 20  : 2000;
-            my $inner = ( $i % 2 ) ? 100 : 1;
+            my $bound = ( $i % 2 ) ? 20 : 2000;
+
+            # The deadline interrupts the block at ~$bound ms, so a long inner
+            # sleep costs no test time; it only widens the scheduling margin so a
+            # heavily loaded CI runner cannot let the block finish before the 20ms
+            # timer fires (macOS flake: 100ms slept out under a 20ms bound).
+            my $inner = ( $i % 2 ) ? 2000 : 1;
             eval {
                 with_timeout(
                     $bound,
