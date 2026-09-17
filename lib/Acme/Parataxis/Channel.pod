@@ -82,6 +82,53 @@ Unregister a fiber that is currently blocked in C<get>/C<put>. Returns the total
 across both internal semaphores (0, 1, or 2). A removed waiter is never woken by a later C<put>/C<get>/C<shutdown>; the
 caller takes responsibility for reclaiming that fiber (typically by destroying it).
 
+=head2 C<try_get( )>
+
+    my ( $ok, $value ) = $ch->try_get;
+
+A non-blocking variant of C<get>. If a value is available it is removed and returned as C<(1, $value)>; otherwise it
+returns C<(0, undef)> without parking the current fiber.
+
+=head2 C<try_put( $value )>
+
+    my $ok = $ch->try_put($value);
+
+A non-blocking variant of C<put>. If there is room in the channel the value is appended and C<1> is returned; otherwise
+it returns C<0> without parking the current fiber.
+
+=head1 SELECT
+
+=head2 C<select( %args )>
+
+    my ( $ch, $value ) = Acme::Parataxis::Channel->select(
+        [ $left,  'get'          ],
+        [ $right, 'put', $msg    ],
+        timeout => 1_000,
+    );
+
+Called as a class method (not on a channel instance). Selects the first ready case, operating on the channel as if the
+matching C<get> or C<put> had been called, and returns C<( $channel, $value )> — the channel that fired and, for a
+C<get> case, the value read from it (C<put> cases return the value they wrote).
+
+Each case is an array reference C<[ $channel, op, $value? ]>; C<op> is C<get> or C<put>, and C<put> cases require the
+value argument. More than one case may be given, and cases are tried in random order so a single ready case cannot be
+starved. An optional C<timeout> (non-negative milliseconds) bounds the wait — when it fires before any case is ready,
+select returns C<( undef, undef )> and an optional C<default> is a code reference run (and returned as the value)
+when no case is ready and nothing is pending, without ever blocking. Giving at least one case is required, as is calling
+select from inside a scheduled fiber (C<async { ... }> or the run block).
+
+Each case channel parks the selecting fiber on a private waiter list (see C<select_waiters> below). Only channels being
+selected on are affected; a fiber parked in C<select> is interrupted by C<with_timeout>/cancellation tokens like any
+other park. The implementation is two-phase: ready cases are probed first without yielding, and only when none is ready
+does select register on every involved channel and park until the first wake.
+
+=head2 C<select_waiters( )>
+
+    my $n = $ch->select_waiters;
+
+Returns how many fibers are currently parked in C<select( )> on this channel, split by nothing — just the scalar count.
+Introspection helper; primarily useful in tests.
+
 =head1 AUTHOR
 
 Sanko Robinson L<https://github.com/sanko>

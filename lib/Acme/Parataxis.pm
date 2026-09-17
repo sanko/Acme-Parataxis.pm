@@ -63,6 +63,18 @@ package Acme::Parataxis v0.1.0 {
         splice @SCHEDULER_QUEUE, $i, 0, $fiber;
     }
 
+    # All C fiber ids that are currently live. Used by run() to snapshot the fibers that predate a run so its
+    # deadlock detector only considers fibers the run actually created (fibers leaked by a prior deadlocked run stay
+    # parked forever and would otherwise poison every later run).
+    sub _live_fiber_ids () {
+        my @ids;
+        for ( my $fid = 0 ; $fid < 1024 ; $fid++ ) {
+            my $obj = Acme::Parataxis::get_fiber_by_id($fid);
+            push @ids, $fid if defined $obj && ( ref $obj || '' ) ne '';
+        }
+        return @ids;
+    }
+
     sub _bind_functions ($l) {
         affix $l, 'init_system',                       [],                             Int;
         affix $l, 'create_fiber',                      [ Pointer [SV], Pointer [SV] ], Int;
@@ -424,8 +436,16 @@ package Acme::Parataxis v0.1.0 {
         @SCHEDULER_QUEUE  = ();
         %SCHEDULER_QUEUED = ();
         $IS_RUNNING       = 1;
+
+        # Snapshot the fibers that were already alive before this run. A fiber parked by a *previous* deadlocked run
+        # can never be woken again, but the C table still counts it as live; the deadlock detector below must only
+        # consider fibers that actually belong to this run, otherwise any run after a deadlock would be misread as
+        # another deadlock. (Leaked fibers keep their C slot occupied, so their fids cannot be reused in between.)
+        my %PRESET_FIBERS = map { $_ => 1 } _live_fiber_ids();
+
         my $main_fiber = __PACKAGE__->new( code => $code );
         _enqueue($main_fiber);
+
         while ($IS_RUNNING) {
             my @ready;
             if ( get_outstanding_jobs() ) {
@@ -459,8 +479,21 @@ package Acme::Parataxis v0.1.0 {
                     usleep(1000);    # Wait for background jobs to finish
                 }
                 else {
-                    die 'FATAL: deadlock detected...' if $active_count > 0;
-                    $IS_RUNNING = 0                   if defined $main_fiber && $main_fiber->is_done;
+                    if ( $active_count > scalar( keys %PRESET_FIBERS ) ) {
+
+                        # A live fiber is stuck with nothing to do and no one to wake it and no timer to fire: this
+                        # run is deadlocked.  Leave the scheduler in a clean, reusable state: stop this run, clear the
+                        # queues, and do NOT treat it as a nested inner run (that path requires an enclosing scheduled
+                        # fiber). Preset (leaked) fibers from a previously deadlocked run are excluded from the count
+                        # above so they cannot make a later healthy run look deadlocked; they stay parked forever in
+                        # the C table but are harmless because the count below only ever triggers on fibers created
+                        # by this run.
+                        $IS_RUNNING = 0;
+                        @SCHEDULER_QUEUE  = ();
+                        %SCHEDULER_QUEUED = ();
+                        die 'FATAL: deadlock detected...';
+                    }
+                    $IS_RUNNING = 0 if defined $main_fiber && $main_fiber->is_done;
                 }
             }
         }

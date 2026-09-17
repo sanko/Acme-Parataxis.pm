@@ -24,6 +24,14 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 - `with_timeout( $ms, [ $token, ] $code )`: runs a block as a child fiber and throws `Acme::Parataxis::Error::Timeout` in the caller if it doesn't finish in time, cleaning up the child and anything it was blocked on while the scheduler keeps running. An optional token cancels the block early (`Error::Cancelled`); a pre-cancelled token fails fast; a bound of `0` means no deadline.
 - `Acme::Parataxis::Error`, `Acme::Parataxis::Error::Cancelled`, and `Acme::Parataxis::Error::Timeout`: the exceptions interruption throws, with `message`/`kind` and the `wait_reason` of the interrupted wait.
 - `Acme::Parataxis::Local`: per-fiber storage slots for ambient state that must not leak across fibers (tracing ids, span context, per-fiber handles). Each `Local` is one slot; values are isolated per fiber, survive `yield`/`await`, and are released with their fiber, with no scheduler or C changes needed.
+- `Acme::Parataxis::Sync`: the synchronization-primitive family, sharing one park/wake mechanism where an interrupted wait unregisters itself from the primitive it was parked on:
+    - `Acme::Parataxis::Sync::Mutex`: a non-reentrant lock with true owner tracking (`lock`/`try_lock`/`unlock`/`guard`, plus `owner`/`waiters`). Releasing from a non-owner, relocking the same fiber, or releasing a free lock all croak; a contended `lock` parks and is handed directly to the next FIFO waiter, so nobody can cut in line.
+    - `Acme::Parataxis::Sync::WaitGroup`: a job counter shared across fibers. `add($n)`/`done()` adjust it (over-done and non-integer adds croak) and `wait()` parks until it reaches zero.
+    - `Acme::Parataxis::Sync::Barrier`: a reusable rendezvous for `parties` fibers. `arrive_and_wait` releases exactly `parties` at the phase boundary (the last arriver included) and re-arms for the next round.
+    - `Acme::Parataxis::Sync::Once`: an initializer run exactly once across racing fibers. The first caller runs it (and gets the return value), concurrent callers park until it finishes, and late callers no-op; an initializer that dies still leaves the Once done.
+- `Acme::Parataxis::Channel::select`: CSP-style waiting on the first ready case among any number of channels. `Acme::Parataxis::Channel->select( [ $ch, 'get' ], [ $ch2, 'put', $v ], timeout => 1000, default => sub {...} )` probes ready cases without yielding, parks on the first open case otherwise, and returns `( $channel, $value )` (or `( undef, undef )` on timeout, or the default block's value when nothing is ready). Cases are tried in random order so none can starve; each case channel parks the select on its own waiter list, woken by the matching operation.
+- `Acme::Parataxis::Channel::try_get` / `Acme::Parataxis::Channel::try_put`: non-blocking channel operations. They return `( $ok, $value )` / `$ok` immediately instead of parking, waking channels select-parks just like their blocking siblings.
+- `Acme::Parataxis::Channel::select_waiters`: reports how many fibers are currently parked in select on a channel (introspection, for tests).
 
 ### Fixed
 
@@ -42,6 +50,7 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 - Channel constructors now reject a capacity below 1 instead of deadlocking on it at load time.
 - The 1024-slot job queue is no longer fatal on the first try: `_submit_job` yields once and retries before croaking.
 - `Future::set_result`/`set_error` wake awaiters exactly once instead of appending a duplicate `_wake_waiters` callback on every `await`.
+- A `run` that dies with `FATAL: deadlock detected` now leaves the scheduler reusable: `$IS_RUNNING` is cleared and the run queues emptied before the message is thrown, instead of poisoning every subsequent `run`/`async`. The deadlock detector also snapshots the fibers alive before the run starts, so fibers leaked by an earlier deadlocked run can no longer make a healthy later run look deadlocked.
 
 ### Changed
 
