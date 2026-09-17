@@ -794,7 +794,10 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
             job_refcount[current_fiber_id]++;
-        PARA_COND_SIGNAL(queue_cond);
+        /* Broadcast (not signal): a single wakeup may be swallowed by a worker parked in its timed sleep wait
+         * (which only re-checks its absolute deadline and continues), leaving idle workers with no wakeup and
+         * JOB_NEW entries unclaimed until some long sleep ends. */
+        PARA_COND_BROADCAST(queue_cond);
     }
     UNLOCK(queue_lock);
     return idx;
