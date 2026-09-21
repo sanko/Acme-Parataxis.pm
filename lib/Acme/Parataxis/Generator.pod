@@ -1,3 +1,7 @@
+=pod
+
+=encoding utf8
+
 =head1 NAME
 
 Acme::Parataxis::Generator - A stackful, lazily-pulled iterator

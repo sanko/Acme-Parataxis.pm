@@ -54,11 +54,13 @@ or its object is destroyed. No scheduler or C changes are required.
 
 =head1 AUTHOR
 
-Sanko Robinson <sanko@cpan.org>
+Sanko Robinson L<https://github.com/sanko>
 
 =head1 LICENSE
 
-Copyright (C) 2026 Sanko Robinson.
+Copyright (C) Sanko Robinson.
 
-This library is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
 
+=cut

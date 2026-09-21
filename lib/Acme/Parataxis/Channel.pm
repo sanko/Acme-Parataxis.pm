@@ -3,7 +3,7 @@ use feature 'class';
 no warnings 'experimental::class', 'recursion';
 use Carp;
 use Acme::Parataxis qw[fiber await_sleep];
-class Acme::Parataxis::Channel v0.1.0 {
+class Acme::Parataxis::Channel v0.1.1 {
     use Acme::Parataxis qw[fiber await_sleep];
     use Acme::Parataxis::CancellationToken;
     use Acme::Parataxis::Semaphore;

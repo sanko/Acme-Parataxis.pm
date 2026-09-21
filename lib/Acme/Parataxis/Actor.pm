@@ -4,7 +4,7 @@ use Acme::Parataxis::Channel;
 use Acme::Parataxis::Future;
 use Carp qw[croak];
 
-package Acme::Parataxis::Actor v0.1.0 {
+package Acme::Parataxis::Actor v0.1.1 {
     our @ISA = ();
     use Acme::Parataxis qw[fiber];
     use Acme::Parataxis::Channel;

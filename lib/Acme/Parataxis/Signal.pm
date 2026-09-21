@@ -2,7 +2,7 @@ use v5.40;
 no warnings 'experimental::class', 'recursion';
 use feature 'class';
 #
-class Acme::Parataxis::Signal v0.1.0 {
+class Acme::Parataxis::Signal v0.1.1 {
     use Acme::Parataxis;
     use Carp qw[croak];
     field $count : reader : param //= true;    # true if a send is pending

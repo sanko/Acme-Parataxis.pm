@@ -31,7 +31,7 @@ Acme::Parataxis::Nursery - Structured concurrency: a block whose spawned childre
 C<Acme::Parataxis::Nursery> is the runtime behind C<nursery( )> (exported by L<Acme::Parataxis>). It gives you the
 Go-structured-concurrency pattern in Perl:
 
-=over 4
+=over
 
 =item * Any child you spawn with C<< $n->spawn >> is guaranteed to be finished before C<nursery( )> returns.
 

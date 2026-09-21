@@ -2,7 +2,7 @@ use v5.40;
 no warnings 'recursion';
 use Acme::Parataxis;
 
-package Acme::Parataxis::Generator v0.1.0 {
+package Acme::Parataxis::Generator v0.1.1 {
     our @ISA = ();
     our $RESERVED;
     our $DRAIN = \do { my $x = 1 };    # an opaque scalar ref, so no user yield/die value can collide with the marker
