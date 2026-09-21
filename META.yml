@@ -38,6 +38,9 @@ provides:
   Acme::Parataxis:
     file: lib/Acme/Parataxis.pm
     version: v0.1.0
+  Acme::Parataxis::Actor:
+    file: lib/Acme/Parataxis/Actor.pm
+    version: v0.1.0
   Acme::Parataxis::CancellationToken:
     file: lib/Acme/Parataxis/CancellationToken.pm
     version: v0.1.0
@@ -50,11 +53,23 @@ provides:
   Acme::Parataxis::Error::Cancelled:
     file: lib/Acme/Parataxis/Error.pm
     version: v0.1.0
+  Acme::Parataxis::Error::Nursery:
+    file: lib/Acme/Parataxis/Error.pm
+    version: v0.1.0
   Acme::Parataxis::Error::Timeout:
     file: lib/Acme/Parataxis/Error.pm
     version: v0.1.0
   Acme::Parataxis::Future:
     file: lib/Acme/Parataxis/Future.pm
+    version: v0.1.0
+  Acme::Parataxis::Generator:
+    file: lib/Acme/Parataxis/Generator.pm
+    version: v0.1.0
+  Acme::Parataxis::Local:
+    file: lib/Acme/Parataxis/Local.pm
+    version: v0.1.0
+  Acme::Parataxis::Nursery:
+    file: lib/Acme/Parataxis/Nursery.pm
     version: v0.1.0
   Acme::Parataxis::Semaphore:
     file: lib/Acme/Parataxis/Semaphore.pm
@@ -63,6 +78,23 @@ provides:
     file: lib/Acme/Parataxis/Semaphore.pm
   Acme::Parataxis::Signal:
     file: lib/Acme/Parataxis/Signal.pm
+    version: v0.1.0
+  Acme::Parataxis::Sync:
+    file: lib/Acme/Parataxis/Sync.pm
+    version: v0.1.0
+  Acme::Parataxis::Sync::Barrier:
+    file: lib/Acme/Parataxis/Sync/Barrier.pm
+    version: v0.1.0
+  Acme::Parataxis::Sync::Mutex:
+    file: lib/Acme/Parataxis/Sync/Mutex.pm
+    version: v0.1.0
+  Acme::Parataxis::Sync::Mutex::Guard:
+    file: lib/Acme/Parataxis/Sync/Mutex.pm
+  Acme::Parataxis::Sync::Once:
+    file: lib/Acme/Parataxis/Sync/Once.pm
+    version: v0.1.0
+  Acme::Parataxis::Sync::WaitGroup:
+    file: lib/Acme/Parataxis/Sync/WaitGroup.pm
     version: v0.1.0
 requires:
   Affix: v1.0.7
