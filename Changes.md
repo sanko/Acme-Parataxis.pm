@@ -7,18 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This started as a silly little diversion in February but I'm using this in actual projects now. I've even used it to shake out bugs in Affix.
-
-I might move it out of the Acme namespace...
-
-Anyway, the major win is that fiber hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
-
 ### Added
 
-- `Acme::Parataxis::Channel`: a buffered FIFO message queue for producer/consumer patterns between fibers. Writers block when full, readers when empty; a capacity of `1` makes it a rendezvous point. Built on two semaphores.
-- `Acme::Parataxis::Future`: a one-shot placeholder for an eventual computation result. A producer fires `set_result`/`set_error` exactly once; consumers pick it up with `await`/`result` or register an `on_ready` callback.
-- `Acme::Parataxis::Semaphore`: a counting semaphore with no ownership: blocked fibers are parked (no busy-wait) and resumed FIFO as permits become available.
-- `Acme::Parataxis::Signal`: a two-state flag with a FIFO queue of waiters. `send` latches the signal so a later `wait` consumes it immediately, while `broadcast` wakes every queued waiter at once (and drops if nobody is waiting).
 - Waiter introspection and removal (the foundation for cancellation): blocking waits now park through a single `_park`/`_resume_hooks` path that records a `wait_reason` (a label plus the calling file/line, readable via `$fiber->wait_reason`) and fires `on_wake` hooks exactly once when a parked fiber is resumed. `Semaphore`, `Signal`, `Future`, and `Channel` each gained `remove_waiter` to un-register a parked waiter.
 - Cancellation tokens: `Acme::Parataxis::CancellationToken` lets any fiber register for cooperative cancellation. `cancel` is idempotent and interrupts every parked, registered fiber by throwing `Acme::Parataxis::Error::Cancelled` at the park site; a fiber registered against an already-cancelled token has its next park aborted immediately, and `unregister` opts a fiber back out.
 - `with_timeout( $ms, [ $token, ] $code )`: runs a block as a child fiber and throws `Acme::Parataxis::Error::Timeout` in the caller if it doesn't finish in time, cleaning up the child and anything it was blocked on while the scheduler keeps running. An optional token cancels the block early (`Error::Cancelled`); a pre-cancelled token fails fast; a bound of `0` means no deadline.
@@ -39,21 +29,6 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 
 ### Fixed
 
-- Fixed crash (double-free / use-after-free) when fibers call Affix'd functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5+.
-- Fixed SIGSEGV on macOS and FreeBSD caused by fiber stacks being only 512KB (via `posix_memalign`). All POSIX platforms now use a 64MB `mmap`-backed stack with a PROT_NONE guard page, matching the Linux path. The SIGSEGV guard handler is also available on macOS/FreeBSD now.
-- Fixed FreeBSD compilation: added `MAP_ANONYMOUS` w/ `MAP_ANON` fallback.
-- Fixed macOS SIGBUS: the guard region size is now derived from `sysconf(_SC_PAGESIZE)` at runtime so it always covers at least one full page (16 KiB on Apple Silicon). Also fixed `cleanup()` to use `munmap()` instead of `free()` on non-Linux POSIX platforms.
-- `is_finished()` now rejects fiber ids of `MAX_FIBERS` or greater instead of reading out of bounds of the fiber table.
-- Closed a busy-spin footgun: `wait`, fiber `await`, `Semaphore` waits, and `Signal->wait` now croak instead of burning 100% CPU when called from outside the scheduler, and `->new` croaks when the 1024-slot fiber table is exhausted rather than creating a fiber that can never run.
-- A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
-- The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
-- `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
-- A destroyed fiber's id is kept out of the free list until every job it submitted has been reclaimed, so a stale completion can never be misdelivered to a (or corrupt) fiber that later reuses the id.
-- Pending-job tracking now reads the C-side outstanding job count instead of a run-local counter, so jobs left over from a `stop`ped run are drained and handled by the next run instead of tripping `FATAL: deadlock detected` or sitting in the done-queue forever.
-- `Semaphore` `up`/`adjust` skip stale (already destroyed) waiters instead of consuming a wake that should go to a live fiber.
-- Channel constructors now reject a capacity below 1 instead of deadlocking on it at load time.
-- The 1024-slot job queue is no longer fatal on the first try: `_submit_job` yields once and retries before croaking.
-- `Future::set_result`/`set_error` wake awaiters exactly once instead of appending a duplicate `_wake_waiters` callback on every `await`.
 - A `run` that dies with `FATAL: deadlock detected` now leaves the scheduler reusable: `$IS_RUNNING` is cleared and the run queues emptied before the message is thrown, instead of poisoning every subsequent `run`/`async`. The deadlock detector also snapshots the fibers alive before the run starts, so fibers leaked by an earlier deadlocked run can no longer make a healthy later run look deadlocked.
 - `nursery` teardown no longer destroys a still-parked coroutine. When a child is cancelled while parked inside a nested wait (a `with_timeout` whose deadline fires mid-join, or an inner nursery cancelled out from under it), the child is reaped from inside its own resumed frame instead of being freed mid-park, which previously crashed the process (0xC0000005). Also fixed the nursery join's parent-interrupt branch, which was dead code (`eval { ...; undef }` never yielded the caught error) and silently swallowed an enclosing `with_timeout` timeout instead of cancelling the children.
 - `await_sleep` now sleeps the full requested duration instead of inflating it: the worker's `TASK_SLEEP` branch waits on the queue condition variable with a timed wait (`SleepConditionVariableCS` on Windows, `pthread_cond_timedwait` on POSIX) rather than polling in 4ms quanta, so `await_sleep(1000)` returns in ~1s (Windows previously ~4s, because each `Sleep(4)` rounded up to the ~15.6ms timer tick) and 20ms deadline timers fire near their bound. `recall_sleep_jobs_for_fiber` now broadcasts the queue condvar, so an interrupted sleep aborts in sub-millisecond time instead of within one quantum.
@@ -72,9 +47,45 @@ Anyway, the major win is that fiber hot path has been moved from Perl into C and
 
 ### Changed
 
-- Spawned fibers run inline at spawn time.
 - A scheduled fiber that dies while another fiber is awaiting it (or has an `on_ready` callback) no longer takes down the whole run loop: the error is delivered to the awaiting fiber's `await` instead, matching Coro-style rethrows.
 - Interrupted waits deregister themselves from the sync primitive they were parked on before re-entering, so an id freed by cancellation can be safely reused by a later fiber without spurious wakes.
+
+## [v0.1.0] - 2026-09-21
+
+This started as a silly little diversion in February but I'm using this in actual projects now. I've even used it to shake out bugs in Affix.
+
+I might move it out of the Acme namespace...
+
+Anyway, the major win is that fiber hot path has been moved from Perl into C and roughly tripled context swapping throughput with no change to the public API.
+
+### Added
+
+- `Acme::Parataxis::Channel`: a buffered FIFO message queue for producer/consumer patterns between fibers. Writers block when full, readers when empty; a capacity of `1` makes it a rendezvous point. Built on two semaphores.
+- `Acme::Parataxis::Future`: a one-shot placeholder for an eventual computation result. A producer fires `set_result`/`set_error` exactly once; consumers pick it up with `await`/`result` or register an `on_ready` callback.
+- `Acme::Parataxis::Semaphore`: a counting semaphore with no ownership: blocked fibers are parked (no busy-wait) and resumed FIFO as permits become available.
+- `Acme::Parataxis::Signal`: a two-state flag with a FIFO queue of waiters. `send` latches the signal so a later `wait` consumes it immediately, while `broadcast` wakes every queued waiter at once (and drops if nobody is waiting).
+
+### Fixed
+
+- Fixed crash (double-free / use-after-free) when fibers call Affix'd functions on non-threaded Perl. The bug was in Affix's `SAVEVPTR`/`SAVEDESTRUCTOR_X` arena pattern, which was not fiber-safe; now fixed upstream in Affix v1.2.5+.
+- Fixed SIGSEGV on macOS and FreeBSD caused by fiber stacks being only 512KB (via `posix_memalign`). All POSIX platforms now use a 64MB `mmap`-backed stack with a PROT_NONE guard page, matching the Linux path. The SIGSEGV guard handler is also available on macOS/FreeBSD now.
+- Fixed FreeBSD compilation: added `MAP_ANONYMOUS` w/ `MAP_ANON` fallback.
+- Fixed macOS SIGBUS: the guard region size is now derived from `sysconf(_SC_PAGESIZE)` at runtime so it always covers at least one full page (16 KiB on Apple Silicon). Also fixed `cleanup()` to use `munmap()` instead of `free()` on non-Linux POSIX platforms.
+- `is_finished()` now rejects fiber ids of `MAX_FIBERS` or greater instead of reading out of bounds of the fiber table.
+- Closed a busy-spin footgun: `wait`, fiber `await`, `Semaphore` waits, and `Signal->wait` now croak instead of burning 100% CPU when called from outside the scheduler, and `->new` croaks when the 1024-slot fiber table is exhausted rather than creating a fiber that can never run.
+- A fiber that yields during its initial run is now re-enqueued by the scheduler instead of being dropped, which previously could hang a regex-heavy workload.
+- The scheduler no longer hangs when a fiber object is created but never spawned (`->new` without `spawn`): live-fiber tracking only counts fibers that have actually started, matching Coro's ready-queue semantics.
+- `async`/`run` is now re-entrant: a nested `async` inside another `async` or inside a fiber shares the one run loop (like Coro's single global scheduler) and returns the block's value, instead of clobbering the outer scheduler and deadlocking.
+- A destroyed fiber's id is kept out of the free list until every job it submitted has been reclaimed, so a stale completion can never be misdelivered to a (or corrupt) fiber that later reuses the id.
+- Pending-job tracking now reads the C-side outstanding job count instead of a run-local counter, so jobs left over from a `stop`ped run are drained and handled by the next run instead of tripping `FATAL: deadlock detected` or sitting in the done-queue forever.
+- `Semaphore` `up`/`adjust` skip stale (already destroyed) waiters instead of consuming a wake that should go to a live fiber.
+- Channel constructors now reject a capacity below 1 instead of deadlocking on it at load time.
+- The 1024-slot job queue is no longer fatal on the first try: `_submit_job` yields once and retries before croaking.
+- `Future::set_result`/`set_error` wake awaiters exactly once instead of appending a duplicate `_wake_waiters` callback on every `await`.
+
+### Changed
+
+- Spawned fibers run inline at spawn time.
 - The fiber registry is replaced by strong references to each fiber object in C.
 - Fiber completion moved from a Perl method into C: the entry point writes state directly into the object's slots with `av_store`, and only dispatches callbacks when callbacks were actually registered.
 - To save time on FFI boundary crossings, `spawn` now performs the whole create run sequence in a single call and builds the fiber object in C.
@@ -165,7 +176,8 @@ Another dist targetting a specific CPAN smoker. I cannot replicate the failure i
 ### Changes
   - It exists! It shouldn't but it does.
 
-[Unreleased]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.1.0...HEAD
+[v0.1.0]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.0.10...v0.1.0
 [v0.0.10]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.0.9...v0.0.10
 [v0.0.9]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.0.8...v0.0.9
 [v0.0.8]: https://github.com/sanko/Acme-Parataxis.pm/compare/v0.0.7...v0.0.8
