@@ -75,6 +75,21 @@ subtest 'exit(3) after yielding and being resumed' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async yield fiber]; async { fiber { 1 }; yield; exit 3; }');
     is_exit_code $rc, 3, 'exit(3) after a yield/resume cycle propagates the requested status', $out, $trusted;
 };
+subtest 'exit(7) from a fiber resumed after await_sleep while a sibling is parked' => sub {
+    # Regression: the exiting fiber has yielded at least once, so its saved
+    # top_env points at the previous resume's already-popped coro_call guard.
+    # exit() must be caught on the fiber stack and re-raised on the caller
+    # stack, not longjmped to the stale target (SIGSEGV in __longjmp). A
+    # nonzero status is asserted deliberately: a signalled child reads back
+    # as rc 0 through $?, so exit(0) could not tell a crash from a clean exit.
+    my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async fiber await_sleep]; async { fiber { await_sleep(300); exit(7); }; fiber { while (1) { await_sleep(50); } } }');
+    if ( !$trusted && $out !~ /panic/ ) {
+        plan skip_all => 'cannot read the child status on this perl (spawn reporting is broken)';
+        return;
+    }
+    is $rc, 7, 'exit(7) after a sleep/resume cycle with a parked sibling terminates cleanly with status 7';
+    ok $out !~ /panic/i, 'no panic message in the child output';
+};
 subtest 'exit() does not double-free scheduler scopes' => sub {
     my ( $rc, $out, $trusted ) = run_exit_code('use Acme::Parataxis qw[async yield fiber]; async { fiber { exit 0 }; yield; }');
     if ( !$trusted && $out !~ /panic/ ) {
@@ -82,7 +97,7 @@ subtest 'exit() does not double-free scheduler scopes' => sub {
         return;
     }
     isnt $rc, 255, 'no wrong-pool panic (exit != 255)';
-    ok $out !~ /panic/, 'no panic message in the child output';
+    unlike $out, qr[panic], 'no panic message in the child output';
 };
 #
 done_testing();
