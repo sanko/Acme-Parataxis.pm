@@ -11,11 +11,13 @@ Acme::Parataxis::Sync - Base class for the synchronization-primitive family
     use v5.40;
     use Acme::Parataxis qw[async fiber];
     use Acme::Parataxis::Sync::Mutex;
+    use Acme::Parataxis::Sync::RwLock;
     use Acme::Parataxis::Sync::WaitGroup;
     use Acme::Parataxis::Sync::Barrier;
     use Acme::Parataxis::Sync::Once;
 
     my $m  = Acme::Parataxis::Sync::Mutex->new;
+    my $rw = Acme::Parataxis::Sync::RwLock->new;
     my $wg = Acme::Parataxis::Sync::WaitGroup->new;
 
     async {
@@ -25,16 +27,18 @@ Acme::Parataxis::Sync - Base class for the synchronization-primitive family
             my $guard = $m->guard;
             $wg->done;
         };
+        $rw->read_lock;    ...; $rw->read_unlock;
         $wg->wait;
     };
 
 =head1 DESCRIPTION
 
 There is nothing to construct base class objects with - it exists so every member of the Sync family
-(L<Acme::Parataxis::Sync::Mutex>, L<Acme::Parataxis::Sync::WaitGroup>, L<Acme::Parataxis::Sync::Barrier>,
-L<Acme::Parataxis::Sync::Once>) shares one wait mechanism. Every primitive parks the current fiber via the scheduler
-and wakes parked fibers through it; an interrupted wait unregisters itself from the primitive it was parked on before
-unwinding, so a cancelled wait never leaves a stale id behind that a later wake could fire at a reused fiber.
+(L<Acme::Parataxis::Sync::Mutex>, L<Acme::Parataxis::Sync::RwLock>, L<Acme::Parataxis::Sync::WaitGroup>,
+L<Acme::Parataxis::Sync::Barrier>, L<Acme::Parataxis::Sync::Once>) shares one wait mechanism. Every primitive parks the
+current fiber via the scheduler and wakes parked fibers through it; an interrupted wait unregisters itself from the
+primitive it was parked on before unwinding, so a cancelled wait never leaves a stale id behind that a later wake could
+fire at a reused fiber.
 
 All waits are cooperative: inside a scheduled fiber (the body of C<async> or C<fiber>), they suspend only that fiber,
 never the scheduler or another fiber. All of them croak when called outside a scheduled fiber.

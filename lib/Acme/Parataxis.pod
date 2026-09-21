@@ -340,6 +340,10 @@ park/wake machinery as everything else:
 =item * L<Acme::Parataxis::Sync::Mutex> - a non-reentrant lock with true owner tracking
 (C<lock>, C<try_lock>, C<unlock>, C<guard>); releasing from a non-owner croaks.
 
+=item * L<Acme::Parataxis::Sync::RwLock> - a writer-preferring read/write lock: any number
+of readers xor one writer, with C<read_lock>/C<write_lock> and matching guards. Once a writer is queued, new readers
+are held back so a steady read stream cannot starve writers.
+
 =item * L<Acme::Parataxis::Sync::WaitGroup> - a job counter; C<add>/C<done> adjust it and
 C<wait> parks until it reaches zero.
 

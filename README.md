@@ -353,6 +353,33 @@ async {
 Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
 the fiber. If the fiber is never actually parked, the hook is silently dropped.
 
+## Event-loop drivers
+
+By default `await_read`/`await_write`/`await_sleep` submit work to the OS worker pool. Attaching an existing event
+loop instead lets that loop own readiness (epoll/kqueue/IOCP come for free) while Parataxis keeps its scheduler, fibers
+and parks unchanged. Two reference drivers ship with the distribution:
+[Acme::Parataxis::Driver::Mojo](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ADriver%3A%3AMojo) (`Mojo::IOLoop`) and
+[Acme::Parataxis::Driver::IOAsync](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ADriver%3A%3AIOAsync) (`IO::Async::Loop`).
+
+- `Acme::Parataxis->attach_loop( $loop )` - wrap `$loop` in a driver and make it current. Returns the
+driver that was attached before (so the first attach returns a false value). Croaks on a non-object and while a run
+is active.
+- `Acme::Parataxis->detach_loop()` - drop the current driver, unwinding every watch and timer it still
+held, and return it. Safe to call when nothing is attached.
+- `Acme::Parataxis->loop()` - the currently attached driver, or a false value while the worker-pool path
+is in effect.
+
+While a loop is attached, `run` hands the processor to the loop whenever every fiber is parked; the loop's callbacks
+only enqueue fibers, never run them, so the scheduler cannot be re-entered. The public contract of the `await_*`
+family is unchanged — readiness still reports the pool path's values, a timeout still resumes `-1`, and an enclosing
+`with_timeout`/`nursery` still throws. Keep a driver session short: attach, run, detach.
+
+```perl
+Acme::Parataxis->attach_loop( Mojo::IOLoop->new );
+Acme::Parataxis::run( sub { await_read( $fh, 2000 ) } );
+Acme::Parataxis->detach_loop;
+```
+
 ## Sync primitives
 
 The [Acme::Parataxis::Sync](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASync) family gives cooperative fibers the classic synchronization tools, all built on the same
@@ -360,6 +387,9 @@ park/wake machinery as everything else:
 
 - [Acme::Parataxis::Sync::Mutex](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASync%3A%3AMutex) - a non-reentrant lock with true owner tracking
 (`lock`, `try_lock`, `unlock`, `guard`); releasing from a non-owner croaks.
+- [Acme::Parataxis::Sync::RwLock](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASync%3A%3ARwLock) - a writer-preferring read/write lock: any number
+of readers xor one writer, with `read_lock`/`write_lock` and matching guards. Once a writer is queued, new readers
+are held back so a steady read stream cannot starve writers.
 - [Acme::Parataxis::Sync::WaitGroup](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASync%3A%3AWaitGroup) - a job counter; `add`/`done` adjust it and
 `wait` parks until it reaches zero.
 - [Acme::Parataxis::Sync::Barrier](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASync%3A%3ABarrier) - `$n` parties meeting via `arrive_and_wait`;

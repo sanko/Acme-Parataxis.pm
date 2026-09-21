@@ -1,0 +1,157 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Sync::RwLock - A writer-preferring shared/exclusive read-write lock for fibers
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Sync::RwLock;
+
+    my $rw = Acme::Parataxis::Sync::RwLock->new;
+
+    async {
+        $rw->read_lock;    ...; $rw->read_unlock;      # shared
+        $rw->write_lock;   ...; $rw->write_unlock;     # exclusive
+
+        { my $g = $rw->read_guard;  ... }              # scoped guards
+        { my $g = $rw->write_guard; ... }
+    };
+
+=head1 DESCRIPTION
+
+A read-write lock shared between fibers: any number of readers B<xor> one writer. Read-heavy sections run concurrently;
+a write section excludes everyone.
+
+The lock is B<writer-preferring> (Go's C<RWMutex> style): as soon as a writer is B<queued>, new readers are blocked
+instead of being admitted alongside it. Without that rule a steady stream of readers could keep a writer waiting
+indefinitely, so writers are guaranteed to make progress.
+
+Waits are cooperative, like the rest of the L<Acme::Parataxis::Sync|Acme::Parataxis::Sync> family: a
+C<read_lock>/C<write_lock> that cannot be satisfied parks only the current fiber. The write side mirrors
+L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex> with true owner tracking and strict B<FIFO hand-off> -
+the lock is recorded on the next waiter B<before> that waiter is woken, so nobody can cut in line and nobody has to
+race to collect what is already theirs. A parked wait is interruptible like any park, so C<with_timeout( $ms, sub {
+$rw->write_lock } )> times out instead of blocking forever.
+
+=head1 RULES
+
+=over
+
+=item * Many readers B<xor> one writer, never both.
+
+=item * The write side is B<not reentrant>: a fiber that already holds the write lock croaks on a second
+C<write_lock>/C<try_write_lock>.
+
+=item * The read side B<is> reentrant: a fiber that already holds a read lock deepens its hold in place rather than
+parking (parking there would deadlock against a queued writer).
+
+=item * A fiber that holds the write lock already has exclusive access, so it takes a read hold in place too.
+
+=item * Upgrading is not supported: a fiber holding a read lock croaks on C<write_lock> instead of deadlocking
+against itself.
+
+=item * C<read_unlock> croaks when the calling fiber holds no read lock; C<write_unlock> croaks when the lock is not
+write-held or the caller is not the writer.
+
+=item * C<try_read_lock>/C<try_write_lock> never park and never steal: they return false while the lock is busy
+B<ahead of a queued waiter>.
+
+=item * An interrupted wait unregisters itself. If the lock was handed to that fiber a moment before the interrupt
+fired, the hand-off is transferred on to the next waiter rather than stranded on a fiber id that is about to die
+(and later be reused).
+
+=item * Every operation croaks when called outside a scheduled fiber.
+
+=back
+
+=head1 METHODS
+
+=head2 C<new()>
+
+Creates a free lock.
+
+=head2 C<read_lock()>
+
+Takes a shared read hold, parking until no writer holds the lock and no writer is queued. Returns true. Croaks outside
+a scheduled fiber. Deepens the hold in place when the calling fiber already reads, and grants it in place when that
+fiber already holds the write lock - see L</RULES>.
+
+=head2 C<try_read_lock()>
+
+Takes a shared read hold if one is available right now, returning true. Returns false instead of parking when a writer
+holds the lock or is queued for it. Croaks outside a scheduled fiber.
+
+=head2 C<read_unlock()>
+
+Releases B<one> read hold owned by the calling fiber and, when it was the last one, hands the lock on to the next
+waiter. Nesting C<read_lock> pairs one-for-one with nesting C<read_unlock>. Croaks outside a scheduled fiber and when
+the calling fiber holds no read lock.
+
+=head2 C<write_lock()>
+
+Takes the exclusive write lock, parking until every reader has drained and every queued writer ahead of this fiber has
+been served. Returns true. Croaks outside a scheduled fiber, on same-fiber re-entry, and on a read-to-write upgrade
+attempt.
+
+=head2 C<try_write_lock()>
+
+Takes the exclusive write lock if it is completely free and unqueued, returning true. Returns false instead of parking
+when a reader holds it or any writer is queued (it never jumps the FIFO). Croaks outside a scheduled fiber, on
+same-fiber re-entry, and on a read-to-write upgrade - a C<try_> that merely returned false there would invite a retry
+loop that can never succeed.
+
+=head2 C<write_unlock()>
+
+Releases the exclusive write lock to the next queued writer, or to the waiting readers when the queue empties. Only the
+current writer may call it. Croaks outside a scheduled fiber, when the lock is not write-held, and when the caller is
+not the writer.
+
+=head2 C<read_guard()>
+
+Calls C<read_lock> and returns an object that calls C<read_unlock> when it goes out of scope - including when the
+scope unwinds on an exception.
+
+=head2 C<write_guard()>
+
+Calls C<write_lock> and returns an object that calls C<write_unlock> when it goes out of scope - including when the
+scope unwinds on an exception. Prefer this over pairing C<write_lock> and C<write_unlock> by hand.
+
+=head2 C<writer()>
+
+Returns the fiber id currently holding the write lock, or C<undef> when no writer holds it. C<owner()> is an alias for
+symmetry with L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex>.
+
+=head2 C<readers()>
+
+Returns the number of outstanding read holds.
+
+=head2 C<read_holders()>
+
+Returns how many B<distinct> fibers currently hold a read lock.
+
+=head2 C<read_waiters()>, C<write_waiters()>, C<waiters()>
+
+How many fibers are parked waiting for a read lock, for a write lock, and in total.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex>, L<Acme::Parataxis::Sync|Acme::Parataxis::Sync>,
+L<Acme::Parataxis|Acme::Parataxis>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut
