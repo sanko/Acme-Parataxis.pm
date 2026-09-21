@@ -1,212 +1,358 @@
 ---
-jobs:
+name: CI Matrix
+on:
+  pull_request: ~
+  push: ~
+  schedule:
+    - cron: 42 5 * * 0
+  workflow_dispatch: ~
+permissions:
+  actions: read
+  contents: read
 
+jobs:
   freebsd:
     name: FreeBSD
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
-    secrets: inherit
     with:
-      os_version: '15.0'
+      os_version: '14.1'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
-        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere
-        #~ (Solaris/OmniOS site bin), so re-export those dirs first.
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
         curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
-        perl /tmp/cpanmin.pl App::cpanminus
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
         rm -f /tmp/cpanmin.pl
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
-        #~ Alien::Xmake probes `cc` first, then gcc/clang: point /usr/bin/cc at
-        #~ the real gcc when there is no /usr/bin/cc.
-        gcc_path=$(command -v gcc 2>/dev/null || true)
-        if [ -n "$gcc_path" ] && [ ! -e /usr/bin/cc ]; then ln -sf "$gcc_path" /usr/bin/cc 2>/dev/null || true; fi
-        echo "cc=$(command -v cc || true) gcc=$(command -v gcc || true) make=$(command -v make || true) gmake=$(command -v gmake || true)"
-        echo 'int main(){return 0;}' | cc -xc - -o /dev/null - 2>/dev/null && echo 'cc compile OK' || echo 'cc compile FAILED'
         command -v cpanm
-        export XMAKE_ROOT=y
-        cpanm --notest IO::Socket::SSL
-        cpanm -v .
-      #~ No X11 in base: install the dev libs so xmake uses the system pkg tools
-      #~ instead of bootstrapping the whole X11 stack from source.
-      matrix: >
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
         [
-          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"pkg install -y perl5 lang/gcc"},
-          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"clang","prepare":"pkg install -y perl5 llvm"}
+          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"},
+          {"platform_name":"freebsd","os":"freebsd","arch":"aarch64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"}
+        ]
+
+  linux:
+    name: Linux
+    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+    with:
+      checkout_submodules: 'recursive'
+      task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Bootstrap cpanm via its canonical one-liner; on a writable perl (a
+        #~ source build) it lands in the perl's own bin dir, which the runner
+        #~ puts on PATH. Distro perl is read-only to the runner user, so
+        #~ cpanm relocates every install into $HOME/perl5 instead. Adopt that
+        #~ layout (PATH + local::lib env) so cpanm deps and the Build steps
+        #~ share one module pool. No-op when $HOME/perl5 was never created.
+        curl -L https://cpanmin.us | perl - --notest App::cpanminus
+        if [ -x "$HOME/perl5/bin/cpanm" ]; then
+          export PATH="$HOME/perl5/bin:$PATH"
+          "$HOME/perl5/bin/cpanm" --local-lib="$HOME/perl5" --notest local::lib
+          eval "$(perl -I "$HOME/perl5/lib/perl5" -Mlocal::lib)"
+        fi
+        command -v cpanm
+        cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        perl Build.PL
+        ./Build
+        ./Build test --v
+      matrix: >-
+        [
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","variant":"default","platform_name":"linux","os":"ubuntu-26.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dusethreads","variant":"threads","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Duselongdouble","variant":"longdouble","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dusequadmath","variant":"quadmath","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING","variant":"debug","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dusethreads -DDEBUGGING=both","variant":"threads-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dusethreads -Duselongdouble -DDEBUGGING=both","variant":"threads-longdouble-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dusethreads -Dusequadmath -DDEBUGGING=both","variant":"threads-quadmath-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","variant":"default","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads","variant":"threads","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Duselongdouble","variant":"longdouble","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusequadmath","variant":"quadmath","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING","variant":"debug","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -DDEBUGGING=both","variant":"threads-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -Duselongdouble -DDEBUGGING=both","variant":"threads-longdouble-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -Dusequadmath -DDEBUGGING=both","variant":"threads-quadmath-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04","toolchain":"clang"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04","toolchain":"clang"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","variant":"default","platform_name":"linux","os":"ubuntu-26.04-arm","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.40.2","configure":"-Dusethreads","variant":"threads","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","variant":"default","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"clang"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","platform_name":"riscv","os":"ubuntu-26.04-riscv","arch":"riscv64","toolchain":"gcc","variant":"default"}
+        ]
+
+  macos:
+    name: macOS
+    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+    with:
+      checkout_submodules: 'recursive'
+      task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Bootstrap cpanm via its canonical one-liner; it installs into the
+        #~ active (source-built) perl's bin dir, which the runner puts on PATH.
+        curl -L https://cpanmin.us | perl - --notest App::cpanminus
+        command -v cpanm
+        cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        perl Build.PL
+        ./Build
+        ./Build test --v
+      matrix: >-
+        [
+          {"arch":"aarch64","perl_version":"5.40.2","variant":"default","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-Duselongdouble","variant":"longdouble","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-DDEBUGGING","variant":"debug","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.40.2","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","variant":"default","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-Duselongdouble","variant":"longdouble","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-DDEBUGGING","variant":"debug","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"aarch64","perl_version":"5.42.0","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"macos","os":"macos-15","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","variant":"default","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-Duselongdouble","variant":"longdouble","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING","variant":"debug","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.40.2","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","variant":"default","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-Duselongdouble","variant":"longdouble","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING","variant":"debug","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=both","variant":"debugging","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=-g","variant":"debugging-g","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-Doptimize=-g","variant":"optimize-g","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-DDEBUGGING=none","variant":"debugging-none","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"},
+          {"arch":"x86_64","perl_version":"5.42.0","configure":"-UDEBUGGING","variant":"nodebugging","platform_name":"macos","os":"macos-15-intel","toolchain":"clang"}
+        ]
+
+  openbsd:
+    name: OpenBSD
+    uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
+    with:
+      os_version: '7.8'
+      checkout_submodules: 'recursive'
+      task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
+        #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
+        #~ install aborts the whole run even though it succeeded. cpanm lands in
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+        rm -f /tmp/cpanmin.pl
+        export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
+        command -v cpanm
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
+        [
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg_add gmake curl"}
         ]
 
   netbsd:
     name: NetBSD
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
-    secrets: inherit
     with:
       os_version: '10.1'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
-        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere
-        #~ (Solaris/OmniOS site bin), so re-export those dirs first.
-        curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
-        perl /tmp/cpanmin.pl App::cpanminus
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
         rm -f /tmp/cpanmin.pl
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
-        #~ Alien::Xmake probes `cc` first, then gcc/clang: point /usr/bin/cc at
-        #~ the real gcc when there is no /usr/bin/cc.
-        gcc_path=$(command -v gcc 2>/dev/null || true)
-        if [ -n "$gcc_path" ] && [ ! -e /usr/bin/cc ]; then ln -sf "$gcc_path" /usr/bin/cc 2>/dev/null || true; fi
-        echo "cc=$(command -v cc || true) gcc=$(command -v gcc || true) make=$(command -v make || true) gmake=$(command -v gmake || true)"
-        echo 'int main(){return 0;}' | cc -xc - -o /dev/null - 2>/dev/null && echo 'cc compile OK' || echo 'cc compile FAILED'
         command -v cpanm
-        export XMAKE_ROOT=y
-        cpanm --notest IO::Socket::SSL
-        cpanm -v .
-      matrix: >
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
         [
-          {"platform_name":"netbsd","os":"netbsd","arch":"x86_64","toolchain":"gcc","prepare":"/usr/sbin/pkg_add perl curl gmake"}
+          {"platform_name":"netbsd","os":"netbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"/usr/sbin/pkg_add perl curl gmake"}
         ]
 
   dragonflybsd:
     name: DragonFly BSD
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
-    secrets: inherit
     with:
       os_version: '6.4.0'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
-        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere
-        #~ (Solaris/OmniOS site bin), so re-export those dirs first.
-        curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
-        perl /tmp/cpanmin.pl App::cpanminus
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
         rm -f /tmp/cpanmin.pl
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
-        #~ Alien::Xmake probes `cc` first, then gcc/clang: point /usr/bin/cc at
-        #~ the real gcc when there is no /usr/bin/cc.
-        gcc_path=$(command -v gcc 2>/dev/null || true)
-        if [ -n "$gcc_path" ] && [ ! -e /usr/bin/cc ]; then ln -sf "$gcc_path" /usr/bin/cc 2>/dev/null || true; fi
-        echo "cc=$(command -v cc || true) gcc=$(command -v gcc || true) make=$(command -v make || true) gmake=$(command -v gmake || true)"
-        echo 'int main(){return 0;}' | cc -xc - -o /dev/null - 2>/dev/null && echo 'cc compile OK' || echo 'cc compile FAILED'
         command -v cpanm
-        export XMAKE_ROOT=y
-        cpanm --notest IO::Socket::SSL
-        cpanm -v .
-      matrix: >
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
         [
-          {"platform_name":"dragonflybsd","os":"dragonflybsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.5","prepare":"pkg update && pkg upgrade -y && pkg install -y perl5 gcc"}
+          {"platform_name":"dragonflybsd","os":"dragonflybsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg update && pkg upgrade -y && pkg install -y perl5 gcc gmake curl"}
         ]
 
   solaris:
     name: Solaris
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
-    secrets: inherit
     with:
       os_version: '11.4'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
-        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere
-        #~ (Solaris/OmniOS site bin), so re-export those dirs first.
-        curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
-        perl /tmp/cpanmin.pl App::cpanminus
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
         rm -f /tmp/cpanmin.pl
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
-        #~ Alien::Xmake probes `cc` first, then gcc/clang: point /usr/bin/cc at
-        #~ the real gcc when there is no /usr/bin/cc.
-        gcc_path=$(command -v gcc 2>/dev/null || true)
-        if [ -n "$gcc_path" ] && [ ! -e /usr/bin/cc ]; then ln -sf "$gcc_path" /usr/bin/cc 2>/dev/null || true; fi
-        echo "cc=$(command -v cc || true) gcc=$(command -v gcc || true) make=$(command -v make || true) gmake=$(command -v gmake || true)"
-        echo 'int main(){return 0;}' | cc -xc - -o /dev/null - 2>/dev/null && echo 'cc compile OK' || echo 'cc compile FAILED'
         command -v cpanm
-        export XMAKE_ROOT=y
-        cpanm --notest IO::Socket::SSL
-        cpanm -v .
-      matrix: >
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
         [
-          {"platform_name":"solaris","os":"solaris","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.5","prepare":"pkg install -v --accept perl-538 gcc developer/build/make bash"}
+          {"platform_name":"solaris","os":"solaris","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","configure":"-A'ccflags=-D__EXTENSIONS__'","prepare":"pkg install -v --accept perl-538 gcc developer/build/make bash web/curl"}
         ]
 
-  linux:
-    name: Linux
-    secrets: inherit
-    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+  omnios:
+    name: OmniOS
+    uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
-      matrix: |
-        [
-          {"platform_name":"ubuntu","os":"ubuntu-latest","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.5"},
-          {"platform_name":"ubuntu","os":"ubuntu-latest","arch":"x86_64","toolchain":"gcc","perl_version":"5.42.3","configure":"-Duselongdouble","variant":"longdoubles"},
-          {"platform_name":"ubuntu-arm","os":"ubuntu-24.04-arm","arch":"aarch64","toolchain":"gcc","perl_version":"5.40.5"},
-          {"platform_name":"ubuntu","os":"ubuntu-latest","arch":"x86_64","toolchain":"clang","perl_version":"5.40.5"},
-          {"platform_name":"ubuntu-arm","os":"ubuntu-24.04-arm","arch":"aarch64","toolchain":"clang","perl_version":"5.40.5"}
-        ]
+      os_version: 'r151050'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
-        #~ Install cpanm via its canonical self-bootstrap (installs the real
-        #~ `cpanm` binary into the active perl's bin dir). `command -v cpanm`
-        #~ is a hard fail point that catches any no-op.
-        curl -L https://cpanmin.us | perl - App::cpanminus
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
+        #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
+        #~ install aborts the whole run even though it succeeded. cpanm lands in
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+        rm -f /tmp/cpanmin.pl
+        export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
-        cpanm -v .
-  macos:
-    name: macOS
-    secrets: inherit
-    uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
+        [
+          {"platform_name":"omnios","os":"omnios","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","configure":"-A'ccflags=-D__EXTENSIONS__ -fno-lto'","prepare":"pkg install -v --accept developer/gcc13 system/header developer/build/make web/curl"}
+        ]
+
+  haiku:
+    name: Haiku
+    uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
-      matrix: |
-        [
-          {"platform_name":"macos","os":"macos-15","arch":"aarch64","toolchain":"gcc","perl_version":"5.42.3"},
-          {"platform_name":"macos-intel","os":"macos-15-intel","arch":"x86_64","toolchain":"gcc","perl_version":"5.42.3"},
-          {"platform_name":"macos","os":"macos-15","arch":"aarch64","toolchain":"clang","perl_version":"5.42.3"},
-          {"platform_name":"macos-intel","os":"macos-15-intel","arch":"x86_64","toolchain":"clang","perl_version":"5.42.3"}
-        ]
+      os_version: 'r1beta6'
+      checkout_submodules: 'recursive'
       task: |
-        perl -V
-        #~ Install cpanm via its canonical self-bootstrap (installs the real
-        #~ `cpanm` binary into the active perl's bin dir). `command -v cpanm`
-        #~ is a hard fail point that catches any no-op.
-        curl -L https://cpanmin.us | perl - App::cpanminus
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
+        #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
+        #~ install aborts the whole run even though it succeeded. cpanm lands in
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+        rm -f /tmp/cpanmin.pl
+        export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
-        cpanm -v .
-  results:
-    if: always()
-    name: Summary
-    needs:
-      - linux
-      - macos
-      - windows
-    uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
+        cpanm --installdeps --notest -v .
+        cpanm --test-only -v .
+      matrix: >-
+        [
+          {"platform_name":"haiku","os":"haiku","arch":"x86_64","toolchain":"gcc","prepare":"pkgman install -y cmd:gcc cmd:make cmd:curl cmd:wget cmd:perl"}
+        ]
+
   windows:
     name: Windows
-    secrets: inherit
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
-      matrix: |
-        [
-          {"platform_name":"windows","os":"windows-latest","arch":"x86_64","toolchain":"gcc","prepare":"choco install strawberryperl"},
-          {"platform_name":"windows","os":"windows-latest","arch":"x86_64","toolchain":"clang","prepare":"choco install llvm strawberryperl"},
-          {"platform_name":"windows-arm","os":"windows-11-arm","arch":"aarch64","toolchain":"gcc","prepare":"choco install make -y; curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54051_64bit/strawberry-perl-5.40.5.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip && ln -sf /c/Strawberry/c/bin/gcc.exe /c/Strawberry/c/bin/cc.exe"}
-        ]
+      checkout_submodules: 'recursive'
       task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
         export PATH="/c/Strawberry/perl/site/bin:/c/Strawberry/perl/bin:/c/Strawberry/c/bin:$PATH"
         perl -e 'print qq(perl=\$^X :: \$^O\n)'
-        curl -L https://cpanmin.us | perl - App::cpanminus
+        curl -L https://cpanmin.us | perl - --notest App::cpanminus
         command -v cpanm
-        cpanm -v .
-name: CI
-on:
-  pull_request: ~
-  push:
-    branches:
-      - main
-      - dev
-      - dev-repair
-  workflow_dispatch: ~
-permissions:
-  actions: read
-  contents: read
+        cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        cpanm --test-only -v .
+      matrix: >-
+        [
+          {"arch":"x86_64","platform_name":"windows","os":"windows-2022","toolchain":"gcc","variant":"5.40.5.1","prepare":"curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54051_64bit/strawberry-perl-5.40.5.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip"},
+          {"arch":"x86_64","platform_name":"windows","os":"windows-2022","toolchain":"gcc","variant":"5.42.3.1","prepare":"curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip"},
+          {"arch":"x86_64","platform_name":"windows","os":"windows-2022","toolchain":"clang","variant":"5.42.3.1","prepare":"choco install llvm -y; curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip"},
+          {"arch":"aarch64","platform_name":"windows","os":"windows-11-arm","toolchain":"gcc","variant":"5.40.5.1","prepare":"choco install make -y; curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54051_64bit/strawberry-perl-5.40.5.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip"},
+          {"arch":"x86_64","platform_name":"windows","os":"windows-2022","toolchain":"msvc","variant":"5.42.3.1","prepare":"curl -sL -o /c/strawberry.zip https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip && rm -rf /c/Strawberry; powershell -NoProfile -Command Expand-Archive -Path C:/strawberry.zip -DestinationPath C:/Strawberry -Force -ErrorAction Stop; rm -f /c/strawberry.zip; set -e; export PATH=\"$(cygpath -u \"$VCToolsInstallDir\")bin/Hostx64/x64:$PATH\"; cl 2>&1 | head -n 1 || true; printf 'AFFIX_CC=cl\\nAFFIX_CXX=cl\\n' >> \"$GITHUB_ENV\""}
+        ]
+
+  results:
+    name: Results
+    if: always()
+    needs:
+      - freebsd
+      - linux
+      - macos
+      - openbsd
+      - netbsd
+      - dragonflybsd
+      - solaris
+      - omnios
+      - haiku
+      - windows
+    uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
+    with:
+      title: 'Affix.pm CI Matrix'
