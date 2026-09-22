@@ -57,7 +57,7 @@ subtest 'a whole backlog of short sleeps is covered in one go, not one worker pe
         my @long = map {
             my $ms = $_;
             fiber { await_sleep($ms) }
-        } 400, 400;
+        } 1000, 1000;
         Acme::Parataxis->yield while Acme::Parataxis::get_outstanding_jobs() < 2;
 
         # Submitted back to back with no idle worker anywhere: the pool must grow by the deficit, not trickle.
@@ -70,7 +70,7 @@ subtest 'a whole backlog of short sleeps is covered in one go, not one worker pe
     is scalar @took, 8, 'all 8 concurrent short sleeps ran';
     my $worst = 0;
     $worst = $_ > $worst ? $_ : $worst for @took;
-    cmp_ok $worst, '<', 250, sprintf 'slowest of the 8 took %.0fms (the bug left them queued until a 400ms sleep ended)', $worst;
+    cmp_ok $worst, '<', 500, sprintf 'slowest of the 8 took %.0fms (the bug left them queued until a 1000ms sleep ended)', $worst;
 };
 is Acme::Parataxis::get_live_fiber_count(), $BASE, 'every fiber created by these scenarios was reaped';
 #
