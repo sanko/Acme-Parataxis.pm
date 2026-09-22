@@ -41,11 +41,24 @@ available inside them, and handler code is plain cooperative code (it may C<awai
 
 =head1 CONSTRUCTOR
 
-=head2 C<Actor-E<gt>spawn( sub ($self, $msg) { ... }, [ $capacity ] )>
+=head2 C<Actor-E<gt>spawn( sub ($self, $msg) { ... }, [ $capacity ], %opts )>
 
 Starts a new actor and returns immediately. The handler receives the actor and the message; its return value becomes
 the answer to an C<ask>, and it is discarded for a C<send>. C<$capacity> (default 16) is the mailbox size before
 senders start parking.
+
+Options:
+
+=over 4
+
+=item *
+
+C<supervised =E<gt> 1>: a handler die kills the actor instead of only failing that one ask. The mailbox loop breaks,
+every ask still queued or parked is failed with the handler error, and the C<on_death> hooks fire with that error, so
+an L<Acme::Parataxis::Supervisor|Acme::Parataxis::Supervisor> watching the actor learns it died and can restart it.
+Without it (the default), a handler die fails its own ask (or warns, for a C<send>) and the actor keeps running.
+
+=back
 
 Must be called from inside a scheduled fiber (an C<async> block, a C<fiber>, a nursery child, ...).
 
@@ -61,7 +74,8 @@ round-trip.
 =head2 C<send( $msg )>
 
 Queues C<$msg> with no reply. Returns true once queued (parking if the mailbox is full). If the handler dies on a
-fire-and-forget message, the failure is reported with C<warn> and the actor keeps running.
+fire-and-forget message, the failure is reported with C<warn> and the actor keeps running, unless it was spawned with
+C<supervised =E<gt> 1>, in which case the die kills the actor (see L</"CONSTRUCTOR">).
 
 =head2 C<stop( )>
 
@@ -76,9 +90,28 @@ False once the actor has shut down.
 
 The fiber id of the actor's dedicated fiber.
 
+=head2 C<on_death( $cb )>
+
+Registers C<$cb>, a C<CODE> ref, and returns C<$self>. It fires exactly once when the actor is gone, as
+C<$cb-E<gt>( $actor, $error )>, where C<$error> is whatever killed it or C<undef> for a graceful stop. An actor that
+is already done calls back immediately, so a watcher never has to check first. This is how an
+L<Acme::Parataxis::Supervisor|Acme::Parataxis::Supervisor> learns a supervised child died. Croaks if C<$cb> is not a
+code ref.
+
+=head2 C<error( )>
+
+Why the actor died, or C<undef> while it is running (or if it stopped gracefully).
+
+=head2 C<respawn( )>
+
+Returns a fresh, already-running actor with the same handler, mailbox capacity, and options (C<supervised> included).
+The new actor owns a new mailbox, so asks still outstanding against this one are failed here rather than answered
+there. This is what a supervisor starts in place of a dead child; it is not a restart of this object, which is why
+C<supervisor-E<gt>child($name)> returns a different actor after a restart.
+
 =head1 SEE ALSO
 
-L<Acme::Parataxis>, L<Acme::Parataxis::Channel>, L<Acme::Parataxis::Future>, L<Acme::Parataxis::Generator>
+L<Acme::Parataxis>, L<Acme::Parataxis::Supervisor>, L<Acme::Parataxis::Channel>, L<Acme::Parataxis::Future>, L<Acme::Parataxis::Generator>
 
 =head1 AUTHOR
 

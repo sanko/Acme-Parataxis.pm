@@ -768,8 +768,40 @@ fire-and-forget.
     $echo->stop;
 
 Because the mailbox is a bounded channel, slow handlers provide backpressure to senders, and C<ask> works with
-C<with_timeout> and cancellation just like any other block. Supervision (restart-on-failure, OTP-style) is out of
-scope; a handler die fails its own ask (or warns, for a C<send>) and the actor keeps going.
+C<with_timeout> and cancellation just like any other block. A handler die fails its own ask (or warns, for a C<send>)
+and the actor keeps going; spawn it with C<supervised =E<gt> 1> and the die kills the actor instead, which is what the
+supervisor below restarts.
+
+=head2 Supervisors
+
+An L<Acme::Parataxis::Supervisor> runs a set of actors (or nested supervisors) and restarts whichever ones die,
+OTP style, until a restart budget runs out:
+
+    use Acme::Parataxis::Supervisor;
+
+    my $sup = Acme::Parataxis::Supervisor->new(
+        strategy     => 'OneForOne',    # OneForAll | RestForOne
+        max_restarts => 5,
+        within       => 60,
+    );
+    $sup->supervise(
+        sub { Acme::Parataxis::Actor->spawn( $handler, 16, supervised => 1 ) },
+        name => 'worker',
+    );
+    $sup->run;    # supervises until stop() is called or the budget runs out
+
+C<OneForOne> (the default) restarts only the child that died; C<OneForAll> restarts the whole set, because the
+children share whatever state the death just broke; C<RestForOne> restarts the dead child plus everything that started
+after it. Restarts are budgeted: C<max_restarts> deaths inside C<within> seconds tear the tree down and C<run> dies
+with an L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor> aggregate (C<-E<gt>failures> lists
+every death that counted, C<-E<gt>primary> the one that blew the budget, C<-E<gt>child> its name); C<within =E<gt> 0>
+keeps nothing in the window, so the budget never trips.
+
+A restart is a fresh instance: a restarted actor owns a new mailbox and the asks in flight against the dead one are
+failed there, never hung or silently dropped, and a restarted subtree is rebuilt from its configuration rather than
+resumed. Supervisors supervise supervisors: C<supervise> accepts an actor, a nested C<Supervisor>, or a factory
+(C<CODE>) returning either, and C<children>/C<child>/C<restarts>/C<running>/C<stopping> introspect the tree. See
+L<Acme::Parataxis::Supervisor>.
 
 =head2 Diagnostics
 
@@ -821,6 +853,16 @@ debug builds of Perl, calling a shared subroutine from multiple fibers can trigg
 C<AvFILLp(av) == -1> and C<!AvREAL(av)>). Parataxis includes a specialized workaround that surgically prepares the next
 landing pad before every context switch, restoring each C<@_> slot to Perl's canonical REIFY-only, empty state, to
 satisfy these assertions without clobbering active lexical state.
+
+C<CvDEPTH> is one shared counter per CV, so it also has to survive I<asymmetric> parking: when several fibers park
+inside the same shared subroutine (C<Channel->get>, the wait helpers, ...) and shallower frames leave, the counter dips
+below the depth of a frame some other fiber parked there, and the next entry would land on that parked frame's pad and
+overwrite its C<$self>, C<@_>, and C<my> lexicals in place. The switcher therefore keeps a per-CV registry of parked
+depths, sets C<CvDEPTH> to the deepest parked frame before a resume (using the core's own C<olddepth + 1> convention
+for frames still on the resuming stack, which C<cx_popsub_args>' DEBUGGING assert requires), and only cleans a landing
+pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are
+purged when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
+F<t/055_shared_pads.t>.
 
 =head2 C<eval> vs. C<try/catch>
 

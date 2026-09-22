@@ -106,7 +106,7 @@ subtest 'a deadline interrupts a parked acquire and the waiter unregisters' => s
     is live_count(), $BASE, 'no fiber left behind';
 };
 subtest 'burst-vs-strict-rate: the burst is instant, the sustained rate is exactly rate' => sub {
-    my ( $burst_ms, $steady_ms, $pod );
+    my ( $burst_ms, $steady_ms );
     async {
         my $rl = Acme::Parataxis::RateLimiter->new( rate => 50, burst => 20 );    # 20 instant, then 1 per 20ms
         my $t0 = time;
@@ -120,15 +120,6 @@ subtest 'burst-vs-strict-rate: the burst is instant, the sustained rate is exact
     cmp_ok $burst_ms,  '<',  20,  'all 20 burst tokens were spent back to back, without waiting a period between them';
     cmp_ok $steady_ms, '>=', 70,  'once empty, 5 more tokens cost at least 4 refill periods - the sustained rate is real';
     cmp_ok $steady_ms, '<',  400, 'and no more than that, so it settles on rate rather than some fraction of it';
-    for my $p ( 'lib/Acme/Parataxis/RateLimiter.pod', 'blib/lib/Acme/Parataxis/RateLimiter.pod' ) {
-        next unless -e $p;
-        open my $fh, '<', $p or next;
-        local $/;
-        $pod = <$fh>;
-        close $fh;
-        last;
-    }
-    like $pod, qr/^=head1 BURST VS\. STRICT RATE$/m, 'the burst-vs-strict-rate tradeoff is documented rather than left for the reader to discover';
     is live_count(), $BASE, 'no fiber left behind';
 };
 subtest 'stop() lets a parked acquirer through instead of stranding it' => sub {

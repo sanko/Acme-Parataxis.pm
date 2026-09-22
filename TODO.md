@@ -22,7 +22,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Read/write locks (#7)                                     | [x] done      | Card 1 - `Sync::RwLock`, t/049 |
 | Deadlock tracing - `dump_fibers`, wait_reason (#7)        | [x] done      | M8, t/045 (full backtrace deferred → Card 9) |
 | Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 |
-| Supervisor trees - OTP restart strategies (#9)            | [ ] pending   | Card 3 |
+| Supervisor trees - OTP restart strategies (#9)            | [x] done      | Card 3 - `Supervisor`, t/054, t/055 |
 | Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
@@ -35,7 +35,7 @@ This file is the next chapter before I rename the project. Every complete task g
 - **OTP-grade supervision** was M7's explicit guardrail ("deliberately out of scope"). Discussion #9 asks for it directly - no longer out of scope, now Card 3.
 - **Scalable I/O (epoll/kqueue/IOCP)** was M9, marked "not part of the core plan" because it meant rewriting the readiness path. Discussion #9 proposes the kinder form - drive Parataxis from an existing CPAN event loop - which is Card 2.
 - **Full park-site backtrace** was M8's deferred nice-to-have ("wait_reason's single [file, line] is not a full backtrace"). Discussion #7's deadlock-tracing section wants exactly this - Card 9.
-- Regressions R1–R4 are resolved; R4's `pp_entersub` pad fix landed in `ee1e440`/`86a0ef0` (its Stress-CI confirmation rides along with routine CI).
+- Regressions R1–R4 are resolved; R4's `pp_entersub` pad fix landed in `ee1e440`/`86a0ef0` (its Stress-CI confirmation rides along with routine CI). The related shared-pad wipe (CvDEPTH dipping below a parked frame's depth, so the next entry landed on that frame's pad and erased its lexicals) is fixed in the C core alongside Card 3 by the per-CV parked-depth registry in `_activate_current_depths`, regression-tested in t/055.
 
 ## Known issues
 
@@ -153,7 +153,15 @@ Acceptance (t/0XX):
 - with no driver attached, the current `select()` path behaves exactly as today.
 
 
-### 3 Supervisor tree (OTP restart strategies)
+### 3 Supervisor tree (OTP restart strategies) - done
+
+**Shipped:** `lib/Acme/Parataxis/Supervisor.pm` + `Supervisor.pod`, plus `supervised`/`on_death`/`respawn` on
+`Actor` and the `Error::Supervisor` aggregate, tested by t/054 (12 subtests) and t/055 (the shared-pad corruption the
+tree's nesting flushed out). All four acceptance bullets below are covered: every strategy restarts the right set with
+untouched siblings as controls, budget exhaustion produces the aggregate error and stops the tree (with the
+same crash loop under a budget nobody can exhaust as the control), nested supervisors restart their own children and
+are rebuilt from above when their budget runs out, and actors restart with a clean mailbox while in-flight asks fail
+and the live-fiber count returns to baseline.
 
 Source: #9 - "Erlang-ish Supervisor Trees (Transaction healing)". Fail-fast (`::Nursery`, M4) isn't enough for
 long-running apps; they need *heal-fast*. This lifts M7's "supervision is deliberately out of scope" guardrail.

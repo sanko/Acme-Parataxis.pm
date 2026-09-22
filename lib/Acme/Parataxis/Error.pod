@@ -43,6 +43,19 @@ Kind C<'timeout'>. Thrown when a C<with_timeout> deadline fires. Carries an extr
 individual wait's bound. An ordinary C<die> inside the timed-out block is B<not> converted to this; it propagates
 unchanged.
 
+=head2 Acme::Parataxis::Error::Nursery
+
+Kind C<'nursery'>. Thrown by L<Acme::Parataxis::Nursery> when one or more children died: C<-E<gt>failures> lists
+every child error in spawn order, C<-E<gt>primary> the first natural (non-cancelled) one. Also see
+L<Acme::Parataxis::Nursery>.
+
+=head2 Acme::Parataxis::Error::Supervisor
+
+Kind C<'supervisor'>. Thrown by L<Acme::Parataxis::Supervisor>'s C<run> when a supervised tree exhausts its restart
+budget, after the tree has already been torn down. C<-E<gt>failures> lists every death that counted against the
+budget in the order it happened, C<-E<gt>primary> is the one that blew it, and C<-E<gt>child> names that child.
+Neither C<wait_reason> nor C<seconds> applies to it.
+
 =head1 METHODS
 
 =head2 C<message( )>
@@ -51,7 +64,7 @@ The rendered message, e.g. C<"The operation timed out after 0.25s at Semaphore d
 
 =head2 C<kind( )>
 
-The machine-readable discriminator, C<'cancelled'> or C<'timeout'>.
+The machine-readable discriminator: C<'cancelled'>, C<'timeout'>, C<'nursery'>, or C<'supervisor'>.
 
 =head2 C<wait_reason( )>
 
@@ -61,6 +74,24 @@ C<wait_reason>). May be undef if the wait did not record one.
 =head2 C<seconds( )>
 
 C<Error::Timeout> only: the bound, in seconds, of the wait whose deadline fired.
+
+=head2 C<failures( )>
+
+C<Error::Nursery> and C<Error::Supervisor> only: every failure that counted, in the order it happened, as a list
+(the aggregate is also stringifiable).
+
+=head2 C<primary( )>
+
+C<Error::Nursery> and C<Error::Supervisor> only: the failure that matters, the first natural one for a nursery (the
+real culprit rather than the siblings it cancelled) or the death that exhausted the budget for a supervisor.
+
+=head2 C<child( )>
+
+C<Error::Supervisor> only: the name of the supervised child whose death blew the restart budget.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis>, L<Acme::Parataxis::Nursery>, L<Acme::Parataxis::Supervisor>
 
 =head1 AUTHOR
 

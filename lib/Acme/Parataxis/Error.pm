@@ -62,6 +62,32 @@ package Acme::Parataxis::Error v0.1.1 {
         sub failures ($self) { @{ $self->{failures} // [] } }    # every child's error, in spawn order
         sub primary  ($self) { $self->{primary} }                # first natural (non-cancelled) failure
     }
+
+    # Thrown by Acme::Parataxis::Supervisor->run when a supervised tree exhausts its restart
+    # budget. Same shape as Error::Nursery: ->failures is every child death that counted against
+    # the budget (in the order they happened), ->primary is the one that blew it, and ->child names
+    # that child. The tree is already stopped by the time this is thrown.
+    package Acme::Parataxis::Error::Supervisor v0.1.1 {
+        use parent 'Acme::Parataxis::Error';
+
+        sub new ( $class, %args ) {
+            my $failures = delete $args{failures};
+            $failures = [] unless ref $failures eq 'ARRAY';
+            my $child   = delete $args{child};
+            my $primary = delete $args{primary};
+            $primary //= ( grep { defined } @$failures )[0];
+            my $label   = 'supervisor failure';
+            my $message = 'supervisor failure: restart budget exhausted';
+            $message .= " by child '$child'" if defined $child;
+            $message .= ": $primary"         if defined $primary;
+            bless { message => $message, label => $label, wait_reason => undef, failures => $failures, primary => $primary, child => $child, %args, },
+                $class;
+        }
+        sub kind     ($self) {'supervisor'}
+        sub failures ($self) { @{ $self->{failures} // [] } }    # every death that counted against the budget
+        sub primary  ($self) { $self->{primary} }                # the death that exhausted it
+        sub child    ($self) { $self->{child} }                  # name of that child
+    }
 };
 #
 1;

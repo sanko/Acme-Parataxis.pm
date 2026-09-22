@@ -1157,61 +1157,273 @@ static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char 
     }
 }
 
+/* ------------------------------------------------------------------------------------------
+ * Parked-frame depth registry.
+ *
+ * CvDEPTH is a single per-CV counter, but every fiber that parks inside a subroutine leaves a
+ * live frame (and a live pad) behind in the shared PadList. pp_entersub allocates its pad as
+ * depth = ++CvDEPTH(cv) and Perl_pad_push() reuses an existing pad at that depth as-is, so any
+ * CvDEPTH value below a parked frame's depth makes the next call land *on* that frame and
+ * overwrite its $self/@_/my lexicals in place (the parked-frame pad wipe). Leaves make dips
+ * unavoidable: cx_popsub_common() restores CvDEPTH(cv) = cx->blk_sub.olddepth, the value baked
+ * when *that* frame entered, which can be shallower than where other fibers sit parked, and a
+ * fiber resuming with no frame of a CV leaves that CV's CvDEPTH untouched at whatever stale
+ * value the last leaver assigned.
+ *
+ * The registry tracks, per CV, the pad depths of frames currently parked in non-running
+ * fibers. It is maintained incrementally at each swap by walking only the depositing and
+ * resuming context stacks (nobody walks all fibers), so the cost stays O(stack depth), and it
+ * is purged in destroy_coro so a killed parked fiber cannot pin CvDEPTH forever.
+ *
+ * _activate_current_depths() then restores:
+ *   - CVs on the resuming fiber's stack: CvDEPTH = that fiber's deepest frame depth
+ *     (olddepth + 1), exactly as before. A resuming fiber is inside its own frames, so it
+ *     cannot re-enter them before leaving, and its post-leave re-entries land on the pad it
+ *     just vacated (no other fiber can hold that depth); this exact value is also what keeps
+ *     core's cx_popsub_args() assert (Padlist[CvDEPTH] == PL_curpad) true at each leave.
+ *   - CVs parked somewhere but absent from the resuming stack: CvDEPTH = the deepest parked
+ *     depth, so the next ++CvDEPTH() lands at max + 1, strictly above every parked frame.
+ *
+ * Known limitation: a *recursive* re-entry of a CV that is on the resuming stack while other
+ * fibers are parked deeper in that same CV could still climb into a parked pad (fixing that
+ * would require inflating CvDEPTH above the leaving frame's depth, which breaks core's
+ * DEBUGGING leave asserts). The library's own park sites (get/put/down/up/await_sleep/_park/
+ * run) are non-recursive, so they cannot reach this case.
+ * --------------------------------------------------------------------------------------- */
+
+typedef struct {
+    CV * cv;             /* key; NULL marks a free table slot (a dead key keeps its cv set) */
+    I32 * counts;        /* counts[d] = parked frames at pad depth d; NULL when inactive */
+    I32 arr_len;         /* valid length of counts[] */
+    I32 max_depth;       /* highest d with counts[d] > 0; 0 when inactive */
+    I32 active_pos;      /* index into para_cvreg_active, or -1 when inactive */
+    int on_stack;        /* scratch: resuming fiber has a frame of this CV */
+} para_cvreg_entry_t;
+
+static para_cvreg_entry_t * para_cvreg = NULL; /* open-addressed table; capacity is always a power of 2 */
+static U32 para_cvreg_cap = 0;
+static U32 para_cvreg_used = 0;
+static I32 * para_cvreg_active = NULL; /* slots with max_depth > 0, so Pass 1b is O(parked CVs) */
+static U32 para_cvreg_active_n = 0;
+static U32 para_cvreg_active_cap = 0;
+
+#define PARA_CVREG_HASH(cv) (((U32)(((PTRV)(cv) >> 4) * 2654435761u)) & (para_cvreg_cap - 1))
+
+static void para_cvreg_activate(para_cvreg_entry_t * e) {
+    if (e->active_pos >= 0)
+        return;
+    if (para_cvreg_active_n >= para_cvreg_active_cap) {
+        U32 new_cap = para_cvreg_active_cap ? para_cvreg_active_cap * 2 : 16;
+        Renew(para_cvreg_active, new_cap, I32);
+        para_cvreg_active_cap = new_cap;
+    }
+    e->active_pos = (I32)para_cvreg_active_n;
+    para_cvreg_active[para_cvreg_active_n++] = (I32)(e - para_cvreg);
+}
+
+static void para_cvreg_deactivate(para_cvreg_entry_t * e) {
+    if (e->active_pos < 0)
+        return;
+    I32 pos = e->active_pos;
+    I32 last_slot = para_cvreg_active[--para_cvreg_active_n];
+    para_cvreg_active[pos] = last_slot;
+    para_cvreg[last_slot].active_pos = pos;
+    e->active_pos = -1;
+}
+
+static void para_cvreg_grow(void) {
+    para_cvreg_entry_t * old = para_cvreg;
+    U32 old_cap = para_cvreg_cap;
+    U32 new_cap = old_cap ? old_cap * 2 : 64;
+    Newxz(para_cvreg, new_cap, para_cvreg_entry_t);
+    para_cvreg_cap = new_cap;
+    para_cvreg_used = 0;
+    for (U32 i = 0; i < old_cap; i++) {
+        if (!old[i].cv)
+            continue;
+        U32 j = PARA_CVREG_HASH(old[i].cv);
+        while (para_cvreg[j].cv)
+            j = (j + 1) & (new_cap - 1);
+        para_cvreg[j] = old[i];
+        if (old[i].active_pos >= 0)
+            para_cvreg_active[old[i].active_pos] = (I32)j; /* active[] stores slots: remap after the move */
+        para_cvreg_used++;
+    }
+    if (old)
+        Safefree(old);
+}
+
+/* Lookup an existing key (create == 0: NULL on miss) or insert on an empty slot (create == 1;
+ * the caller grows first, so a probe chain always ends at a free slot). Dead keys (counts
+ * cleared, cv retained) are still found and reused, which keeps probing correct without
+ * tombstones. */
+static para_cvreg_entry_t * para_cvreg_lookup(CV * cv, int create) {
+    if (!cv)
+        return NULL;
+    if (!para_cvreg_cap) {
+        if (!create)
+            return NULL;
+        para_cvreg_grow();
+    }
+    U32 mask = para_cvreg_cap - 1;
+    U32 i = PARA_CVREG_HASH(cv);
+    for (;;) {
+        para_cvreg_entry_t * e = &para_cvreg[i];
+        if (e->cv == cv)
+            return e;
+        if (!e->cv) {
+            if (!create)
+                return NULL;
+            e->cv = cv;
+            e->counts = NULL;
+            e->arr_len = 0;
+            e->max_depth = 0;
+            e->active_pos = -1;
+            e->on_stack = 0;
+            para_cvreg_used++;
+            return e;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+static void para_cvreg_add(CV * cv, I32 depth) {
+    if (!cv || SvTYPE((SV *)cv) != SVt_PVCV || depth <= 0)
+        return;
+    para_cvreg_entry_t * e = para_cvreg_lookup(cv, 0);
+    if (!e) {
+        if ((para_cvreg_used + 1) * 4 >= para_cvreg_cap * 3)
+            para_cvreg_grow();
+        e = para_cvreg_lookup(cv, 1);
+    }
+    if (!e->counts) {
+        Newxz(e->counts, depth + 1, I32);
+        e->arr_len = depth + 1;
+    }
+    else if (depth >= e->arr_len) {
+        I32 old_len = e->arr_len;
+        Renew(e->counts, depth + 1, I32);
+        Zero(e->counts + old_len, (depth + 1) - old_len, I32);
+        e->arr_len = depth + 1;
+    }
+    if (e->active_pos < 0)
+        para_cvreg_activate(e);
+    e->counts[depth]++;
+    if (depth > e->max_depth)
+        e->max_depth = depth;
+}
+
+static void para_cvreg_dec(para_cvreg_entry_t * e, I32 depth) {
+    if (!e || !e->counts || depth <= 0 || depth >= e->arr_len || e->counts[depth] <= 0)
+        return; /* defensive: never unregister a depth we did not register */
+    if (--e->counts[depth] > 0)
+        return;
+    while (e->max_depth > 0 && e->counts[e->max_depth] <= 0)
+        e->max_depth--;
+    if (e->max_depth == 0) {
+        para_cvreg_deactivate(e);
+        Safefree(e->counts);
+        e->counts = NULL;
+        e->arr_len = 0;
+    }
+}
+
+static void para_cvreg_remove(CV * cv, I32 depth) {
+    if (!cv || depth <= 0)
+        return;
+    para_cvreg_dec(para_cvreg_lookup(cv, 0), depth);
+}
+
+/* Reset slot 0 of the pad a call would land on: slot 0 of a fresh perl pad is a REIFY-only,
+ * empty AV (pad_push), so a call re-entering a shared subroutine must find its @_ slot in
+ * exactly that state for pp_entersub's assert(!AvREAL(av)) / AvFILLp(av) == -1 invariants.
+ * AvREIFY_only -- not bare AvREAL_off -- restores the full canonical state perl expects (else
+ * the slot is neither-REAL-nor-REIFY and a later av_store re-turns it AvREAL). */
+static void _clean_landing_pad(pTHX_ CV * cv, I32 depth) {
+    PADLIST * pl = CvPADLIST(cv);
+    if (!pl || depth <= 0 || depth > PadlistMAX(pl))
+        return;
+    AV * pad = (AV *)PadlistARRAY(pl)[depth];
+    if (!pad || SvTYPE((SV *)pad) != SVt_PVAV)
+        return;
+    SV ** array = AvARRAY(pad);
+    if (!array || AvMAX(pad) < 0)
+        return;
+    SV * args = array[0];
+    if (args && SvTYPE(args) == SVt_PVAV) {
+        if (AvREAL(args))
+            para_report_avreal_pad(aTHX_ cv, depth, "pass2-cleaning");
+        AvFILLp((AV *)args) = -1;
+        AvREIFY_only((AV *)args);
+    }
+}
+
 /**
- * @brief Restores subroutine call depths and cleans argument pads.
+ * @brief Restores subroutine call depths, syncs the parked-depth registry, and cleans argument pads.
  *
- * This function iterates the context stack and restores CvDEPTH for active subroutines in two passes to safely handle
- * recursive calls.
+ * Runs at every swap. See the registry block above for the invariant this maintains.
  *
- * Pass 1: Restores CvDEPTH for all active frames.
- * Pass 2: Surgicaly cleans Slot 0 of the *next* pad depth for each CV.
- *
+ * @param from The fiber being deposited (its frames become parked).
  * @param to The fiber being resumed.
  */
-static void _activate_current_depths(pTHX_ para_fiber_t * to) {
+static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * to) {
+    /* Pass 0: the depositing fiber is parked now, so publish its live frame depths. Runs first
+     * so a CV shared by both fibers ends the swap with exactly `from` registered and `to` not. */
+    if (from && from != to && from->si && from->si->si_cxstack) {
+        for (I32 i = 0; i <= from->si->si_cxix; i++) {
+            PERL_CONTEXT * cx = &(from->si->si_cxstack[i]);
+            if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
+                CV * cv = cx->blk_sub.cv;
+                if (cv && SvTYPE((SV *)cv) == SVt_PVCV)
+                    para_cvreg_add(cv, cx->blk_sub.olddepth + 1);
+            }
+        }
+    }
+
     PERL_SI * si = to->si;
     if (!si || !si->si_cxstack)
         return;
 
-    /* Pass 1: Restore CvDEPTH for all active frames */
-    for (I32 i = 0; i <= si->si_cxix; i++) {
-        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
-        if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
-            CV * cv = cx->blk_sub.cv;
-            if (cv && SvTYPE((SV *)cv) == SVt_PVCV)
-                CvDEPTH(cv) = cx->blk_sub.olddepth + 1;
-        }
-    }
-
-    /* Pass 2: Clean the landing pads for the NEXT call in each CV. Slot 0 of a fresh
-     * perl pad is a REIFY-only, empty AV (pad_push), so a call re-entering a shared
-     * subroutine must find its @_ slot in exactly that state for pp_entersub's
-     * assert(!AvREAL(av)) / AvFILLp(av) == -1 invariants. AvREIFY_only -- not bare
-     * AvREAL_off -- restores the full canonical state perl expects (else the slot is
-     * neither-REAL-nor-REIFY and a later av_store re-turns it AvREAL). */
+    /* Pass 1: Restore CvDEPTH for all active frames of the resuming fiber (its own deepest
+     * frame depth per CV), deregister those depths now that the frames are live again, and
+     * flag CVs on this stack so Pass 1b leaves them at their exact value. */
     for (I32 i = 0; i <= si->si_cxix; i++) {
         PERL_CONTEXT * cx = &(si->si_cxstack[i]);
         if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
             CV * cv = cx->blk_sub.cv;
             if (cv && SvTYPE((SV *)cv) == SVt_PVCV) {
-                PADLIST * pl = CvPADLIST(cv);
-                I32 next_depth = CvDEPTH(cv) + 1;
-                if (pl && next_depth <= PadlistMAX(pl)) {
-                    AV * next_pad = (AV *)PadlistARRAY(pl)[next_depth];
-                    if (next_pad && SvTYPE(next_pad) == SVt_PVAV) {
-                        SV ** array = AvARRAY(next_pad);
-                        if (array && AvMAX(next_pad) >= 0) {
-                            SV * args = array[0];
-                            if (args && SvTYPE(args) == SVt_PVAV) {
-                                if (AvREAL(args))
-                                    para_report_avreal_pad(aTHX_ cv, next_depth, "pass2-cleaning");
-                                AvFILLp((AV *)args) = -1;
-                                AvREIFY_only((AV *)args);
-                            }
-                        }
-                    }
+                I32 depth = cx->blk_sub.olddepth + 1;
+                CvDEPTH(cv) = depth;
+                para_cvreg_entry_t * e = para_cvreg_lookup(cv, 0);
+                if (e) {
+                    para_cvreg_dec(e, depth);
+                    if (e->active_pos >= 0)
+                        e->on_stack = 1;
                 }
             }
+        }
+    }
+
+    /* Pass 1b: CVs parked somewhere but absent from the resuming stack: pin CvDEPTH to the
+     * deepest parked frame so the next ++CvDEPTH() lands at max + 1, above every parked pad,
+     * and clean that landing pad. */
+    for (U32 k = 0; k < para_cvreg_active_n; k++) {
+        para_cvreg_entry_t * e = &para_cvreg[para_cvreg_active[k]];
+        if (e->on_stack) {
+            e->on_stack = 0;
+            continue;
+        }
+        CvDEPTH(e->cv) = e->max_depth;
+        _clean_landing_pad(aTHX_ e->cv, e->max_depth + 1);
+    }
+
+    /* Pass 2: Clean the landing pad for the NEXT call in each CV on the resuming stack. */
+    for (I32 i = 0; i <= si->si_cxix; i++) {
+        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
+        if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
+            CV * cv = cx->blk_sub.cv;
+            if (cv && SvTYPE((SV *)cv) == SVt_PVCV)
+                _clean_landing_pad(aTHX_ cv, CvDEPTH(cv) + 1);
         }
     }
 }
@@ -1337,8 +1549,8 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     else
         PL_curpad = to->curpad;
 
-    // Restore CvDEPTH and clean landing pads
-    _activate_current_depths(aTHX_ to);
+    // Restore CvDEPTH, sync the parked-depth registry, and clean landing pads
+    _activate_current_depths(aTHX_ from, to);
 }
 
 /**
@@ -2503,6 +2715,21 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     }
     else {
         _release_slot(fiber_id);
+    }
+
+    /* Drop this fiber's frames out of the parked-depth registry: a parked fiber registered
+     * them when it switched out, and leaving them behind would pin CvDEPTH above depths no
+     * live frame occupies any more. (Pad clearing itself stays skipped for parked fibers, see
+     * below: registry bookkeeping never touches pads.) */
+    if (c->si && c->si->si_cxstack) {
+        for (I32 i = c->si->si_cxix; i >= 0; i--) {
+            PERL_CONTEXT * cx = &(c->si->si_cxstack[i]);
+            if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
+                CV * cv = cx->blk_sub.cv;
+                if (cv && SvTYPE((SV *)cv) == SVt_PVCV)
+                    para_cvreg_remove(cv, cx->blk_sub.olddepth + 1);
+            }
+        }
     }
 
     /* Unwind pads. This is only ever safe when the fiber's perl context stack has already been unwound to exhaustion
