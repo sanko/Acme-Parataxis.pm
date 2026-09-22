@@ -33,9 +33,9 @@ indefinitely, so writers are guaranteed to make progress.
 
 Waits are cooperative, like the rest of the L<Acme::Parataxis::Sync|Acme::Parataxis::Sync> family: a
 C<read_lock>/C<write_lock> that cannot be satisfied parks only the current fiber. The write side mirrors
-L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex> with true owner tracking and strict B<FIFO hand-off> -
-the lock is recorded on the next waiter B<before> that waiter is woken, so nobody can cut in line and nobody has to
-race to collect what is already theirs. A parked wait is interruptible like any park, so C<with_timeout( $ms, sub {
+L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex> with true owner tracking and strict B<FIFO hand-off> - the
+lock is recorded on the next waiter B<before> that waiter is woken, so nobody can cut in line and nobody has to race to
+collect what is already theirs. A parked wait is interruptible like any park, so C<with_timeout( $ms, sub {
 $rw->write_lock } )> times out instead of blocking forever.
 
 =head1 RULES
@@ -113,8 +113,8 @@ not the writer.
 
 =head2 C<read_guard()>
 
-Calls C<read_lock> and returns an object that calls C<read_unlock> when it goes out of scope - including when the
-scope unwinds on an exception.
+Calls C<read_lock> and returns an object that calls C<read_unlock> when it goes out of scope - including when the scope
+unwinds on an exception.
 
 =head2 C<write_guard()>
 

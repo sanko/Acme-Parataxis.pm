@@ -29,6 +29,7 @@ package Acme::Parataxis v0.1.1 {
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
+    my $DRIVER;           # the attached Acme::Parataxis::Driver (undef = the worker-pool fallback path), see attach_loop
     my %PARKED;           # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
     my %PARK_REGS;        # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;    # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
@@ -233,7 +234,7 @@ package Acme::Parataxis v0.1.1 {
         # Fail fast: a fiber that was interrupted while it was running (not parked), then reached a wait point, throws
         # at the park entry instead of parking, so a cancellation never gets stranded until some unrelated wake. The
         # C job table may still have armed the sleep/read this wait was about to submit, so the run can stay alive
-        # until those fire — but no wait is entered after its cancellation.
+        # until those fire - but no wait is entered after its cancellation.
         if ( defined( my $pre = $fiber->[F_INTERRUPT] ) ) {
             my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
             my $pre_site = [ $pre, $pfile, $pline ];
@@ -411,7 +412,7 @@ package Acme::Parataxis v0.1.1 {
             # next resume. Re-park here, registered for the child's death, so the scheduler lets the child run its own
             # unwind (unregistering from its tokens and running destructors) and reaps it before this frame unwinds and
             # frees $child. The M0 fix in the C layer means freeing the child mid-park would no longer crash, so this
-            # branch is no longer load-bearing for safety — it is kept so an abandoned child dies by unwinding rather
+            # branch is no longer load-bearing for safety - it is kept so an abandoned child dies by unwinding rather
             # than being yanked. The interrupt marker on this fiber was consumed by the throwing await, so returning
             # from this park (rather than throwing again) is certain.
             my $fid = Acme::Parataxis->current_fid;
@@ -492,11 +493,103 @@ package Acme::Parataxis v0.1.1 {
         return 0;
     }
 
+    # -- event-loop driver (Card 2). When an event loop is attached (attach_loop), await_read / await_write /
+    # -- await_sleep stop submitting blocking OS-thread-pool jobs per filehandle/sleep and instead register watches
+    # -- and timers on the loop; run() hands control to the loop whenever every fiber is parked. The public contract
+    # -- is unchanged (readiness with the pool path's result values; timeout resumes -1; an enclosing with_timeout /
+    # -- nursery interrupt still throws), only the backing mechanism differs.
+    sub attach_loop {
+        my $o     = _arg_offset( $_[0] );
+        my $thing = $_[$o];
+        croak 'attach_loop() requires an event-loop object (Mojo::IOLoop, Mojo::Reactor or IO::Async::Loop)' unless defined $thing && ref $thing;
+        @_ = ();
+        croak 'attach_loop() cannot run while a run is already active' if $IS_RUNNING;
+        require Acme::Parataxis::Driver;
+        my $driver = Acme::Parataxis::Driver::wrap($thing);
+        my $old    = $DRIVER;
+        $DRIVER = $driver;
+        return $old;
+    }
+
+    # Detach the event-loop driver, returning it and unwinding every watch/timer it still held (loops attached to a
+    # shared scheduler are racy at best, so a driver session is always short: attach, run, detach).
+    sub detach_loop {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        croak 'detach_loop() cannot run while a run is already active' if $IS_RUNNING;
+        my $old = $DRIVER;
+        $old->reset if $old;
+        $DRIVER = undef;
+        return $old;
+    }
+
+    # The currently attached driver (undef when the pool path is in effect). Mostly for diagnostics.
+    sub loop {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        return $DRIVER;
+    }
+
+    sub _driver_sleep ( $driver, $ms ) {
+        my $fid = Acme::Parataxis->current_fid;
+        croak 'await_sleep() must be called from inside a scheduled fiber' if $fid < 0;
+        my $fired = 0;
+        my $id    = $driver->timer( $ms, sub { $fired = 1; Acme::Parataxis::_scheduler_enqueue_by_id($fid) } );
+        my $dereg = sub { $driver->cancel_timer($id) unless $fired };
+        return _park( 'await_sleep', 1, $dereg );
+    }
+
+    # Register a read/write watch on the attached loop, arm the wait's own deadline timer, and park. Natural wake
+    # returns 1; the wait's own deadline swallows its ::Timeout and returns -1 like the pool path does; an *enclosing*
+    # with_timeout / nursery interrupt did not cancel our deadline token, so it propagates by dying.
+    #
+    sub _driver_wait ( $driver, $fh, $dir, $timeout, $reason ) {
+        my $fid = Acme::Parataxis->current_fid;
+        croak "$reason() must be called from inside a scheduled fiber" if $fid < 0;
+        my $wake = sub { Acme::Parataxis::_scheduler_enqueue_by_id($fid) };
+        if ( $dir eq 'read' ) { $driver->watch_read( $fh, $wake ) }
+        else                  { $driver->watch_write( $fh, $wake ) }
+        my $deadline;
+        my $timer_id;
+        $timeout //= 5000;    # match the worker-pool default, which also maps 0/negative to 5000
+        $timeout = 5000 if $timeout <= 0;
+
+        if ( $timeout > 0 ) {
+            my $have_ct = do { require Acme::Parataxis::CancellationToken; 1 };
+            $deadline = Acme::Parataxis::CancellationToken->new( kind => 'timeout' ) if $have_ct;
+            $deadline->register;
+            $timer_id = $driver->timer( $timeout, sub { $deadline->cancel } );
+        }
+        my $out = 1;
+        my $dying;
+        my $dereg = sub {
+            $driver->unwatch($fh);
+            $driver->cancel_timer($timer_id) if defined $timer_id;
+            $deadline->unregister            if defined $deadline;
+        };
+        my $ok = eval { Acme::Parataxis::_park( $reason, 1, $dereg ); 1 };
+        $dereg->();    # idempotent: on an interrupt _park already ran it, on a natural wake this is the cleanup
+        my $err = $@;
+        if ( !$ok ) {
+            if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
+                $out = -1;    # this wait's own deadline expired; the pool path resumes (not throws) on timeout
+            }
+            else { $dying = $err }
+        }
+        $deadline->unregister if defined $deadline;
+        $deadline->cancel     if defined $deadline;
+        die $dying            if defined $dying;
+        return $out;
+    }
+
     sub await_sleep {
         my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $ms = $_[$o] // 0;
         @_ = ();
+        if ( $DRIVER && $ms > 0 ) {
+            return _driver_sleep( $DRIVER, $ms );
+        }
         _submit_job( 0, $ms, 0 );
         return _park('await_sleep');
     }
@@ -515,6 +608,9 @@ package Acme::Parataxis v0.1.1 {
         @_ = ();
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
+        if ($DRIVER) {
+            return _driver_wait( $DRIVER, $fh, 'read', $timeout, 'await_read' );
+        }
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
         _submit_job( 2, $handle, $timeout );
         return _park('await_read');
@@ -528,6 +624,9 @@ package Acme::Parataxis v0.1.1 {
         @_ = ();
         my $fileno = fileno($fh);
         die 'Not a valid filehandle' unless defined $fileno;
+        if ($DRIVER) {
+            return _driver_wait( $DRIVER, $fh, 'write', $timeout, 'await_write' );
+        }
         my $handle = $^O eq 'MSWin32' ? win32_get_osfhandle($fileno) : $fileno;
         _submit_job( 3, $handle, $timeout );
         return _park('await_write');
@@ -604,74 +703,94 @@ package Acme::Parataxis v0.1.1 {
         my %PRESET_FIBERS = map { $_ => 1 } _live_fiber_ids();
         my $main_fiber    = __PACKAGE__->new( code => $code );
         _enqueue($main_fiber);
-        while ($IS_RUNNING) {
-            my @ready;
-            if ( get_outstanding_jobs() ) {
-                my $out = [];
-                drain_jobs($out);
-                @ready = @$out;
-            }
-            for my $ready (@ready) {
-                my ( $fid, $res ) = @$ready;
-                my $fiber = __PACKAGE__->by_id($fid);
-                next unless $fiber;
-                _resume_hooks($fiber);
-                my $yield_val = $fiber->call($res);
-                if ( defined $fiber && !$fiber->is_done ) {
-                    _enqueue($fiber) unless defined $yield_val && $yield_val eq 'WAITING';
-                }
-            }
-            if (@SCHEDULER_QUEUE) {
-                my @work = @SCHEDULER_QUEUE;
-                @SCHEDULER_QUEUE  = ();
-                %SCHEDULER_QUEUED = ();
-                for my $current (@work) {
-                    next unless $current;
-                    _resume_hooks($current);
-                    _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
-                }
-            }
-            my $active_count = get_live_fiber_count();
-            if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
+        my $run_ok = eval {
+            while ($IS_RUNNING) {
+                my @ready;
                 if ( get_outstanding_jobs() ) {
-                    usleep(1000);    # Wait for background jobs to finish
+                    my $out = [];
+                    drain_jobs($out);
+                    @ready = @$out;
                 }
-                else {
-                    if ( $active_count > scalar( keys %PRESET_FIBERS ) ) {
-
-                        # A live fiber is stuck with nothing to do and no one to wake it and no timer to fire: this
-                        # run is deadlocked.  Leave the scheduler in a clean, reusable state: stop this run, clear the
-                        # queues, and do NOT treat it as a nested inner run (that path requires an enclosing scheduled
-                        # fiber). Preset (leaked) fibers from a previously deadlocked run are excluded from the count
-                        # above so they cannot make a later healthy run look deadlocked; they stay parked forever in
-                        # the C table but are harmless because the count below only ever triggers on fibers created
-                        # by this run.
-                        $IS_RUNNING       = 0;
-                        @SCHEDULER_QUEUE  = ();
-                        %SCHEDULER_QUEUED = ();
-                        my $rows = _fiber_snapshot();
-                        my @mine = grep { !$PRESET_FIBERS{ $_->{fid} } } @$rows;
-                        my $body = '';
-                        for my $r (@mine) {
-                            $body .= sprintf(
-                                "  fiber #%-3d %-8s %-17s %s\n",
-                                $r->{fid}, $r->{state},
-                                $r->{reason} ? $r->{reason}[0]                               : '-',
-                                $r->{reason} ? sprintf( '%s:%d', @{ $r->{reason} }[ 1, 2 ] ) : '-'
-                            );
-                        }
-                        $body .= "  (no live fibers from this run)\n" unless @mine;
-                        my $leaked = @$rows - @mine;
-                        $body .= "  ($leaked previously leaked fiber(s) from an older deadlocked run, omitted)\n" if $leaked;
-                        die 'FATAL: deadlock detected: no runnable work and no outstanding jobs, but ' .
-                            $active_count .
-                            " live fiber(s). Parked in this run:\n" .
-                            $body;
+                for my $ready (@ready) {
+                    my ( $fid, $res ) = @$ready;
+                    my $fiber = __PACKAGE__->by_id($fid);
+                    next unless $fiber;
+                    _resume_hooks($fiber);
+                    my $yield_val = $fiber->call($res);
+                    if ( defined $fiber && !$fiber->is_done ) {
+                        _enqueue($fiber) unless defined $yield_val && $yield_val eq 'WAITING';
                     }
-                    $IS_RUNNING = 0 if defined $main_fiber && $main_fiber->is_done;
+                }
+                if (@SCHEDULER_QUEUE) {
+                    my @work = @SCHEDULER_QUEUE;
+                    @SCHEDULER_QUEUE  = ();
+                    %SCHEDULER_QUEUED = ();
+                    for my $current (@work) {
+                        next unless $current;
+                        _resume_hooks($current);
+                        _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
+                    }
+                }
+                my $active_count = get_live_fiber_count();
+                if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
+                    if ( get_outstanding_jobs() ) {
+                        $DRIVER->poll_ready() if $DRIVER;    # fire any already-live driver events, best effort
+                        usleep(1000);                        # Wait for background jobs to finish
+                    }
+                    elsif ( $DRIVER && $DRIVER->pending ) {
+
+                        # Every fiber is parked and the attached event loop still has live watches/timers: hand the
+                        # processor to the loop. Its readiness callbacks only ever enqueue fibers (_scheduler_enqueue_by_id),
+                        # never run them, so no re-entrancy into the scheduler is possible; the outer loop runs them back
+                        # on the next iteration.
+                        $DRIVER->drive();
+                    }
+                    else {
+                        if ( $active_count > scalar( keys %PRESET_FIBERS ) ) {
+
+                            # A live fiber is stuck with nothing to do and no one to wake it and no timer to fire: this
+                            # run is deadlocked.  Leave the scheduler in a clean, reusable state: stop this run, clear the
+                            # queues, and do NOT treat it as a nested inner run (that path requires an enclosing scheduled
+                            # fiber). Preset (leaked) fibers from a previously deadlocked run are excluded from the count
+                            # above so they cannot make a later healthy run look deadlocked; they stay parked forever in
+                            # the C table but are harmless because the count below only ever triggers on fibers created
+                            # by this run.
+                            $IS_RUNNING       = 0;
+                            @SCHEDULER_QUEUE  = ();
+                            %SCHEDULER_QUEUED = ();
+                            my $rows = _fiber_snapshot();
+                            my @mine = grep { !$PRESET_FIBERS{ $_->{fid} } } @$rows;
+                            my $body = '';
+                            for my $r (@mine) {
+                                $body .= sprintf(
+                                    "  fiber #%-3d %-8s %-17s %s\n",
+                                    $r->{fid}, $r->{state},
+                                    $r->{reason} ? $r->{reason}[0]                               : '-',
+                                    $r->{reason} ? sprintf( '%s:%d', @{ $r->{reason} }[ 1, 2 ] ) : '-'
+                                );
+                            }
+                            $body .= "  (no live fibers from this run)\n" unless @mine;
+                            my $leaked = @$rows - @mine;
+                            $body .= "  ($leaked previously leaked fiber(s) from an older deadlocked run, omitted)\n" if $leaked;
+                            die 'FATAL: deadlock detected: no runnable work and no outstanding jobs, but ' .
+                                $active_count .
+                                " live fiber(s). Parked in this run:\n" .
+                                $body;
+                        }
+                        $IS_RUNNING = 0 if defined $main_fiber && $main_fiber->is_done;
+                    }
                 }
             }
-        }
+
+            # Explicit success marker. Without it the eval yields the while loop's own last expression, which is
+            # perfectly capable of being false on a *clean* exit; that made $run_failure a defined-but-empty string
+            # and turned every normal run into die '' ("Died at ...").
+            1;
+        };
+        my $run_failure = $run_ok ? undef : $@;
+        $IS_RUNNING = 0;                             # always leave the scheduler reusable, even when a fiber blew up
+        $DRIVER->reset   if $DRIVER;                 # unwind every watch/timer this run left on the attached loop
+        die $run_failure if defined $run_failure;    # rethrow a fiber's uncaught error only after cleaning up
         return $main_fiber->[F_RESULT];
     }
     sub stop () { $IS_RUNNING = 0 }

@@ -1,0 +1,101 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Driver::IOAsync - Drive Parataxis from an IO::Async::Loop
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[await_read await_sleep];
+    use Acme::Parataxis::Driver::IOAsync;
+    use IO::Async::Loop;
+
+    Acme::Parataxis->attach_loop( IO::Async::Loop->new );    # wrapped by Driver::wrap
+
+    Acme::Parataxis::run(
+        sub {
+            my $peer = fiber { await_sleep(30); syswrite $socket, 'ping' };
+            await_read( $socket, 2000 );
+        }
+    );
+    Acme::Parataxis->detach_loop;
+
+    # Or directly:
+    my $driver = Acme::Parataxis::Driver::IOAsync->new( loop => IO::Async::Loop->new );
+
+=head1 DESCRIPTION
+
+The L<IO::Async::Loop|IO::Async::Loop> reference driver. Attaching it means C<await_read>, C<await_write> and
+C<await_sleep> are serviced by IO::Async's loop instead of by an OS worker thread blocked in C<select()>.
+
+IO::Async permits only one C<watch_io> stanza per filehandle, but a read and a write interest may be registered as two
+separate C<watch_io()> calls from IO::Async 0.805 onward. Because the base class keeps a single watch slot per
+filehandle, the driver reports B<both> directions on C<unwatch()>; IO::Async tolerates cancelling a direction that was
+never requested, so one call always tears the handle down cleanly.
+
+The readiness callbacks arrive as C<($loop, $handle)>; the driver's stored callback is invoked with no arguments
+required, and it only enqueues the waiting fiber - it never runs scheduler work from inside the loop.
+
+C<timer()> and C<cancel_timer()> are backed by C<watch_time()>/C<unwatch_time()>, and C<loop_once()> backs both
+C<drive()> and C<poll_ready()>.
+
+=head1 CONSTRUCTOR
+
+=head2 C<new( loop =E<gt> $loop )>
+
+C<$loop> must be a blessed L<IO::Async::Loop|IO::Async::Loop> (on Windows that is usually C<IO::Async::Loop::Select>).
+Croaks otherwise.
+
+=head1 METHODS
+
+=head2 C<watch_read( $fh, $cb )>, C<watch_write( $fh, $cb )>
+
+Register C<< $cb->() >> for readability/writability on C<$fh> via C<watch_io>, sharing one watch slot per filehandle.
+Croaks when the handle is already closed (no fileno).
+
+=head2 C<unwatch( $fh )>
+
+Drop both directional callbacks for C<$fh>, untrack it, and cancel the IO::Async watch with both C<on_read_ready> and
+C<on_write_ready>. Returns false when nothing was being watched.
+
+=head2 C<timer( $ms, $cb )>
+
+Arm a loop timer for C<$ms> milliseconds (IO::Async counts in seconds, so the delay is divided by 1000) and return its
+opaque id. The id is untracked before the callback runs, so a fired timer is no longer cancellable. Croaks on a missing
+or non-positive delay.
+
+=head2 C<cancel_timer( $id )>
+
+Cancel a still-pending loop timer and return true; returns false when the id is unknown or the timer already fired.
+
+=head2 C<drive()>
+
+Calls C<< $loop->loop_once(undef) >>, which blocks in C<select()> until an event happens - either I/O readiness or the
+earliest due timer - then returns true. This is what C<run()> calls when every fiber is parked and this driver still
+has something pending.
+
+=head2 C<poll_ready()>
+
+Calls C<< $loop->loop_once(0) >>: a non-blocking readiness pass that still fires any already-due timers, then returns
+true.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis::Driver|Acme::Parataxis::Driver>, L<Acme::Parataxis::Driver::Mojo|Acme::Parataxis::Driver::Mojo>,
+L<Acme::Parataxis|Acme::Parataxis>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

@@ -1,0 +1,149 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Driver - Base class for the event loops that drive Parataxis
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[await_read await_sleep];
+    use Mojo::IOLoop;
+
+    # Pick a loop; wrap() decides which reference driver to build.
+    Acme::Parataxis->attach_loop( Mojo::IOLoop->new );
+    Acme::Parataxis::run( sub { await_read( $fh, 2000 ) } );
+    Acme::Parataxis->detach_loop;    # unwinds every watch and timer
+
+    # Writing your own driver: subclass and implement the seven methods below.
+    package My::Loop::Driver {
+        use feature 'class';
+        class My::Loop::Driver : isa(Acme::Parataxis::Driver) {
+            method watch_read  ($fh, $cb) { ... }
+            method watch_write ($fh, $cb) { ... }
+            method unwatch     ($fh)      { ... }
+            method timer       ($ms, $cb) { ... }
+            method cancel_timer($id)      { ... }
+            method drive       ()         { ... }
+            method poll_ready  ()         { ... }
+        }
+    };
+
+=head1 DESCRIPTION
+
+A driver is the adapter between Parataxis and an existing CPAN event loop. When a loop is attached with
+L<Acme::Parataxis-E<gt>attach_loop|Acme::Parataxis>, C<await_read>, C<await_write> and C<await_sleep> stop submitting a
+job to the OS worker pool per filehandle or sleep and instead register watches and timers on that loop. The benefit is
+readiness driven by C<epoll>/C<kqueue>/C<select> rather than a thread blocked in C<select()>, which caps at
+C<FD_SETSIZE> (1024) and burns a whole thread per watched socket.
+
+The division of labour is deliberately narrow:
+
+=over
+
+=item * The B<driver> only tells the loop which filehandles to watch and which timers to arm, and hands control to
+the loop when every fiber is parked.
+
+=item * The B<scheduler> keeps its own park/wake machinery unchanged. A loop callback only ever B<enqueues> a fiber
+(C<_scheduler_enqueue_by_id>); it never runs one, so the scheduler can never be re-entered from inside the loop.
+
+=item * The B<loop> never runs Parataxis callbacks and Parataxis never runs loop callbacks in the other direction
+either - the two cooperate through the readiness callbacks alone.
+
+=back
+
+The public contract of the C<await_*> family does not change when a driver is attached: readiness reports the same
+values the worker-pool path reports, a driver deadline still resumes C<-1>, and an enclosing C<with_timeout> or
+C<nursery> still throws. Only the backing mechanism differs.
+
+Two reference drivers ship with the distribution: L<Acme::Parataxis::Driver::Mojo|Acme::Parataxis::Driver::Mojo>
+(C<Mojo::IOLoop>) and L<Acme::Parataxis::Driver::IOAsync|Acme::Parataxis::Driver::IOAsync> (C<IO::Async::Loop>).
+
+=head1 METHODS
+
+=head2 C<pending()>
+
+Returns how many watches and timers this driver still holds (the sum of C<watch_count> and C<timer_count>). The
+scheduler's idle branch only hands control to the loop while this is true; with nothing pending a run would block
+forever inside the loop instead of reaching the deadlock detector.
+
+=head2 C<reset()>
+
+Unwinds every watch and timer the driver registered and returns true. C<run()> calls this when a run ends and
+L<Acme::Parataxis-E<gt>detach_loop|Acme::Parataxis> calls it before dropping the driver, so a stale listener socket or
+deadline timer left behind by an exited run can never leave the next run blocked inside the loop.
+
+=head2 C<has_watch($fh)>
+
+True when C<$fh> already has a live watch slot. Both directions share one slot per filehandle, because every loop in
+support offers one registration point per descriptor.
+
+=head2 C<watch_count()>
+
+How many filehandles are currently watched.
+
+=head2 C<timer_count()>
+
+How many timers are currently armed.
+
+=head1 REQUIRED SUBCLASS INTERFACE
+
+A subclass supplies the loop-specific half; the base class owns the bookkeeping (which watches and timers are still
+live) that C<pending> and C<reset> rely on. Call the C<_track_*> / C<_untrack_*> helpers whenever you (de)register with
+the underlying loop.
+
+=over
+
+=item * C<watch_read( $fh, $cb )> - call C<< $cb->() >> when C<$fh> becomes readable. Croaks on a closed handle.
+
+=item * C<watch_write( $fh, $cb )> - call C<< $cb->() >> when C<$fh> becomes writable. Croaks on a closed handle.
+
+=item * C<unwatch( $fh )> - stop watching C<$fh> in both directions; returns false when nothing was watched.
+
+=item * C<timer( $ms, $cb )> - call C<< $cb->() >> after C<$ms> milliseconds and return an opaque id. Croaks on a
+non-positive delay.
+
+=item * C<cancel_timer( $id )> - cancel a pending timer; returns false when the id is unknown or the timer already
+fired.
+
+=item * C<drive()> - run the loop until at least one event fires. This may block.
+
+=item * C<poll_ready()> - run the loop's readiness pass without blocking (best effort).
+
+=back
+
+=head1 FUNCTIONS
+
+=head2 C<Acme::Parataxis::Driver::wrap( $loop )>
+
+Wraps an event-loop object in the right reference driver, returning a
+L<Acme::Parataxis::Driver|Acme::Parataxis::Driver>. L<Acme::Parataxis-E<gt>attach_loop|Acme::Parataxis> routes
+everything through here, so callers may hand in a C<Mojo::IOLoop>, a C<Mojo::Reactor> or an C<IO::Async::Loop> and get
+the matching driver for free. An object that already B<is> a driver is passed through unchanged.
+
+Dispatch is by class: anything in the C<Mojo::> namespace (or inheriting from C<Mojo::IOLoop> or C<Mojo::Reactor>)
+becomes L<Acme::Parataxis::Driver::Mojo|Acme::Parataxis::Driver::Mojo>; anything in the C<IO::Async::> namespace
+becomes L<Acme::Parataxis::Driver::IOAsync|Acme::Parataxis::Driver::IOAsync>.
+
+Croaks when called without a blessed object, and when the object's class is not one it knows how to drive.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis|Acme::Parataxis> (C<attach_loop>, C<detach_loop>, C<loop>),
+L<Acme::Parataxis::Driver::Mojo|Acme::Parataxis::Driver::Mojo>,
+L<Acme::Parataxis::Driver::IOAsync|Acme::Parataxis::Driver::IOAsync>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

@@ -82,6 +82,18 @@
          "file" : "lib/Acme/Parataxis/Channel.pm",
          "version" : "v0.1.1"
       },
+      "Acme::Parataxis::Driver" : {
+         "file" : "lib/Acme/Parataxis/Driver.pm",
+         "version" : "v0.1.1"
+      },
+      "Acme::Parataxis::Driver::IOAsync" : {
+         "file" : "lib/Acme/Parataxis/Driver/IOAsync.pm",
+         "version" : "v0.1.1"
+      },
+      "Acme::Parataxis::Driver::Mojo" : {
+         "file" : "lib/Acme/Parataxis/Driver/Mojo.pm",
+         "version" : "v0.1.1"
+      },
       "Acme::Parataxis::Error" : {
          "file" : "lib/Acme/Parataxis/Error.pm",
          "version" : "v0.1.1"

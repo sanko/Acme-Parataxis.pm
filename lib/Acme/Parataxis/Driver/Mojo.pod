@@ -1,0 +1,104 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Driver::Mojo - Drive Parataxis from a Mojo::IOLoop or Mojo::Reactor
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[await_read await_sleep];
+    use Acme::Parataxis::Driver::Mojo;
+    use Mojo::IOLoop;
+
+    my $loop = Mojo::IOLoop->new;
+    Acme::Parataxis->attach_loop($loop);    # wrapped for you by Driver::wrap
+
+    Acme::Parataxis::run(
+        sub {
+            my $peer = fiber { await_sleep(30); syswrite $socket, 'ping' };
+            await_read( $socket, 2000 );
+        }
+    );
+    Acme::Parataxis->detach_loop;
+
+    # Or build one directly from a reactor (a worker's own mini-loop works too):
+    my $driver = Acme::Parataxis::Driver::Mojo->new( loop => $Mojo::Reactor::CURRENT );
+
+=head1 DESCRIPTION
+
+The L<Mojo::IOLoop|Mojo::IOLoop> reference driver. Attaching it means C<await_read>, C<await_write> and C<await_sleep>
+are serviced by Mojo's reactor instead of by an OS worker thread blocked in C<select()>.
+
+The loop and Parataxis cooperate without ever running each other's callbacks: Mojo only collects file-descriptor
+events, and the readiness callback it invokes only tells the scheduler which fiber to enqueue (never to run). The
+scheduler hands control back to the reactor whenever every fiber is parked and this driver still has live watches or
+timers (see C<pending> in L<Acme::Parataxis::Driver|Acme::Parataxis::Driver>).
+
+Mojo's reactor allows exactly B<one> C<io()> watcher per filehandle, with directional interest expressed separately
+through C<watch($fh, $read, $write)>. The driver therefore installs the C<io()> callback once per filehandle and flips
+the desired direction mask on every registration, so a read and a write watch on the same descriptor share a single
+reactor slot. The handle is switched to non-blocking when it is first watched.
+
+=head1 CONSTRUCTOR
+
+=head2 C<new( loop =E<gt> $loop )>
+
+C<$loop> may be a C<Mojo::IOLoop> or anything exposing the reactor API (C<io>, C<watch>, C<remove>, C<timer>,
+C<one_tick>) - a bare C<Mojo::Reactor> works too, so a worker's own mini-loop can be driven by Parataxis. When an
+C<Mojo::IOLoop> is given, its C<reactor> is used underneath.
+
+Croaks unless the argument is a blessed object that ultimately provides a C<one_tick()> method.
+
+=head1 METHODS
+
+=head2 C<watch_read( $fh, $cb )>, C<watch_write( $fh, $fh, $cb )>
+
+Register C<< $cb->() >> for readability/writability on C<$fh>, sharing one reactor slot per filehandle. Croaks when the
+handle is already closed (no fileno).
+
+=head2 C<unwatch( $fh )>
+
+Drop both directional callbacks for C<$fh>, untrack it and remove it from the reactor. Returns false when nothing was
+being watched.
+
+=head2 C<timer( $ms, $cb )>
+
+Arm a reactor timer for C<$ms> milliseconds (Mojo itself counts in seconds, so the delay is divided by 1000) and return
+its opaque id. The id is untracked before the callback runs, so a fired timer is no longer cancellable. Croaks on a
+missing or non-positive delay.
+
+=head2 C<cancel_timer( $id )>
+
+Cancel a still-pending reactor timer and return true; returns false when the id is unknown or the timer already fired.
+
+=head2 C<drive()>
+
+Runs exactly one reactor tick (C<one_tick>), blocking until at least one event fires, then returns true. This is what
+C<run()> calls when every fiber is parked and this driver still has something pending.
+
+=head2 C<poll_ready()>
+
+Also runs one reactor tick. Best effort: Mojo's C<one_tick> advances one loop iteration and does not promise to return
+without blocking, so this is a "make progress if the reactor has anything" pass rather than a strictly non-blocking
+poll.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis::Driver|Acme::Parataxis::Driver>,
+L<Acme::Parataxis::Driver::IOAsync|Acme::Parataxis::Driver::IOAsync>, L<Acme::Parataxis|Acme::Parataxis>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

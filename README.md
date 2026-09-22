@@ -371,7 +371,7 @@ is in effect.
 
 While a loop is attached, `run` hands the processor to the loop whenever every fiber is parked; the loop's callbacks
 only enqueue fibers, never run them, so the scheduler cannot be re-entered. The public contract of the `await_*`
-family is unchanged — readiness still reports the pool path's values, a timeout still resumes `-1`, and an enclosing
+family is unchanged - readiness still reports the pool path's values, a timeout still resumes `-1`, and an enclosing
 `with_timeout`/`nursery` still throws. Keep a driver session short: attach, run, detach.
 
 ```perl

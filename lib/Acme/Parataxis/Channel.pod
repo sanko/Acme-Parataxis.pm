@@ -113,12 +113,12 @@ it returns C<0> without parking the current fiber.
     );
 
 Called as a class method (not on a channel instance). Selects the first ready case, operating on the channel as if the
-matching C<get> or C<put> had been called, and returns C<( $channel, $value )> — the channel that fired and, for a
+matching C<get> or C<put> had been called, and returns C<( $channel, $value )> - the channel that fired and, for a
 C<get> case, the value read from it (C<put> cases return the value they wrote).
 
 Each case is an array reference C<[ $channel, op, $value? ]>; C<op> is C<get> or C<put>, and C<put> cases require the
 value argument. More than one case may be given, and cases are tried in random order so a single ready case cannot be
-starved. An optional C<timeout> (non-negative milliseconds) bounds the wait — when it fires before any case is ready,
+starved. An optional C<timeout> (non-negative milliseconds) bounds the wait - when it fires before any case is ready,
 select returns C<( undef, undef )> and an optional C<default> is a code reference run (and returned as the value) when
 no case is ready and nothing is pending, without ever blocking. Giving at least one case is required, as is calling
 select from inside a scheduled fiber (C<async { ... }> or the run block).
@@ -132,8 +132,8 @@ does select register on every involved channel and park until the first wake.
 
     my $n = $ch->select_waiters;
 
-Returns how many fibers are currently parked in C<select( )> on this channel, split by nothing — just the scalar
-count. Introspection helper; primarily useful in tests.
+Returns how many fibers are currently parked in C<select( )> on this channel, split by nothing - just the scalar count.
+Introspection helper; primarily useful in tests.
 
 =head1 AUTHOR
 
