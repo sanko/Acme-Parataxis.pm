@@ -536,12 +536,18 @@ static long long preempt_count = 0;
 
 /** @brief Maximum worker threads allowed in the pool */
 #define MAX_THREADS 64
+/** @brief Floor for the default pool size. The pool seeds 2 workers and only grows when jobs pile up, so a machine
+ *  reporting 1-2 cores would pin it at the seed and a freshly submitted job could never get its own worker until an
+ *  unrelated long sleep ended. Sleeping workers are blocked rather than computing, so a small floor costs nothing. */
+#define MIN_THREAD_POOL 8
 /** @brief Native OS handles for pool threads */
 static para_thread_t thread_handles[MAX_THREADS];
 /** @brief Maximum allowed threads in the pool */
 static int max_thread_pool_size = 0;
 /** @brief Number of currently running worker threads */
 static int current_thread_count = 0;
+/** @brief Workers currently executing a job (guarded by queue_lock); idle = current_thread_count - busy_thread_count. */
+static int busy_thread_count = 0;
 /** @brief Flag to signal worker threads to terminate */
 static volatile int threads_keep_running = 1;
 
@@ -622,6 +628,8 @@ void * worker_thread(void * arg) {
                 break;
             PARA_COND_WAIT(queue_cond, queue_lock);
         }
+        if (found_idx != -1)
+            busy_thread_count++;    /* busy from claim until the job is marked done, all under queue_lock */
         UNLOCK(queue_lock);
 
         if (found_idx != -1 && threads_keep_running) {
@@ -711,11 +719,17 @@ void * worker_thread(void * arg) {
 
             LOCK(queue_lock);
             job->status = JOB_DONE;
+            busy_thread_count--;
             done_queue[done_tail] = found_idx;
             done_tail = (done_tail + 1) % (MAX_JOBS + 1);
             UNLOCK(queue_lock);
         }
         else {
+            if (found_idx != -1) { /* claimed, but shutting down before it ran: keep the busy count honest */
+                LOCK(queue_lock);
+                busy_thread_count--;
+                UNLOCK(queue_lock);
+            }
 #ifdef _WIN32
             Sleep(1);
 #else
@@ -747,6 +761,8 @@ DLLEXPORT void init_threads() {
 
     if (max_thread_pool_size == 0) {
         max_thread_pool_size = get_cpu_count();
+        if (max_thread_pool_size < MIN_THREAD_POOL)
+            max_thread_pool_size = MIN_THREAD_POOL;
         if (max_thread_pool_size > MAX_THREADS)
             max_thread_pool_size = MAX_THREADS;
     }
@@ -771,14 +787,6 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
     int idx = -1;
     LOCK(queue_lock);
 
-    /* Dynamic Scaling: If we have pending jobs and space in the pool, grow! */
-    int pending_count = 0;
-    for (int i = 0; i < MAX_JOBS; i++)
-        if (job_slots[i].status == JOB_NEW)
-            pending_count++;
-    if (pending_count > 0 && current_thread_count < max_thread_pool_size)
-        _spawn_workers(1); /* Grow by 1 on demand */
-
     for (int i = 0; i < MAX_JOBS; i++) {
         if (job_slots[i].status == JOB_FREE) {
             idx = i;
@@ -795,6 +803,21 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
             job_refcount[current_fiber_id]++;
+
+        /* Dynamic scaling: spawn exactly the deficit (pending - idle), bounded by the configured pool size. This
+         * must run AFTER the job is inserted: the previous check counted only jobs that were already pending, so a
+         * lone submission against a pool whose every worker sat in a long TASK_SLEEP saw pending == 0, spawned
+         * nothing, and queued behind sleeps lasting hundreds of milliseconds. A 10 ms await_sleep submitted while
+         * both seeded workers held a 400 ms and a 600 ms sleep woke at 400 ms instead of 10 ms. Pending work with
+         * no idle worker to claim it is exactly the case that needs a worker, so now that is what is measured. */
+        int pending_count = 0;
+        for (int i = 0; i < MAX_JOBS; i++)
+            if (job_slots[i].status == JOB_NEW)
+                pending_count++;
+        int idle_count = current_thread_count - busy_thread_count;
+        if (pending_count > idle_count)
+            _spawn_workers(pending_count - idle_count); /* stops at max_thread_pool_size / MAX_THREADS */
+
         /* Broadcast (not signal): a single wakeup may be swallowed by a worker parked in its timed sleep wait
          * (which only re-checks its absolute deadline and continues), leaving idle workers with no wakeup and
          * JOB_NEW entries unclaimed until some long sleep ends. */
@@ -1538,6 +1561,8 @@ DLLEXPORT int init_system() {
     }
     if (max_thread_pool_size == 0) {
         max_thread_pool_size = get_cpu_count();
+        if (max_thread_pool_size < MIN_THREAD_POOL)
+            max_thread_pool_size = MIN_THREAD_POOL;
         if (max_thread_pool_size > MAX_THREADS)
             max_thread_pool_size = MAX_THREADS;
     }
