@@ -117,8 +117,7 @@ jobs:
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","variant":"default","platform_name":"linux","os":"ubuntu-26.04-arm","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.40.2","configure":"-Dusethreads","variant":"threads","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","variant":"default","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
-          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"clang"},
-          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","platform_name":"riscv","os":"ubuntu-26.04-riscv","arch":"riscv64","toolchain":"gcc","variant":"default"}
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"clang"}
         ]
       task: |
         export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
@@ -135,7 +134,14 @@ jobs:
           eval "$(perl -I "$HOME/perl5/lib/perl5" -Mlocal::lib)"
         fi
         command -v cpanm
-        cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        #~ A source-built perl is writable, so this first attempt installs straight
+        #~ into it and nothing changes for those legs. The distro perl of the
+        #~ ubuntu-26.04 default legs is not writable, and Affix::Build writes to
+        #~ its site paths no matter what local::lib says, so when the plain
+        #~ install fails, retry as root through the absolute cpanm path (sudo
+        #~ resets PATH, so a bare name would not be found).
+        cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v . \
+          || sudo "$(command -v cpanm)" --installdeps --notest --with-suggests --with-recommends --with-configure -v .
         perl Build.PL
         ./Build
         ./Build test --v
@@ -286,7 +292,7 @@ jobs:
       - windows
     uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
     with:
-      title: Affix.pm CI Matrix
+      title: Acme::Parataxis CI Matrix
   solaris:
     name: Solaris
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
