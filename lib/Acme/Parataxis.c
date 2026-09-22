@@ -102,6 +102,13 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <errno.h>
 #ifndef USE_ASM_CORO
 #include <ucontext.h>
+#elif defined(__linux__) || defined(__NetBSD__)
+/* The crash reporter reads ucontext register state on the asm path too. OpenBSD
+ * ships no ucontext header at all (its ucontext_t is struct sigcontext, which
+ * <signal.h> above already provides), and every other asm platform reports
+ * zeros for those registers while still getting si_addr, so only these two
+ * widen the include. */
+#include <ucontext.h>
 #endif
 #include <unistd.h>
 #include <sys/mman.h>
@@ -2227,6 +2234,161 @@ static struct sigaction prev_sigsegv_act;
 static char * guard_alt_stack;
 /** @brief Thread that owns the fiber scheduler (main thread). */
 static pthread_t guard_owner_thread;
+/** @brief Reentrancy guard: a fault raised while reporting must not recurse. */
+static volatile sig_atomic_t crash_reporting = 0;
+
+#if defined(__linux__) || defined(__NetBSD__) || defined(__OpenBSD__)
+/* Register accessors for the crash reporter, restricted to platforms whose
+ * headers were actually read. glibc hides its REG_* names behind __USE_GNU
+ * (deliberately unset here) but the x86_64 gregset order is frozen:
+ * REG_RBP=10, REG_RSP=15, REG_RIP=16. NetBSD keeps them in __gregs behind the
+ * _REG_* enum. On OpenBSD ucontext_t IS struct sigcontext. Everything else
+ * reports zeros here and still gets si_addr, which for SIGILL is the faulting
+ * instruction itself, so the illegal-instruction flakes stay diagnosable
+ * everywhere. */
+#if defined(__linux__)
+typedef ucontext_t para_uc_t;
+#define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.gregs[16]))
+#define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.gregs[15]))
+#define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.gregs[10]))
+#elif defined(__NetBSD__)
+typedef ucontext_t para_uc_t;
+#define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RIP]))
+#define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RSP]))
+#define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RBP]))
+#else /* __OpenBSD__ */
+typedef struct sigcontext para_uc_t;
+#define PARA_REG_PC(u) ((unsigned long long)((u)->sc_rip))
+#define PARA_REG_SP(u) ((unsigned long long)((u)->sc_rsp))
+#define PARA_REG_FP(u) ((unsigned long long)((u)->sc_rbp))
+#endif
+#else /* no verified register layout: report zeros, rely on si_addr */
+typedef void para_uc_t;
+#define PARA_REG_PC(u) (0ULL)
+#define PARA_REG_SP(u) (0ULL)
+#define PARA_REG_FP(u) (0ULL)
+#endif
+
+/** @brief Append a literal string into a fixed buffer (signal-safe). */
+static void para_crash_str(char * b, size_t cap, size_t * n, const char * s) {
+    while (*s && *n + 1 < cap)
+        b[(*n)++] = *s++;
+    b[*n] = '\0';
+}
+
+/** @brief Append an unsigned value as hex (signal-safe). */
+static void para_crash_hex(char * b, size_t cap, size_t * n, unsigned long long v) {
+    char tmp[20];
+    int i = 0;
+    para_crash_str(b, cap, n, "0x");
+    if (!v)
+        tmp[i++] = '0';
+    while (v) {
+        int d = (int)(v & 15);
+        tmp[i++] = (char)(d < 10 ? '0' + d : 'a' + (d - 10));
+        v >>= 4;
+    }
+    while (i > 0 && *n + 1 < cap)
+        b[(*n)++] = tmp[--i];
+    b[*n] = '\0';
+}
+
+/** @brief Append a signed decimal (signal-safe). */
+static void para_crash_dec(char * b, size_t cap, size_t * n, long v) {
+    char tmp[24];
+    int i = 0;
+    unsigned long u = v < 0 ? (unsigned long)(-(v + 1)) + 1 : (unsigned long)v;
+    if (!u)
+        tmp[i++] = '0';
+    while (u) {
+        tmp[i++] = (char)('0' + (u % 10));
+        u /= 10;
+    }
+    if (v < 0 && *n + 1 < cap)
+        b[(*n)++] = '-';
+    while (i > 0 && *n + 1 < cap)
+        b[(*n)++] = tmp[--i];
+    b[*n] = '\0';
+}
+
+/**
+ * @brief Async-signal-safe crash report for SIGSEGV, SIGILL and SIGBUS.
+ *
+ * Runs on the alternate signal stack. Prints the signal, the fault address
+ * (for SIGILL that is the illegal instruction itself), the instruction, stack
+ * and frame pointers where the platform's headers are known, the assembly
+ * switch landmarks so a reader can tell whether the trampoline's ud2 was
+ * reached, the current fiber id, and a raw word dump of the crash stack for
+ * offline return-address recovery. Only write(2) and stack buffers are used:
+ * printf and malloc are not signal safe.
+ *
+ * @param sig Signal number.
+ * @param si  Fault info (si_addr carries the faulting address).
+ * @param ucp Saved context, cast to the platform's register container.
+ */
+static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
+    if (crash_reporting)
+        return;
+    crash_reporting = 1;
+    char buf[768];
+    size_t n = 0;
+    const char * nm = sig == SIGSEGV ? "SIGSEGV" : sig == SIGILL ? "SIGILL" : sig == SIGBUS ? "SIGBUS" : "signal?";
+    para_uc_t * u = (para_uc_t *)ucp;
+    unsigned long long pc = u ? PARA_REG_PC(u) : 0;
+    unsigned long long sp = u ? PARA_REG_SP(u) : 0;
+    unsigned long long fp = u ? PARA_REG_FP(u) : 0;
+
+    para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: ");
+    para_crash_str(buf, sizeof buf, &n, nm);
+    para_crash_str(buf, sizeof buf, &n, " si_addr ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)(si ? si->si_addr : NULL));
+    para_crash_str(buf, sizeof buf, &n, " fiber ");
+    para_crash_dec(buf, sizeof buf, &n, current_fiber_id);
+    para_crash_str(buf, sizeof buf, &n, "\nParataxis: crash: rip ");
+    para_crash_hex(buf, sizeof buf, &n, pc);
+    para_crash_str(buf, sizeof buf, &n, " rsp ");
+    para_crash_hex(buf, sizeof buf, &n, sp);
+    para_crash_str(buf, sizeof buf, &n, " rbp ");
+    para_crash_hex(buf, sizeof buf, &n, fp);
+    para_crash_str(buf, sizeof buf, &n, "\n");
+#ifdef USE_ASM_CORO
+    para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: landmarks trampoline ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_trampoline);
+    para_crash_str(buf, sizeof buf, &n, " coro_switch ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_coro_switch);
+    para_crash_str(buf, sizeof buf, &n, " entry_point ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_entry_point);
+    para_crash_str(buf, sizeof buf, &n, "\n");
+#endif
+    if (sp && (sp & 7) == 0) {
+        unsigned long long * w = (unsigned long long *)sp;
+        int i;
+        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words:");
+        for (i = 0; i < 16 && n + 20 < sizeof buf; i++) {
+            para_crash_str(buf, sizeof buf, &n, " ");
+            para_crash_hex(buf, sizeof buf, &n, w[i]);
+        }
+        para_crash_str(buf, sizeof buf, &n, "\n");
+    }
+    write(2, buf, n);
+}
+
+/**
+ * @brief SIGILL/SIGBUS handler: report, then restore the default disposition.
+ *
+ * Returning re-executes the faulting instruction, so the process still dies
+ * with the original wait status and dumps a core.
+ *
+ * @param sig Signal number.
+ * @param si  Fault info.
+ * @param uc  Saved context.
+ */
+static void crash_report_handler(int sig, siginfo_t * si, void * uc) {
+    para_crash_report(sig, si, uc);
+    signal(sig, SIG_DFL);
+    raise(sig); /* default action now: die with the original wait status and
+                 * a core, whether the fault re-executes or not */
+}
 
 /**
  * @brief SIGSEGV handler: reports a genuine fiber C-stack overflow.
@@ -2236,7 +2398,7 @@ static pthread_t guard_owner_thread;
  * (with a core if enabled). Any other fault is forwarded to the previously installed handler.
  */
 static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
-    (void)sig;
+    para_crash_report(sig, si, uc);
     para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < fiber_capacity) ? fibers[current_fiber_id] : NULL;
     if (!pthread_equal(pthread_self(), guard_owner_thread) || current_fiber_id < 0 || current_fiber_id >= fiber_capacity ||
         !fibers[current_fiber_id]) {
@@ -2290,6 +2452,11 @@ static void install_stack_guard(void) {
     act.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&act.sa_mask);
     sigaction(SIGSEGV, &act, &prev_sigsegv_act);
+    /* SIGILL and SIGBUS get the plain reporter: the trampoline's ud2 and any
+     * teardown-phase illegal instruction we are otherwise blind to. */
+    act.sa_sigaction = crash_report_handler;
+    sigaction(SIGILL, &act, NULL);
+    sigaction(SIGBUS, &act, NULL);
 }
 #endif /* !_WIN32 */
 
