@@ -131,8 +131,21 @@ static void install_stack_guard(void);
 
 typedef struct para_fiber_t para_fiber_t;
 
+/*
+ * These three symbols are wired together by hand (the asm trampoline, the stack layout in arm_fiber_context) and are
+ * never referenced outside this translation unit, so keep them non-preemptible. A shared object whose text holds an
+ * absolute reference to a default-visibility global has to process that relocation at load time, and link editors
+ * that refuse relocations against non-writable sections (Solaris and OmniOS ld: "relocations remain against
+ * allocatable but non-writable sections") reject the object outright. Hidden symbols resolve at link time instead.
+ */
+#if defined(__GNUC__) && !defined(_WIN32)
+#define PARA_HIDDEN __attribute__((visibility("hidden")))
+#else
+#define PARA_HIDDEN
+#endif
+
 /* C-level entry point invoked when a freshly created fiber starts running. */
-void para_entry_point(para_fiber_t * c);
+PARA_HIDDEN void para_entry_point(para_fiber_t * c);
 
 #if defined(USE_ASM_CORO)
 /**
@@ -145,14 +158,15 @@ void para_entry_point(para_fiber_t * c);
  * @param from Pointer to the storage slot holding the current stack pointer.
  * @param to   Pointer to the storage slot holding the target stack pointer.
  */
-extern void para_coro_switch(void ** from, void ** to);
+PARA_HIDDEN extern void para_coro_switch(void ** from, void ** to);
 /** @brief Initial jump target for brand-new fiber stacks. */
-extern void para_trampoline(void);
+PARA_HIDDEN extern void para_trampoline(void);
 
 __asm__(
     ".text\n"
     ".p2align 4\n"
     ".globl para_coro_switch\n"
+    ".hidden para_coro_switch\n"
     ".type para_coro_switch, @function\n"
     "para_coro_switch:\n"
     "    pushq %rbx\n"
@@ -173,6 +187,7 @@ __asm__(
     ".size para_coro_switch, .-para_coro_switch\n"
     ".p2align 4\n"
     ".globl para_trampoline\n"
+    ".hidden para_trampoline\n"
     ".type para_trampoline, @function\n"
     "para_trampoline:\n"
     "    popq %rdi\n"
