@@ -385,16 +385,31 @@ typedef struct {
 
 // Global Registry and State
 
-/** @brief Maximum number of concurrent fibers allowed */
-#define MAX_FIBERS 1024
-/** @brief Array of active fiber structures */
-static para_fiber_t * fibers[MAX_FIBERS];
-/** @brief LIFO of free fiber slot indexes (O(1) allocation) */
-static int free_slots[MAX_FIBERS];
+/** @brief Size of the fiber table when it is first allocated: big enough that an ordinary program never has to
+ *  reallocate it, small enough that the four per-slot arrays cost a few tens of kilobytes. */
+#define DEFAULT_FIBER_TABLE 1024
+/** @brief Default limit on how many fibers may exist at once. Generous on purpose: the table grows up to it on
+ *  demand, so memory (64MB of lazily mapped stack per fiber) runs out long before this does. Adjustable with
+ *  set_max_fibers(). */
+#define DEFAULT_FIBER_LIMIT 65536
+/** @brief Absolute bound on table growth, independent of the limit above. Growth only ever happens when every
+ *  allocated slot is already in use, so the table stays within a doubling of the fibers actually present and this is
+ *  never approached in practice. */
+#define HARD_FIBER_LIMIT    (1 << 20)
+/** @brief Fibers that may exist at once; create_fiber refuses past this. Adjustable with set_max_fibers(). */
+static int max_fibers = DEFAULT_FIBER_LIMIT;
+/** @brief Entries allocated in every table below. Fibers are only ever indexed from the scheduler thread, so growing
+ *  these (realloc) never races a worker thread. */
+static int fiber_capacity = 0;
+/** @brief Slots currently handed out, whether the fiber is live or still waiting for its jobs to drain. Capped by
+ *  max_fibers, which is what makes "the table is full" a policy decision rather than a property of the array. */
+static int fiber_used = 0;
+/** @brief Array of active fiber structures (fiber_capacity entries) */
+static para_fiber_t ** fibers = NULL;
+/** @brief LIFO of free fiber slot indexes (O(1) allocation), fiber_capacity entries */
+static int * free_slots = NULL;
 /** @brief Number of free slots currently on the free list */
 static int free_slot_count = 0;
-/** @brief Tracks whether the free list has been seeded with all slots */
-static int free_slots_seeded = 0;
 /** @brief The context representing the main Perl thread */
 static para_fiber_t main_context;
 /** @brief ID of the currently executing fiber (-1 for Main) */
@@ -556,10 +571,12 @@ static volatile int threads_keep_running = 1;
 static int shutdown_pipe[2] = { -1, -1 };
 #endif
 
-/** @brief Submitted-but-unreclaimed job count per fiber id (avoids fiber slot reuse while jobs are in flight). */
-static int job_refcount[MAX_FIBERS];
-/** @brief Set when a fiber id is destroyed but still has outstanding jobs; the id must not be reused until they drain. */
-static bool fiber_destroyed[MAX_FIBERS];
+/** @brief Submitted-but-unreclaimed job count per fiber id (avoids fiber slot reuse while jobs are in flight),
+ *  fiber_capacity entries. */
+static int * job_refcount = NULL;
+/** @brief Set when a fiber id is destroyed but still has outstanding jobs; the id must not be reused until they
+ *  drain. fiber_capacity entries. */
+static bool * fiber_destroyed = NULL;
 
 #ifdef _WIN32
 /** @brief Windows-only handle for the main thread converted to fiber */
@@ -570,6 +587,95 @@ static void * main_fiber_handle = NULL;
 DLLEXPORT void set_max_threads(int max) {
     if (max > 0 && max <= MAX_THREADS)
         max_thread_pool_size = max;
+}
+
+/**
+ * @brief Sets how many fibers may exist at once.
+ *
+ * The limit is enforced against the slots in use rather than against the allocated table, so it may be raised or
+ * lowered at any time: lowering it never disturbs fibers that already exist, it only stops the next create_fiber from
+ * succeeding until some of them are gone. Values below 1 are ignored (as in set_max_threads) and values above
+ * HARD_FIBER_LIMIT are clamped to it, so what this reports is always what the table could actually hold.
+ *
+ * @param max Requested limit.
+ */
+DLLEXPORT void set_max_fibers(int max) {
+    if (max < 1)
+        return;
+    max_fibers = max > HARD_FIBER_LIMIT ? HARD_FIBER_LIMIT : max;
+}
+
+/** @brief Returns how many fibers may exist at once. */
+DLLEXPORT int get_max_fibers(void) { return max_fibers; }
+
+/**
+ * @brief Grows the fiber table to at least `want` entries, doubling so allocation stays amortized O(1).
+ *
+ * New slots start empty and join the tail of the free list in descending order, so popping still hands out ascending
+ * ids: the first allocation on an empty table reproduces the old static seeding exactly (ids 0, 1, 2, ...). Growth is
+ * bounded by HARD_FIBER_LIMIT and deliberately ignores max_fibers - the table may outlive the live-fiber limit, which
+ * costs only a few tens of kilobytes and lets set_max_fibers be raised again without reallocating anything.
+ *
+ * @param want Minimum number of entries wanted.
+ * @return 1 if the table now holds at least `want` entries, 0 if an allocation was refused.
+ */
+static int _fiber_table_grow(int want) {
+    if (want <= fiber_capacity)
+        return 1;
+    if (want < DEFAULT_FIBER_TABLE)
+        want = DEFAULT_FIBER_TABLE;
+    if (want > HARD_FIBER_LIMIT)
+        want = HARD_FIBER_LIMIT;
+    if (want <= fiber_capacity)
+        return 0;
+
+    /* All four tables must reach the new size together, so each pointer is committed the moment its own realloc
+     * succeeds (discarding a moved pointer would leak the old block) while fiber_capacity is only recorded once every
+     * one of them made it. A partial failure therefore leaves a table larger than fiber_capacity knows about, which
+     * is harmless: the next attempt simply reallocs it again. */
+    para_fiber_t ** nf = (para_fiber_t **)realloc(fibers, (size_t)want * sizeof(*nf));
+    if (!nf)
+        return 0;
+    fibers = nf;
+    int * nfree = (int *)realloc(free_slots, (size_t)want * sizeof(*nfree));
+    if (!nfree)
+        return 0;
+    free_slots = nfree;
+    int * nref = (int *)realloc(job_refcount, (size_t)want * sizeof(*nref));
+    if (!nref)
+        return 0;
+    job_refcount = nref;
+    bool * ndes = (bool *)realloc(fiber_destroyed, (size_t)want * sizeof(*ndes));
+    if (!ndes)
+        return 0;
+    fiber_destroyed = ndes;
+
+    for (int i = want - 1; i >= fiber_capacity; i--) {
+        fibers[i] = NULL;
+        job_refcount[i] = 0;
+        fiber_destroyed[i] = false;
+        free_slots[free_slot_count++] = i;
+    }
+    fiber_capacity = want;
+    return 1;
+}
+
+/**
+ * @brief Returns a slot to the free list, undoing the moment create_fiber took it.
+ *
+ * Every release path funnels through here so a taken slot and its `fiber_used` increment can never come apart: the
+ * allocation failure paths below, a fiber destroyed outright, and a fiber whose id is only released once its jobs
+ * drain.
+ *
+ * @param idx Slot index to give back.
+ */
+static void _release_slot(int idx) {
+    if (idx < 0 || idx >= fiber_capacity)
+        return;
+    if (free_slot_count < fiber_capacity)
+        free_slots[free_slot_count++] = idx;
+    if (fiber_used > 0)
+        fiber_used--;
 }
 
 /** @brief Forward declaration of worker_thread */
@@ -801,7 +907,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].status = JOB_NEW;
         job_slots[idx].recall = 0;
         outstanding_jobs++;
-        if (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS)
+        if (current_fiber_id >= 0 && current_fiber_id < fiber_capacity)
             job_refcount[current_fiber_id]++;
 
         /* Dynamic scaling: spawn exactly the deficit (pending - idle), bounded by the configured pool size. This
@@ -938,12 +1044,11 @@ DLLEXPORT void free_job_slot(int idx) {
 
     /* Release the owner fiber id only once every job it submitted has been reclaimed, and only if the fiber has been
      * destroyed. This keeps a stale completion from ever waking a newer fiber that reused the same id. */
-    if (owner >= 0 && owner < MAX_FIBERS && job_refcount[owner] > 0) {
+    if (owner >= 0 && owner < fiber_capacity && job_refcount[owner] > 0) {
         job_refcount[owner]--;
         if (job_refcount[owner] == 0 && fiber_destroyed[owner]) {
             fiber_destroyed[owner] = 0;
-            if (free_slot_count < MAX_FIBERS)
-                free_slots[free_slot_count++] = owner;
+            _release_slot(owner);
         }
     }
 }
@@ -1517,7 +1622,7 @@ static Perl_ppaddr_t parataxis_saved_pp_exit = NULL;
  * unchanged.
  */
 static OP * parataxis_pp_exit(pTHX) {
-    if (current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS || !fibers[current_fiber_id])
+    if (current_fiber_id < 0 || current_fiber_id >= fiber_capacity || !fibers[current_fiber_id])
         return parataxis_saved_pp_exit(aTHX);
     dSP;
     I32 anum;
@@ -1553,12 +1658,8 @@ DLLEXPORT int init_system() {
     dTHX;
     if (system_initialized)
         return 0;
-    if (!free_slots_seeded) {
-        for (int i = 0; i < MAX_FIBERS; i++)
-            free_slots[i] = MAX_FIBERS - 1 - i;
-        free_slot_count = MAX_FIBERS;
-        free_slots_seeded = 1;
-    }
+    if (!fiber_capacity)
+        _fiber_table_grow(DEFAULT_FIBER_TABLE);
     if (max_thread_pool_size == 0) {
         max_thread_pool_size = get_cpu_count();
         if (max_thread_pool_size < MIN_THREAD_POOL)
@@ -1721,10 +1822,10 @@ void para_entry_point(para_fiber_t * c) {
              * coro_call sees exit_pending and re-enters perl's exit machinery on the caller's stack, where
              * the whole JMPENV chain lives on one stack. */
             int fid = current_fiber_id;
-            if (fid >= 0 && fid < MAX_FIBERS && fibers[fid])
+            if (fid >= 0 && fid < fiber_capacity && fibers[fid])
                 fibers[fid]->exit_pending = 1;
             JMPENV_POP;
-            para_fiber_t * fc = (fid >= 0 && fid < MAX_FIBERS) ? fibers[fid] : c;
+            para_fiber_t * fc = (fid >= 0 && fid < fiber_capacity) ? fibers[fid] : c;
             if (fc) {
                 fc->finished = true;
                 int parent = fc->parent_id;
@@ -1739,7 +1840,7 @@ void para_entry_point(para_fiber_t * c) {
             /* A non-exit longjmp (die) that escaped the body's G_EVAL. This should not normally happen; finish the
              * fiber with whatever is in $@ and hand control back to the caller. */
             JMPENV_POP;
-            para_fiber_t * fc = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS) ? fibers[current_fiber_id] : c;
+            para_fiber_t * fc = (current_fiber_id >= 0 && current_fiber_id < fiber_capacity) ? fibers[current_fiber_id] : c;
             if (fc) {
                 fc->finished = true;
                 int parent = fc->parent_id;
@@ -1884,8 +1985,8 @@ static pthread_t guard_owner_thread;
  */
 static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
     (void)sig;
-    para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < MAX_FIBERS) ? fibers[current_fiber_id] : NULL;
-    if (!pthread_equal(pthread_self(), guard_owner_thread) || current_fiber_id < 0 || current_fiber_id >= MAX_FIBERS ||
+    para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < fiber_capacity) ? fibers[current_fiber_id] : NULL;
+    if (!pthread_equal(pthread_self(), guard_owner_thread) || current_fiber_id < 0 || current_fiber_id >= fiber_capacity ||
         !fibers[current_fiber_id]) {
         if (prev_sigsegv_act.sa_flags & SA_SIGINFO)
             prev_sigsegv_act.sa_sigaction(sig, si, uc);
@@ -1984,28 +2085,33 @@ static void arm_fiber_context(para_fiber_t * c, int idx) {
  */
 DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     dTHX;
-    if (!free_slots_seeded) {
-        for (int i = 0; i < MAX_FIBERS; i++)
-            free_slots[i] = MAX_FIBERS - 1 - i;
-        free_slot_count = MAX_FIBERS;
-        free_slots_seeded = 1;
-    }
+    if (fiber_used >= max_fibers)
+        return -2;
+    if (!fiber_capacity)
+        _fiber_table_grow(DEFAULT_FIBER_TABLE);
     int idx;
     if (free_slot_count > 0) {
         idx = free_slots[--free_slot_count];
     }
     else {
-        /* Safety net: scan for a slot if the free list is ever exhausted. */
-        idx = -1;
-        for (int i = 0; i < MAX_FIBERS; i++) {
-            if (fibers[i] == NULL && !fiber_destroyed[i]) {
-                idx = i;
-                break;
+        /* Every allocated slot is taken while more fibers are still allowed: double the table (bounded by
+         * HARD_FIBER_LIMIT) and take one of the slots it just added to the free list. */
+        if (_fiber_table_grow(fiber_capacity * 2) && free_slot_count > 0)
+            idx = free_slots[--free_slot_count];
+        else {
+            /* Safety net: scan for a slot if the free list is ever exhausted. */
+            idx = -1;
+            for (int i = 0; i < fiber_capacity; i++) {
+                if (fibers[i] == NULL && !fiber_destroyed[i]) {
+                    idx = i;
+                    break;
+                }
             }
         }
     }
     if (idx == -1)
         return -2;
+    fiber_used++;
 
     para_fiber_t * c = NULL;
 #ifndef _WIN32
@@ -2018,13 +2124,16 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     }
     else {
         c = (para_fiber_t *)malloc(sizeof(para_fiber_t));
-        if (!c)
+        if (!c) {
+            _release_slot(idx);
             return -3;
+        }
         memset(c, 0, sizeof(para_fiber_t));
         /* Initialize Perl stacks */
         init_perl_stacks(c);
         if (!c->si) {
             free(c);
+            _release_slot(idx);
             return -3;
         }
 #ifndef _WIN32
@@ -2033,6 +2142,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
         if (!c->stack_p) {
             free_perl_stacks(aTHX_ c);
             free(c);
+            _release_slot(idx);
             return -3;
         }
 #else
@@ -2075,7 +2185,7 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
  */
 DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     dTHX;
-    if (fiber_id < 0 || fiber_id >= MAX_FIBERS || !fibers[fiber_id] || fibers[fiber_id]->finished)
+    if (fiber_id < 0 || fiber_id >= fiber_capacity || !fibers[fiber_id] || fibers[fiber_id]->finished)
         return &PL_sv_undef;
     if (fibers[fiber_id]->transfer_data != args) {
         if (fibers[fiber_id]->transfer_data && fibers[fiber_id]->transfer_data != &PL_sv_undef)
@@ -2105,7 +2215,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     if (ret) {
         JMPENV_POP;
         int parent = (fibers[fiber_id] ? fibers[fiber_id]->parent_id : -1);
-        if (parent >= 0 && parent < MAX_FIBERS && fibers[parent]) {
+        if (parent >= 0 && parent < fiber_capacity && fibers[parent]) {
             current_fiber_id = parent;
             restore_perl_state(fibers[parent]);
         }
@@ -2167,7 +2277,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
  */
 DLLEXPORT int run_fiber_checked(int fiber_id, SV * args) {
     dTHX;
-    if (fiber_id < 0 || fiber_id >= MAX_FIBERS || !fibers[fiber_id])
+    if (fiber_id < 0 || fiber_id >= fiber_capacity || !fibers[fiber_id])
         return -1;
     para_fiber_t * c = fibers[fiber_id];
     if (c->finished) {
@@ -2265,7 +2375,7 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
  */
 DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
     dTHX;
-    if (target_id < -1 || (target_id >= 0 && (target_id >= MAX_FIBERS || !fibers[target_id])))
+    if (target_id < -1 || (target_id >= 0 && (target_id >= fiber_capacity || !fibers[target_id])))
         return &PL_sv_undef;
     if (target_id >= 0 && fibers[target_id]->finished)
         return &PL_sv_undef;
@@ -2295,7 +2405,7 @@ DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
 
 /** @brief Returns 1 if the fiber has finished execution. */
 DLLEXPORT int is_finished(int fiber_id) {
-    if (fiber_id < 0 || fiber_id >= MAX_FIBERS)
+    if (fiber_id < 0 || fiber_id >= fiber_capacity)
         return 0;
     return (fibers[fiber_id] && fibers[fiber_id]->finished) ? 1 : 0;
 }
@@ -2311,7 +2421,7 @@ DLLEXPORT int is_finished(int fiber_id) {
  */
 DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
     dTHX;
-    if (fiber_id < 0 || fiber_id >= MAX_FIBERS || !fibers[fiber_id])
+    if (fiber_id < 0 || fiber_id >= fiber_capacity || !fibers[fiber_id])
         return &PL_sv_undef;
     SV * self_ref = fibers[fiber_id]->self_ref;
     if (!self_ref || self_ref == &PL_sv_undef)
@@ -2323,7 +2433,7 @@ DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
 /** @brief Returns the number of currently live (non-destroyed) fibers. */
 DLLEXPORT int get_live_fiber_count(void) {
     int count = 0;
-    for (int i = 0; i < MAX_FIBERS; i++)
+    for (int i = 0; i < fiber_capacity; i++)
         if (fibers[i] && fibers[i]->started)
             count++;
     return count;
@@ -2379,7 +2489,7 @@ static void _clear_pads_in_stack(pTHX_ PERL_SI * si) {
  */
 DLLEXPORT void destroy_coro(int fiber_id) {
     dTHX;
-    if (fiber_id < 0 || fiber_id >= MAX_FIBERS)
+    if (fiber_id < 0 || fiber_id >= fiber_capacity)
         return;
     para_fiber_t * c = fibers[fiber_id];
     if (!c)
@@ -2387,12 +2497,12 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     fibers[fiber_id] = NULL;
     if (job_refcount[fiber_id] > 0) {
         /* Keep the id out of the free list until every in-flight job it submitted has been reclaimed, so no newer
-         * fiber can be woken by a stale completion targeting this id (released via free_job_slot). */
+         * fiber can be woken by a stale completion targeting this id (released via free_job_slot). The slot stays
+         * counted as used until then, so the limit also covers a fiber that is already gone but not yet recyclable. */
         fiber_destroyed[fiber_id] = 1;
     }
     else {
-        if (free_slot_count < MAX_FIBERS)
-            free_slots[free_slot_count++] = fiber_id;
+        _release_slot(fiber_id);
     }
 
     /* Unwind pads. This is only ever safe when the fiber's perl context stack has already been unwound to exhaustion
@@ -2493,7 +2603,7 @@ DLLEXPORT void cleanup() {
         swap_perl_state(fibers[current_fiber_id], &main_context);
         current_fiber_id = -1;
     }
-    for (int i = 0; i < MAX_FIBERS; i++)
+    for (int i = 0; i < fiber_capacity; i++)
         if (fibers[i])
             destroy_coro(i);
 #ifndef _WIN32

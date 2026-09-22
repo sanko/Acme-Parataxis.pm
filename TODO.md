@@ -316,8 +316,9 @@ acceptance bullets below are covered:
 
 - thousands of concurrent `acquire` never exceed `rate x wall-time + burst` against a real clock: t/051 saturates the
   fiber table with 800 workers and has each acquire three times, giving 2400 acquisitions contending for one bucket at
-  `rate => 1000, burst => 100` (`MAX_FIBERS` is a hard 1024 in `Parataxis.c`, so live fibers cannot reach 2000 - the
-  thousands come from workers acquiring again as tokens refill). Every timestamp is checked against the bound: the
+  `rate => 1000, burst => 100` (`MAX_FIBERS` used to be a hard 1024 in `Parataxis.c`; the table now grows on demand
+  under `set_max_fibers`, so 800 is a deliberate load shape - the thousands come from workers acquiring again as
+  tokens refill). Every timestamp is checked against the bound: the
   request numbered `k` may not have completed before `(k - burst)/rate`. Not one of the 2400 beat it, the measured
   worst overshoot being 0.0ms, while the run still cost at least the theoretical 2.30s and finished near the
   requested rate instead of stalling;

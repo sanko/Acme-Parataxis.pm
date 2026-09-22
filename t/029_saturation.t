@@ -15,6 +15,9 @@ BEGIN {
 }
 use constant MAX_FIBERS => 1024;
 use constant MAX_JOBS   => 1024;
+# The fiber table now grows on demand, so this file pins it at the size it was written against: everything below is
+# written in terms of exactly 1024 parked fibers and the next spawn croaking.
+Acme::Parataxis::set_max_fibers(MAX_FIBERS);
 sub live_count  { Acme::Parataxis::get_live_fiber_count() }
 sub outstanding { Acme::Parataxis::get_outstanding_jobs() }
 

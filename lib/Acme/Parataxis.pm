@@ -19,7 +19,7 @@ package Acme::Parataxis v0.1.1 {
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
                 current_fid tid root maybe_yield on_wake with_timeout nursery
-                set_max_threads max_threads dump_fibers
+                set_max_threads max_threads set_max_fibers max_fibers dump_fibers
                 ]
         ]
     );
@@ -150,6 +150,8 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'get_thread_pool_size',              [],                             Int;
         affix $l, 'get_max_thread_pool_size',          [],                             Int;
         affix $l, 'set_max_threads',                   [Int],                          Void;
+        affix $l, 'get_max_fibers',                    [],                             Int;
+        affix $l, 'set_max_fibers',                    [Int],                          Void;
         affix $l, 'set_preempt_threshold',             [LongLong],                     Void;
         affix $l, [ 'maybe_yield' => '_maybe_yield' ], [],                             Pointer [SV];
         affix $l, 'get_preempt_count',                 [],                             LongLong;
@@ -468,7 +470,7 @@ package Acme::Parataxis v0.1.1 {
         }
         @_ = ();
         my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
-        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' unless $fiber && ref $fiber;
+        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)' unless $fiber && ref $fiber;
         my $status = $fiber->[F_LAST_STATUS];
         if ( $status == 1 ) {
             my $err = $fiber->[F_ERROR];
@@ -642,6 +644,7 @@ package Acme::Parataxis v0.1.1 {
     sub current_fid    { get_current_parataxis_id() }
     sub root           { state $root //= Acme::Parataxis::Root->new() }
     sub max_threads () { Acme::Parataxis::get_max_thread_pool_size() }
+    sub max_fibers ()  { Acme::Parataxis::get_max_fibers() }
 
     # Scheduler internals
     sub _scheduler_enqueue_by_id ($fid) {
@@ -798,7 +801,7 @@ package Acme::Parataxis v0.1.1 {
     sub new ( $class, %args ) {
         my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
-        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first)' if $fid < 0;
+        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)' if $fid < 0;
         $self->[F_FID] = $fid;
         return $self;
     }

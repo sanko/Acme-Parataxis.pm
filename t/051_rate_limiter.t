@@ -19,9 +19,9 @@ sub live_count { Acme::Parataxis::get_live_fiber_count() }
 my $BASE = live_count();
 
 subtest 'thousands of concurrent acquire never exceed rate x wall-time + burst' => sub {
-    # MAX_FIBERS is a hard 1024-entry table in Parataxis.c, so live fibers cannot reach 2000: the pool saturates at
-    # 800 workers (~800 of them parked at once) and the thousands come from each worker acquiring again as tokens
-    # refill. 800 x 3 = 2400 acquisitions, all of them contending for the same bucket.
+    # 800 workers is a deliberate load shape rather than the old hard 1024 table ceiling, which set_max_fibers
+    # replaced: the fiber table grows on demand now. ~800 of them park at once and the thousands come from each
+    # worker acquiring again as tokens refill. 800 x 3 = 2400 acquisitions, all of them contending for the same bucket.
     my ( $workers, $each, $rate, $burst ) = ( 800, 3, 1000, 100 );
     my $N = $workers * $each;
     my ( $t0, @t );

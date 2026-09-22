@@ -437,7 +437,8 @@ tune its behavior using these functions.
 =head2 C<set_max_threads( $count )>
 
 Sets the maximum number of worker threads the pool is allowed to spawn. By default, this is set to the number of
-logical CPU cores detected on your system (up to a hard limit of 64).
+logical CPU cores detected on your system, with a floor of 8 so a machine reporting one or two cores still has room to
+grow when several fibers are sleeping at once, up to a hard limit of 64.
 
     # Limit the pool to 4 threads
     set_max_threads(4);
@@ -445,6 +446,28 @@ logical CPU cores detected on your system (up to a hard limit of 64).
 =head2 C<max_threads()>
 
 Returns the currently configured maximum thread pool size.
+
+=head1 Fiber Limits
+
+The fiber table is allocated on demand and doubles whenever it fills, so how many fibers you can create is bounded by
+memory rather than by a compile-time constant. What bounds it as a matter of policy is the limit below. Because that
+limit is enforced against the fibers actually in use, it may be raised or lowered at any time, and lowering it never
+disturbs fibers that already exist.
+
+=head2 C<set_max_fibers( $count )>
+
+Sets how many fibers may exist at once. The default is 65536, clamped to a hard internal ceiling of 1048576 so that
+what C<max_fibers> reports is always what the table could really hold. Creating a fiber past the limit croaks with
+"the fiber table is full" until enough fibers finish; values below 1 are ignored.
+
+    # Allow a hundred thousand fibers
+    set_max_fibers(100_000);
+
+=head2 C<max_fibers()>
+
+Returns the current fiber limit.
+
+    die "this run needs more room" if max_fibers() < 10_000;
 
 =head1 Manual Fiber Management
 
