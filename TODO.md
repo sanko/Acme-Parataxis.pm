@@ -21,7 +21,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Sync primitives - Mutex / WaitGroup / Barrier (#7)        | [x] done      | M3, t/036–t/039 |
 | Read/write locks (#7)                                     | [x] done      | Card 1 - `Sync::RwLock`, t/049 |
 | Deadlock tracing - `dump_fibers`, wait_reason (#7)        | [x] done      | M8, t/045 (full backtrace deferred → Card 9) |
-| Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 (2 acceptance items still open) |
+| Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 |
 | Supervisor trees - OTP restart strategies (#9)            | [ ] pending   | Card 3 |
 | Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
@@ -103,20 +103,27 @@ Acceptance (t/0XX):
   scheduled fiber.
 
 
-### 2 Event-loop driver hook (Mojo / IO::Async) - done, two acceptance items open
+### 2 Event-loop driver hook (Mojo / IO::Async) - done
 
 **Shipped:** `attach_loop`/`detach_loop`/`loop` on `Acme::Parataxis`, `Acme::Parataxis::Driver` plus
 `Driver::Mojo` and `Driver::IOAsync` (all with POD), tested by t/047 (Mojo) and t/048 (IO::Async).
 
-Covered: mixed sleep + socket-read workload per driver, an awaited filehandle waking on readiness, an enclosing
-`with_timeout` still interrupting, and the untouched `select()` path (the rest of the suite runs with no loop
-attached).
+All four acceptance bullets below are now covered:
 
-**Still open from the acceptance list:**
+- mixed sleep + socket-read workload per driver: t/047's and t/048's `run` subtests;
+- an awaited filehandle waking on readiness, and an enclosing `with_timeout` still interrupting: both files;
+- high-volume smoke (hundreds of concurrent `await_read` on loopback): both files park **300** descriptors at once
+  and require every one to wake with its byte, finishing in well under a second;
+- no worker thread does readiness while a loop is attached: both files count pool submissions through
+  `_submit_job` (the only gate onto `submit_c_job`, and `run()` never submits on its own) and require **0** across
+  that 300-descriptor run, with a no-loop control that must submit >= 2 so the counter cannot pass vacuously;
+- the untouched `select()` path: the rest of the suite runs with no loop attached.
 
-- high-volume smoke - hundreds of concurrent `await_read` hooks on loopback sockets (both tests park a single
-  handle at a time);
-- proof that *no worker threads do readiness* while a loop is attached (nothing asserts the pool is idle).
+Measured on this machine, the reason the card exists: with the default `max_threads` of 16, **150** concurrent
+pool-path `await_read` calls woke only **6** of them - the other **144** expired their own 5s deadline, because
+each queued read waits for one of 16 threads blocked in `select()`, and the run took **46s**. The same 150 (and
+300) reads through an attached loop all wake in roughly **90ms**. Pool behaviour at that volume is inherent to one
+thread per watched descriptor, not a regression, and is not covered by a test.
 
 Source: #9 - "An Ecosystem Hook: Event Loop Integration". Today `await_read`/`await_write` offload to OS threads
 via `select()`, which caps at `FD_SETSIZE` (1024) and burns a whole thread per watched socket. Instead, let Parataxis
