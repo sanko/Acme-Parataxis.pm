@@ -21,13 +21,14 @@ This file is the next chapter before I rename the project. Every complete task g
 | Sync primitives - Mutex / WaitGroup / Barrier (#7)        | [x] done      | M3, t/036–t/039 |
 | Read/write locks (#7)                                     | [x] done      | Card 1 - `Sync::RwLock`, t/049 |
 | Deadlock tracing - `dump_fibers`, wait_reason (#7)        | [x] done      | M8, t/045 (full backtrace deferred → Card 9) |
-| Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 |
+| Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 (2 acceptance items still open) |
 | Supervisor trees - OTP restart strategies (#9)            | [ ] pending   | Card 3 |
 | Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
 | Drift-free `Ticker` (#10)                                 | [ ] pending   | Card 6 |
 | Token-bucket `RateLimiter` (#10)                          | [ ] pending   | Card 7 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [ ] pending   | Card 8 |
+| Full park-site backtrace - `dump_fibers` depth (#7)       | [ ] pending   | Card 9 |
 
 ## Carried over from the previous roadmap
 
@@ -35,6 +36,16 @@ This file is the next chapter before I rename the project. Every complete task g
 - **Scalable I/O (epoll/kqueue/IOCP)** was M9, marked "not part of the core plan" because it meant rewriting the readiness path. Discussion #9 proposes the kinder form - drive Parataxis from an existing CPAN event loop - which is Card 2.
 - **Full park-site backtrace** was M8's deferred nice-to-have ("wait_reason's single [file, line] is not a full backtrace"). Discussion #7's deadlock-tracing section wants exactly this - Card 9.
 - Regressions R1–R4 are resolved; R4's `pp_entersub` pad fix landed in `ee1e440`/`86a0ef0` (its Stress-CI confirmation rides along with routine CI).
+
+## Known issues
+
+- **`perl -c lib/Acme/Parataxis.pm` prints `syntax OK` then segfaults (exit 139).** Diagnosed but *not fixed* - out of
+  scope for Cards 1 and 2. It reproduces on an unmodified HEAD, on untouched sibling modules, and on a trivial
+  `use Acme::Parataxis;` file, so it is not caused by the scheduler changes. It is not a CHECK/END problem: `-c`
+  runs `CHECK` but never `END`, yet adding `CHECK { cleanup() if $^C }` did not help. Loading `Affix` alone is clean,
+  and `PERL_DESTRUCT_LEVEL=2` suppresses it, which points at interpreter destruction rather than compile. Nothing in
+  the shipped workflow is affected: `perl Build`, `perl Build test` (49 files, 390 tests) and normal execution are
+  all clean.
 
 ## Backlog
 
@@ -56,7 +67,12 @@ Leftover half-formed concepts and implementations from the first discussion. Kee
 
 ## Cards
 
-### 1 Read/write lock (Sync::RwLock)
+### 1 Read/write lock (Sync::RwLock) - done
+
+**Shipped:** `lib/Acme/Parataxis/Sync/RwLock.pm` + `Sync/RwLock.pod`, tested by t/049 (11 subtests). All four
+acceptance bullets below are covered: concurrent readers, no writer starvation, FIFO writer handoff with `try_*`
+never stealing, non-owner unlock croak, guard release on scope end and on exception, interrupted waits unregister,
+and every op croaks outside a scheduled fiber.
 
 Source: #7, "More Primitives". The Mutex paragraph calls for a lock that "tracks fiber ownership... and enables
 read-heavy concurrency with a **shared or exclusive** read/write lock." Mutex landed in M3; RwLock did not.
@@ -87,7 +103,20 @@ Acceptance (t/0XX):
   scheduled fiber.
 
 
-### 2 Event-loop driver hook (Mojo / IO::Async)
+### 2 Event-loop driver hook (Mojo / IO::Async) - done, two acceptance items open
+
+**Shipped:** `attach_loop`/`detach_loop`/`loop` on `Acme::Parataxis`, `Acme::Parataxis::Driver` plus
+`Driver::Mojo` and `Driver::IOAsync` (all with POD), tested by t/047 (Mojo) and t/048 (IO::Async).
+
+Covered: mixed sleep + socket-read workload per driver, an awaited filehandle waking on readiness, an enclosing
+`with_timeout` still interrupting, and the untouched `select()` path (the rest of the suite runs with no loop
+attached).
+
+**Still open from the acceptance list:**
+
+- high-volume smoke - hundreds of concurrent `await_read` hooks on loopback sockets (both tests park a single
+  handle at a time);
+- proof that *no worker threads do readiness* while a loop is attached (nothing asserts the pool is idle).
 
 Source: #9 - "An Ecosystem Hook: Event Loop Integration". Today `await_read`/`await_write` offload to OS threads
 via `select()`, which caps at `FD_SETSIZE` (1024) and burns a whole thread per watched socket. Instead, let Parataxis
