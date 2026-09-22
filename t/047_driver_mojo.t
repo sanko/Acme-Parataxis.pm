@@ -128,10 +128,11 @@ my $orig_submit_job = \&Acme::Parataxis::_submit_job;
 }
 
 # Windows: stock Strawberry perl builds without d_poll, so Mojo::Reactor::Poll drives IO::Poll::_poll through its
-# select fallback and that stack stops scaling long before "hundreds". Plain Mojo with no Parataxis involved goes
-# silent at 31 watched descriptors and crashes the interpreter above 128 on perl 5.42.3, while perl's raw select()
-# wakes all 300. Cap the batch at a count the stock stack demonstrably delivers so Windows still runs the whole
-# driver path instead of dying mid-subtest; other platforms keep the full 300.
+# select fallback. The limit there is the descriptor NUMBER, not the watch count: winsock FD_SETSIZE truncates the
+# fd_set at 64, so the reactor goes silent as soon as any watched fd reaches 64 (5 watches woke 5/5 at maxfd 13,
+# 5 watches after 70 dummy fds woke 0/5), IO::Select never crashes but reports at most 64 ready handles, and the
+# pure-Mojo stack crashes the interpreter above 128 pairs on perl 5.42.3. 24 pairs keep every fd under 64, which
+# is enough to exercise the whole driver path on Windows; other platforms keep the full 300.
 my $N = $^O eq 'MSWin32' ? 24 : 300;
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
