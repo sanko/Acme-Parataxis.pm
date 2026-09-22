@@ -251,11 +251,11 @@ jobs:
         cpanm --test-only -v .
   openbsd:
     name: OpenBSD
-    # Gated while the first-fiber-switch SEGV is diagnosed: the leg still runs and
-    # reports, but it cannot block green until a backtrace channel exists.
-    continue-on-error: true
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
+      # Gated while the first-fiber-switch SEGV is diagnosed: the leg still
+      # runs and reports in the callee, but it cannot block green here.
+      continue_on_error: true
       checkout_submodules: recursive
       matrix: |-
         [
