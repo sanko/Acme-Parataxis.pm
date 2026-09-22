@@ -342,8 +342,8 @@ acceptance bullets below are covered:
   instant while the sustained rate really is `rate`) with a read of `RateLimiter.pod` requiring a
   `BURST VS. STRICT RATE` section, so the documentation cannot be dropped without failing the suite.
 
-**Composition:** the bucket is a plain `Semaphore` sized to `burst`, and a Card-6 `Ticker` firing `rate` times a second
-refills exactly one token per tick while the bucket sits below its ceiling. That is what keeps `acquire` a plain
+**Composition:** the bucket is a plain `Semaphore` sized to `burst`, and a Card-6 `Ticker` waking `rate` times a second
+credits every whole token accrued since the previous wake while the bucket sits below its ceiling. That is what keeps `acquire` a plain
 `down`: the park path, cancellation and unregister-on-interrupt all come with it rather than being reimplemented.
 `stop()` halts refills and lets a parked acquirer through rather than stranding it, while a later `acquire` croaks
 instead of parking forever with nobody left to refill.

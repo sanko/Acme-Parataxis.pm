@@ -419,9 +419,9 @@ bucket runs dry, C<acquire> parks the calling fiber and hands it a token the mom
 
 The bucket is an ordinary L<Acme::Parataxis::Semaphore>, so C<acquire> is a plain C<down> and inherits the scheduler's
 whole park path for free: a blocked acquire is interruptible by C<with_timeout> and cancellation tokens, unregisters
-itself when interrupted, and never busy-waits. Refills come from a L<Acme::Parataxis::Ticker> firing C<rate> times a
-second, each tick returning exactly one token and only while the bucket sits below its ceiling, so nothing accumulates
-while the limiter sits idle.
+itself when interrupted, and never busy-waits. Refills come from a L<Acme::Parataxis::Ticker> waking C<rate> times a
+second, each wake crediting every whole token accrued since the previous one on the wall clock and only while the
+bucket sits below its ceiling, so nothing accumulates while the limiter sits idle.
 
 C<burst> decides how smooth the traffic looks. With C<burst = 1> requests are spaced strictly evenly and even the first
 one waits its turn; a larger C<burst> lets the first C<burst> requests through immediately before the limiter settles

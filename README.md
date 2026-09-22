@@ -436,9 +436,9 @@ for ( 1 .. 1000 ) { fiber { $rl->acquire(1); fetch_url(...) } }
 
 The bucket is an ordinary [Acme::Parataxis::Semaphore](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASemaphore), so `acquire` is a plain `down` and inherits the scheduler's
 whole park path for free: a blocked acquire is interruptible by `with_timeout` and cancellation tokens, unregisters
-itself when interrupted, and never busy-waits. Refills come from a [Acme::Parataxis::Ticker](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATicker) firing `rate` times a
-second, each tick returning exactly one token and only while the bucket sits below its ceiling, so nothing accumulates
-while the limiter sits idle.
+itself when interrupted, and never busy-waits. Refills come from a [Acme::Parataxis::Ticker](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATicker) waking `rate` times a
+second, each wake crediting every whole token accrued since the previous one on the wall clock and only while the
+bucket sits below its ceiling, so nothing accumulates while the limiter sits idle.
 
 `burst` decides how smooth the traffic looks. With `burst = 1` requests are spaced strictly evenly and even the first
 one waits its turn; a larger `burst` lets the first `burst` requests through immediately before the limiter settles

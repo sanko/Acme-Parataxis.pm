@@ -4,15 +4,19 @@ use feature 'class';
 #
 class Acme::Parataxis::RateLimiter v0.1.1 {
     use Carp qw[croak];
+    use Time::HiRes     qw[time];
     use Acme::Parataxis qw[fiber];
     use Acme::Parataxis::Semaphore;
     use Acme::Parataxis::Ticker;
 
     # A token bucket. The bucket is an ordinary Semaphore holding `burst` permits: acquire() is a `down`, so a fiber
     # with nothing left to spend parks through the usual _park path and inherits cancellation, with_timeout and
-    # unregister-on-interrupt for free. A Card-6 Ticker fires `rate` times a second and the refill fiber puts exactly
-    # one token back, but only while the bucket sits below its ceiling - so an idle limiter tops itself up to `burst`
-    # and then stops, and a busy one hands out tokens at a steady `rate` per second forever.
+    # unregister-on-interrupt for free. A Card-6 Ticker wakes the refill fiber `rate` times a second, and each wake
+    # credits every whole token accrued since the previous one on the wall clock (the fraction carries over), so the
+    # delivered rate tracks real time however coarsely the platform wakes the ticker: a late wake credits the tokens
+    # missed since the last one instead of falling behind. Tokens are credited only while the bucket sits below its
+    # ceiling, so an idle limiter tops itself up to `burst` and then stops, and a busy one hands out tokens at a
+    # steady `rate` per second forever.
     #
     # The Semaphore count therefore never needs a separate counter, and `Semaphore::adjust` already sizes its wake
     # budget to min(tokens added, waiters), so one refill wakes exactly one waiter and an empty bucket wakes nobody
@@ -28,10 +32,22 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
         $bucket  = Acme::Parataxis::Semaphore->new( count => $burst );
         $ticker  = Acme::Parataxis::Ticker->new( interval => 1000 / $rate );
         $running = true;
+        my $last  = time;
+        my $first = true;
         Acme::Parataxis::fiber {
             while ($running) {
                 last unless $ticker->wait_next;
-                $bucket->adjust(1) if $bucket->count < $burst;
+                my $now = time;
+                my $due = int( ( $now - $last ) * $rate );
+                $last += $due / $rate;    # advance over exactly the window these whole tokens cover
+                                           # (any fraction carries to the next wake; a backwards clock resyncs)
+                # The first wake can be arbitrarily late when the limiter was built before run() started. That
+                # window was spent idle at the ceiling, so it must not be credited as backfill.
+                $due = 1 if $first && $due > 1;
+                $first = 0;
+                next if $due < 1;
+                my $room = $burst - $bucket->count;
+                $bucket->adjust( $due < $room ? $due : $room ) if $room > 0;
             }
             ();
         };
