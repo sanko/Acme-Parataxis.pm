@@ -27,8 +27,20 @@
 #define _WIN32_WINNT 0x0601
 #endif
 #else
-#ifndef _XOPEN_SOURCE
+/*
+ * glibc exposes POSIX declarations only when a feature-test macro asks for them, but NetBSD and DragonFly go the other
+ * way and hide their own types behind one. NetBSD's <sys/types.h> keeps u_int and devmajor_t behind _NETBSD_SOURCE,
+ * which <sys/featuretest.h> only defines on its own when no other major macro is set, so define it explicitly (the
+ * documented union namespace takes care of the rest). DragonFly's <sys/cdefs.h> derives _POSIX_C_SOURCE from
+ * _XOPEN_SOURCE, never assigns __BSD_VISIBLE in that branch, and its footer then defaults that to 0, so
+ * <sys/types.h> skips the u_int that <sys/sysctl.h> prototypes use; its default namespace already shows everything,
+ * so leave the macro off there.
+ */
+#if !defined(__DragonFly__) && !defined(_XOPEN_SOURCE)
 #define _XOPEN_SOURCE 600
+#endif
+#if defined(__NetBSD__) && !defined(_NETBSD_SOURCE)
+#define _NETBSD_SOURCE
 #endif
 #ifndef _BSD_SOURCE
 #define _BSD_SOURCE
