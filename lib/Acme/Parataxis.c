@@ -2237,31 +2237,30 @@ static pthread_t guard_owner_thread;
 /** @brief Reentrancy guard: a fault raised while reporting must not recurse. */
 static volatile sig_atomic_t crash_reporting = 0;
 
-#if defined(__linux__) || defined(__NetBSD__) || defined(__OpenBSD__)
-/* Register accessors for the crash reporter, restricted to platforms whose
- * headers were actually read. glibc hides its REG_* names behind __USE_GNU
- * (deliberately unset here) but the x86_64 gregset order is frozen:
- * REG_RBP=10, REG_RSP=15, REG_RIP=16. NetBSD keeps them in __gregs behind the
- * _REG_* enum. On OpenBSD ucontext_t IS struct sigcontext. Everything else
- * reports zeros here and still gets si_addr, which for SIGILL is the faulting
- * instruction itself, so the illegal-instruction flakes stay diagnosable
- * everywhere. */
-#if defined(__linux__)
+/* Register accessors for the crash reporter, guarded by both OS and arch so
+ * only header layouts that were actually read get used. glibc hides its REG_*
+ * names behind __USE_GNU (deliberately unset here) but the x86_64 gregset
+ * order is frozen: REG_RBP=10, REG_RSP=15, REG_RIP=16; aarch64 glibc has no
+ * gregs member at all (its mcontext_t carries regs/sp/pc directly). NetBSD
+ * keeps its registers in __gregs behind the _REG_* enum. On OpenBSD amd64
+ * ucontext_t IS struct sigcontext. Everything else reports zeros and still
+ * gets si_addr, which for SIGILL is the faulting instruction itself, so the
+ * illegal-instruction flakes stay diagnosable on every platform. */
+#if defined(__linux__) && defined(__x86_64__)
 typedef ucontext_t para_uc_t;
 #define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.gregs[16]))
 #define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.gregs[15]))
 #define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.gregs[10]))
-#elif defined(__NetBSD__)
+#elif defined(__NetBSD__) && defined(__x86_64__)
 typedef ucontext_t para_uc_t;
 #define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RIP]))
 #define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RSP]))
 #define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RBP]))
-#else /* __OpenBSD__ */
+#elif defined(__OpenBSD__) && defined(__x86_64__)
 typedef struct sigcontext para_uc_t;
 #define PARA_REG_PC(u) ((unsigned long long)((u)->sc_rip))
 #define PARA_REG_SP(u) ((unsigned long long)((u)->sc_rsp))
 #define PARA_REG_FP(u) ((unsigned long long)((u)->sc_rbp))
-#endif
 #else /* no verified register layout: report zeros, rely on si_addr */
 typedef void para_uc_t;
 #define PARA_REG_PC(u) (0ULL)
