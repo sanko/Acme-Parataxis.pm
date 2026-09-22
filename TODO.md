@@ -25,7 +25,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Supervisor trees - OTP restart strategies (#9)            | [ ] pending   | Card 3 |
 | Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
-| Drift-free `Ticker` (#10)                                 | [ ] pending   | Card 6 |
+| Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
 | Token-bucket `RateLimiter` (#10)                          | [ ] pending   | Card 7 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [ ] pending   | Card 8 |
 | Full park-site backtrace - `dump_fibers` depth (#7)       | [ ] pending   | Card 9 |
@@ -267,7 +267,24 @@ Acceptance (t/0XX):
 - quitting the source channel ends the chain; zero leaked fibers.
 
 
-### 6 Ticker
+### 6 Ticker - done
+
+**Shipped:** `lib/Acme/Parataxis/Ticker.pm` + `Ticker.pod`, tested by t/050 (5 subtests). All three acceptance
+bullets below are covered:
+
+- strict cadence under load: t/050 takes 30 ticks at a 100ms interval with 30ms of `do_work` per cycle and requires
+  the mean period to hold between 90 and 110ms with the 29 periods spanning 2.70-3.10s. A control runs the naive
+  `await_sleep(30); await_sleep(100)` loop the card exists to replace and must come out measurably slower per cycle,
+  so the cadence assertion cannot pass vacuously;
+- a slow consumer drops ticks instead of queueing them up: with nobody listening for 300ms at a 40ms interval,
+  `pending` never exceeds 1 while `dropped` reaches 3 or more, ticks only ever move forward, and consecutive
+  receipts jump over whole periods rather than draining them one by one;
+- `->stop` leaves no fiber behind: stopping a ticker whose consumer is parked on a 5s period releases that wait with
+  `undef` promptly and returns the live-fiber count to its pre-run baseline, and the same holds for a ticker stopped
+  before it ever ticked, and for one built outside `run()`.
+
+Feeds Card 7 (`RateLimiter` composes a `Semaphore` with a ticker that `try_up`s tokens) and Card 5's
+`throttle`/`batch_time`, which no longer needs to grow its own drift-free sleep.
 
 Source: #10 - "The Ticker". A `while (1) { do_work(); await_sleep(1000) }` loop drifts - if `do_work()` takes 200ms
 the loop runs every 1200ms. A Ticker compensates by sleeping only the *remainder* of each interval.

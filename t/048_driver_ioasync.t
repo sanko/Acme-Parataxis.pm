@@ -29,7 +29,7 @@ sub socket_pairs ($n) {
     my ( @writers, @waiters );
     for ( 1 .. $n ) {
         my $client = IO::Socket::INET->new( PeerAddr => '127.0.0.1:' . $server->sockport ) or die "connect: $!";
-        my $conn   = $server->accept or die "accept: $!";
+        my $conn   = $server->accept                                                       or die "accept: $!";
         push @writers, $client;
         push @waiters, $conn;
     }
@@ -121,16 +121,18 @@ subtest 'high-volume: hundreds of concurrent await_read wake on loopback' => sub
     my $t0 = time;
     Acme::Parataxis::run(
         sub {
-
             # Park every fiber on its own descriptor first; the writer only fires once all $N watches are armed, so
             # this exercises N descriptors parked at once rather than N reads that were ready from the start.
-            my @fibers = map { my $i = $_; fiber { $got[$i] = await_read( $waiters->[$i], 5000 ) } } 0 .. $N - 1;
+            my @fibers = map {
+                my $i = $_;
+                fiber { $got[$i] = await_read( $waiters->[$i], 5000 ) }
+            } 0 .. $N - 1;
             await_sleep(50);
             syswrite $writers->[$_], 'x' for 0 .. $N - 1;
             $_->await for @fibers;
         }
     );
-    my $ms             = ( time - $t0 ) * 1000;
+    my $ms              = ( time - $t0 ) * 1000;
     my $attached_submit = $submits;
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
@@ -139,6 +141,7 @@ subtest 'high-volume: hundreds of concurrent await_read wake on loopback' => sub
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
 subtest 'the pool-submission counter is live, not vacuous' => sub {
+
     # Same workload shape with no loop attached. If the counter never increments here, the zero above would prove
     # nothing at all, so this is the control that keeps the assertion honest.
     my ( $writers, $waiters ) = socket_pairs(1);

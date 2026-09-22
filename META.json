@@ -166,6 +166,10 @@
       "Acme::Parataxis::Sync::WaitGroup" : {
          "file" : "lib/Acme/Parataxis/Sync/WaitGroup.pm",
          "version" : "v0.1.1"
+      },
+      "Acme::Parataxis::Ticker" : {
+         "file" : "lib/Acme/Parataxis/Ticker.pm",
+         "version" : "v0.1.1"
       }
    },
    "release_status" : "testing",

@@ -407,6 +407,23 @@ async {
 };
 ```
 
+## `Ticker`
+
+[Acme::Parataxis::Ticker](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATicker) is a drift-free interval timer. A `while (1) { do_work(); await_sleep($ms) }` loop runs
+every `$ms` _plus_ however long `do_work` took, so it slides later and later; a `Ticker` measures every period
+against an absolute tick boundary and sleeps only the remainder, so ticks land on the boundary:
+
+```perl
+my $tick = Acme::Parataxis::Ticker->new( interval => 1000 );
+while ( my $t = $tick->wait_next ) { do_work() }    # every 1000ms, whatever do_work costs
+```
+
+A background fiber publishes each tick into a capacity-1 [Acme::Parataxis::Channel](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AChannel) after draining anything
+unread, so at most one tick is ever outstanding and it is always the newest: a slow consumer silently loses whole
+periods instead of queueing a stale backlog. `stop` releases any fiber parked in `wait_next` with `undef`,
+interrupts the ticker fiber, and recalls the sleep job it armed, so a stopped ticker never keeps `run` alive or
+leaves a fiber behind.
+
 # Thread Pool Configuration
 
 `Acme::Parataxis` uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
