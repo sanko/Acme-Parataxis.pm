@@ -19,19 +19,15 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
     # until there is actually something to spend.
     field $rate  : reader : param;
     field $burst : reader : param;
-    field $bucket;      # Semaphore: count is the tokens currently available, always 0 .. $burst
-    field $ticker;      # Card-6 Ticker firing `rate` times a second
+    field $bucket;    # Semaphore: count is the tokens currently available, always 0 .. $burst
+    field $ticker;    # Card-6 Ticker firing `rate` times a second
     field $running = false;
-
     ADJUST {
-        croak 'RateLimiter->new( rate => $per_second ) requires a positive rate'
-            unless defined $rate && $rate > 0;
-        croak 'RateLimiter->new( burst => $n ) requires a positive burst'
-            unless defined $burst && $burst >= 1;
+        croak 'RateLimiter->new( rate => $per_second ) requires a positive rate' unless defined $rate  && $rate > 0;
+        croak 'RateLimiter->new( burst => $n ) requires a positive burst'        unless defined $burst && $burst >= 1;
         $bucket  = Acme::Parataxis::Semaphore->new( count => $burst );
         $ticker  = Acme::Parataxis::Ticker->new( interval => 1000 / $rate );
         $running = true;
-
         Acme::Parataxis::fiber {
             while ($running) {
                 last unless $ticker->wait_next;
@@ -48,7 +44,7 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
         my $fid = Acme::Parataxis->current_fid;
         croak 'acquire() must be called from inside a scheduled fiber' if $fid < 0;
         croak 'acquire($n) requires a positive integer' unless defined $n && $n =~ /\A[1-9][0-9]*\z/;
-        croak 'RateLimiter has been stopped'           unless $running;
+        croak 'RateLimiter has been stopped'            unless $running;
         $bucket->down('RateLimiter acquire') for 1 .. $n;
         1;
     }
@@ -64,14 +60,13 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
         $bucket->adjust($waiting) if $waiting > 0;
         return 1;
     }
-
-    method running () { $running }
+    method running () {$running}
 
     # Tokens currently available to spend (0 .. burst).
     method tokens () { $bucket->count }
 
     # Fibers currently parked waiting for a token.
     method waiters () { scalar $bucket->waiters }
-}
-#
-1;
+    }
+    #
+    1;

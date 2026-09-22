@@ -457,8 +457,8 @@ disturbs fibers that already exist.
 =head2 C<set_max_fibers( $count )>
 
 Sets how many fibers may exist at once. The default is 65536, clamped to a hard internal ceiling of 1048576 so that
-what C<max_fibers> reports is always what the table could really hold. Creating a fiber past the limit croaks with
-"the fiber table is full" until enough fibers finish; values below 1 are ignored.
+what C<max_fibers> reports is always what the table could really hold. Creating a fiber past the limit croaks with "the
+fiber table is full" until enough fibers finish; values below 1 are ignored.
 
     # Allow a hundred thousand fibers
     set_max_fibers(100_000);

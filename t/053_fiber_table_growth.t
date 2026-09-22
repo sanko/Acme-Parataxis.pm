@@ -1,4 +1,3 @@
-
 use v5.40;
 no warnings 'recursion';    # fibers run on separate heap stacks; Perl's C-stack-depth heuristic misfires there
 use blib;
@@ -19,16 +18,17 @@ BEGIN {
 # two independent things: the allocated table, which grows silently, and the limit on how many fibers may exist, which
 # is policy set_max_fibers() may raise or lower at any moment because it is enforced against the slots in use rather
 # than against the array.
-
 my $BASE = Acme::Parataxis::get_live_fiber_count();
-
 sub live () { Acme::Parataxis::get_live_fiber_count() }
 
 # Spawn up to $n fibers parked on a shared signal, stopping at the first croak. Returns the count made and $@.
 sub spawn_parked ( $n, $sig ) {
     my ( $made, $err ) = ( 0, undef );
     for ( 1 .. $n ) {
-        my $ok = eval { fiber { $sig->wait }; 1 };
+        my $ok = eval {
+            fiber { $sig->wait };
+            1;
+        };
         if ( !$ok ) { $err = $@; last }
         $made++;
     }
@@ -40,9 +40,7 @@ sub drain ( $sig, $here ) {
     $sig->broadcast;
     Acme::Parataxis->yield while live() > $here;
 }
-
 my ( $default, $r1, $r2, $r3, $r4 );
-
 async {
     my $here = live();    # this run's fiber, which exists for the whole block below
 
@@ -74,31 +72,25 @@ async {
     $r4 = [ $made4, $err4 ];
     drain( $sig4, $here );
 };
-
 subtest 'the default limit already reaches past the old hard 1024' => sub {
-    cmp_ok $default, '>', 1024,
-        sprintf 'default fiber limit is %d, beyond the 1024 the table used to be compiled to', $default;
+    cmp_ok $default, '>', 1024, sprintf 'default fiber limit is %d, beyond the 1024 the table used to be compiled to', $default;
     is $r1->[0], 1100, 'spawned 1100 fibers unconfigured, where the fixed table croaked at 1024';
     ok !defined $r1->[1], 'and not one of them croaked' or diag "err: $r1->[1]";
     cmp_ok $r1->[2], '>=', 1100, sprintf 'control: all of them were live at once (%d)', $r1->[2];
 };
-
 subtest 'set_max_fibers caps the table exactly, and reports back what it was set to' => sub {
     is $r2->[3], 1300, 'max_fibers() reads back the limit that was set';
     is $r2->[2], 1300, 'and exactly 1300 fibers existed when spawning stopped';
-    is $r2->[0], 1300,
-        sprintf 'spawned exactly that many before the limit refused the next one (%d)', $r2->[0];
+    is $r2->[0], 1300, sprintf 'spawned exactly that many before the limit refused the next one (%d)', $r2->[0];
     like $r2->[1], qr/fiber table is full/, 'with the documented message';
 };
-
 subtest 'the limit is live: lowering it bites immediately, raising it works again' => sub {
     is $r3->[3], 40, 'max_fibers() reads back the lowered limit';
     is $r3->[2], 40, 'and it stopped at 40 even though the table had already been allocated far larger';
     like $r3->[1], qr/fiber table is full/, 'with the same message';
     is $r4->[0], 50, 'raising it again let fibers through with no restart';
-    ok !defined $r4->[1], 'and none of those croaked' or diag "err: $r4->[1]";
+    is $r4->[1], U(), 'and none of those croaked';
 };
-
 is live(), $BASE, 'every fiber these scenarios created was reaped';
 #
 done_testing;

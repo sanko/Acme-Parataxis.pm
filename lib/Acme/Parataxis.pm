@@ -470,7 +470,8 @@ package Acme::Parataxis v0.1.1 {
         }
         @_ = ();
         my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
-        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)' unless $fiber && ref $fiber;
+        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
+            unless $fiber && ref $fiber;
         my $status = $fiber->[F_LAST_STATUS];
         if ( $status == 1 ) {
             my $err = $fiber->[F_ERROR];
