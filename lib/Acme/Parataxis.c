@@ -43,6 +43,21 @@
 #endif
 #endif
 
+/*
+ * Assembly-based coroutine context switching.
+ *
+ * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on every context switch which dominates the
+ * cost of fiber switches. On x86_64 we instead switch with a tiny assembly routine that only saves the callee-saved
+ * registers and the stack pointer, avoiding the syscall entirely. All other platforms keep the portable ucontext path
+ * for now...
+ *
+ * This has to be decided before the includes below: OpenBSD ships no <ucontext.h> at all, so the assembly path must
+ * be able to skip it, and Haiku ships no <sys/syscall.h>.
+ */
+#if defined(__x86_64__) && !defined(_WIN32) && defined(__ELF__)
+#define USE_ASM_CORO 1
+#endif
+
 #define PERL_NO_GET_CONTEXT
 #define NO_XSLOCKS
 #include "EXTERN.h"
@@ -67,21 +82,30 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#ifndef __HAIKU__
 #include <sys/syscall.h>
+#endif
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
+#ifndef USE_ASM_CORO
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <sys/mman.h>
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #endif
 /** @brief Export macro for Unix systems */
 #define DLLEXPORT __attribute__((visibility("default")))
+#ifdef USE_ASM_CORO
+/** @brief Handle for the underlying OS fiber context (only the assembly path's rsp slot is used) */
+typedef void * coro_handle_t;
+#else
 /** @brief Handle for the underlying OS fiber context (ucontext_t) */
 typedef ucontext_t coro_handle_t;
+#endif
 /** @brief Handle for a native OS thread (pthread_t) */
 typedef pthread_t para_thread_t;
 /** @brief Mutex type for queue synchronization (pthread_mutex_t) */
@@ -103,18 +127,6 @@ DLLEXPORT SV * coro_transfer(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
 #ifndef _WIN32
 static void install_stack_guard(void);
-#endif
-
-/*
- * Assembly-based coroutine context switching.
- *
- * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on every context switch which dominates the
- * cost of fiber switches. On x86_64 we instead switch with a tiny assembly routine that only saves the callee-saved
- * registers and the stack pointer, avoiding the syscall entirely. All other platforms keep the portable ucontext path
- * for now...
- */
-#if defined(__x86_64__) && !defined(_WIN32) && defined(__ELF__)
-#define USE_ASM_CORO 1
 #endif
 
 typedef struct para_fiber_t para_fiber_t;
@@ -239,7 +251,8 @@ int get_cpu_count() {
     GetSystemInfo(&sysinfo);
     int count = sysinfo.dwNumberOfProcessors;
     return (count > 0) ? count : 1;
-#elif defined(__APPLE__) || defined(__FreeBSD__)
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+    /* NetBSD and DragonFly never declare _SC_NPROCESSORS_ONLN; hw.ncpu exists on all four of these. */
     int nm[2];
     size_t len = 4;
     uint32_t count;

@@ -126,8 +126,14 @@ my $orig_submit_job = \&Acme::Parataxis::_submit_job;
     no warnings 'redefine';
     *Acme::Parataxis::_submit_job = sub ( $type, $arg, $timeout ) { $submits++; $orig_submit_job->( $type, $arg, $timeout ) };
 }
-subtest 'high-volume: hundreds of concurrent await_read wake on loopback' => sub {
-    my $N = 300;
+
+# Windows: stock Strawberry perl builds without d_poll, so Mojo::Reactor::Poll drives IO::Poll::_poll through its
+# select fallback and that stack stops scaling long before "hundreds". Plain Mojo with no Parataxis involved goes
+# silent at 31 watched descriptors and crashes the interpreter above 128 on perl 5.42.3, while perl's raw select()
+# wakes all 300. Cap the batch at a count the stock stack demonstrably delivers so Windows still runs the whole
+# driver path instead of dying mid-subtest; other platforms keep the full 300.
+my $N = $^O eq 'MSWin32' ? 24 : 300;
+subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     Acme::Parataxis->attach_loop( Mojo::IOLoop->new );
     $submits = 0;
