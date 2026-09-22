@@ -1,0 +1,145 @@
+
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::RateLimiter - A token-bucket rate limiter for fibers
+
+=head1 SYNOPSIS
+
+    use Acme::Parataxis;
+    use Acme::Parataxis::RateLimiter;
+
+    my $rl = Acme::Parataxis::RateLimiter->new( rate => 5, burst => 10 );
+
+    async {
+        my @jobs = map {
+            fiber { $rl->acquire(1); fetch_url(...) }
+        } 1 .. 1000;
+        $_->await for @jobs;
+        $rl->stop;
+    };
+
+=head1 DESCRIPTION
+
+An app-wide speed limit for anything that talks to a rate-limited service. The limiter is a token bucket: it starts
+holding C<burst> tokens, every request spends one, and a background refill puts tokens back at C<rate> per second up
+to the ceiling. When the bucket runs dry, C<acquire> parks the calling fiber and hands it a token the moment one
+comes free.
+
+The bucket is an ordinary L<Acme::Parataxis::Semaphore>, so C<acquire> is a plain C<down>. That is the whole point of
+building it this way: the park already goes through the scheduler's usual path, which means a blocked acquire is
+interruptible by C<with_timeout> and cancellation tokens, unregisters itself from the bucket when interrupted, and
+never busy-waits.
+
+Refills are driven by a Card-6 L<Acme::Parataxis::Ticker> firing C<rate> times a second, so each tick returns
+exactly one token and only while the bucket sits below its ceiling. Nothing accumulates while the limiter is idle,
+and a busy limiter hands out tokens at a steady C<rate> forever.
+
+=head1 BURST VS. STRICT RATE
+
+C<burst> is the knob that decides how C<smooth> the traffic looks, and it is worth choosing deliberately.
+
+With C<burst = 1> the limiter is strict: requests are spaced evenly, one every C<1 / rate> seconds, and even the very
+first request waits its turn. That is the gentlest possible shape for whatever is on the other end, but the first
+request pays a full period of latency for no reason.
+
+With C<burst = B> the first C<B> requests go through immediately and the limiter then settles to exactly C<rate> per
+second. You trade a lump of load at the front for latency that is zero while there is headroom. The guarantee over
+any window is unchanged: no more than
+
+    rate x (window seconds) + burst
+
+requests get through, so a larger C<burst> never raises the long-run average - it only decides how much of it can
+arrive at once.
+
+Practical guidance: set C<burst> to the concurrency spike you actually want to absorb (a batch of 50 parallel fetches
+should not queue for 50 periods if you are willing to send 50 at once), but keep in mind that most rate-limited APIs
+enforce a burst limit of their own alongside their rate limit. A C<burst> far above what the service documents buys
+you nothing but a burst of 429s. When in doubt, C<burst = 1> or a small multiple of your fan-out is the safe shape.
+
+=head1 CONSTRUCTOR
+
+=head2 C<new( rate => $n, burst => $m )>
+
+    my $rl = Acme::Parataxis::RateLimiter->new( rate => 5, burst => 10 );
+
+Creates a limiter that allows C<$n> acquisitions per second with a bucket that holds up to C<$m>. C<rate> must be
+positive and C<burst> must be a positive integer; anything else croaks.
+
+Construction starts two background fibers (the ticker and the refill loop), so call C<stop> when you are finished.
+
+=head1 METHODS
+
+=head2 C<acquire( $n = 1 )>
+
+    $rl->acquire(1);
+    $rl->acquire(5);            # five tokens, one after another
+
+Takes C<$n> tokens (default 1), parking the calling fiber while the bucket cannot cover them and resuming as refills
+arrive. Returns true on success. Must be called from inside a scheduled fiber; C<$n> must be a positive integer.
+
+Because this parks through the ordinary wait path, an enclosing C<with_timeout> or a cancellation token interrupts it
+cleanly and the interrupted waiter removes itself from the bucket, so a later refill never wakes a fiber that no
+longer wants the token.
+
+Tokens taken by an acquire that is then interrupted are simply spent. They are not returned to the bucket, but the
+bucket refills on a wall-clock schedule regardless, so it recovers on its own within one period.
+
+Croaks if the limiter has been stopped.
+
+=head2 C<stop()>
+
+    $rl->stop;
+
+Halts refills. Every fiber already parked in C<acquire> is let through rather than left stranded, so a shutdown can
+never wedge the run; a later C<acquire> croaks instead of parking forever with nobody left to refill. Idempotent, and
+safe from inside or outside a fiber.
+
+=head2 C<tokens()>
+
+    $rl->tokens;     # 0 .. burst
+
+Tokens currently available to spend.
+
+=head2 C<waiters()>
+
+    $rl->waiters;
+
+Fibers currently parked waiting for a token. Introspection, chiefly useful in tests.
+
+=head2 C<running()>
+
+    $rl->running;    # true until stop()
+
+True while the limiter is still refilling.
+
+=head2 C<rate()>
+
+    $rl->rate;       # acquisitions per second
+
+=head2 C<burst()>
+
+    $rl->burst;      # bucket size
+
+The values the limiter was constructed with.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis>, L<Acme::Parataxis::Ticker>, L<Acme::Parataxis::Semaphore>,
+L<Acme::Parataxis::CancellationToken>
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

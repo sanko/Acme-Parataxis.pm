@@ -424,6 +424,30 @@ periods instead of queueing a stale backlog. `stop` releases any fiber parked in
 interrupts the ticker fiber, and recalls the sleep job it armed, so a stopped ticker never keeps `run` alive or
 leaves a fiber behind.
 
+## `RateLimiter`
+
+[Acme::Parataxis::RateLimiter](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ARateLimiter) is a token bucket for
+apps that hit rate-limited APIs. The bucket starts holding `burst` tokens, every request spends one, and a background
+refill puts tokens back at `rate` per second; when the bucket runs dry, `acquire` parks the calling fiber and hands it
+a token the moment one comes free:
+
+```perl
+my $rl = Acme::Parataxis::RateLimiter->new( rate => 5, burst => 10 );
+for ( 1 .. 1000 ) { fiber { $rl->acquire(1); fetch_url(...) } }
+```
+
+The bucket is an ordinary [Acme::Parataxis::Semaphore](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASemaphore), so
+`acquire` is a plain `down` and inherits the scheduler's whole park path for free: a blocked acquire is interruptible
+by `with_timeout` and cancellation tokens, unregisters itself when interrupted, and never busy-waits. Refills come
+from a `Ticker` firing `rate` times a second, each tick returning exactly one token and only while the bucket sits
+below its ceiling, so nothing accumulates while the limiter sits idle.
+
+`burst` decides how smooth the traffic looks. With `burst = 1` requests are spaced strictly evenly and even the first
+one waits its turn; a larger `burst` lets the first `burst` requests through immediately before the limiter settles
+to exactly `rate` per second. Over any window no more than `rate x window + burst` requests get through, so a bigger
+`burst` never raises the long-run average - it only decides how much of it can arrive at once. See the perldoc's
+`BURST VS. STRICT RATE` section for how to choose it.
+
 # Thread Pool Configuration
 
 `Acme::Parataxis` uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can

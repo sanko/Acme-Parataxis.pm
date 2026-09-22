@@ -80,6 +80,9 @@ provides:
   Acme::Parataxis::Nursery:
     file: lib/Acme/Parataxis/Nursery.pm
     version: v0.1.1
+  Acme::Parataxis::RateLimiter:
+    file: lib/Acme/Parataxis/RateLimiter.pm
+    version: v0.1.1
   Acme::Parataxis::Semaphore:
     file: lib/Acme/Parataxis/Semaphore.pm
     version: v0.1.1

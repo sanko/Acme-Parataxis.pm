@@ -26,7 +26,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
-| Token-bucket `RateLimiter` (#10)                          | [ ] pending   | Card 7 |
+| Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [ ] pending   | Card 8 |
 | Full park-site backtrace - `dump_fibers` depth (#7)       | [ ] pending   | Card 9 |
 
@@ -309,7 +309,35 @@ Acceptance (t/0XX):
 - `->stop`/abandon leaves no worker or fiber behind (live-fiber baseline).
 
 
-### 7 RateLimiter (token bucket)
+### 7 RateLimiter (token bucket) - done
+
+**Shipped:** `lib/Acme/Parataxis/RateLimiter.pm` + `RateLimiter.pod`, tested by t/051 (5 subtests). All four
+acceptance bullets below are covered:
+
+- thousands of concurrent `acquire` never exceed `rate x wall-time + burst` against a real clock: t/051 saturates the
+  fiber table with 800 workers and has each acquire three times, giving 2400 acquisitions contending for one bucket at
+  `rate => 1000, burst => 100` (`MAX_FIBERS` is a hard 1024 in `Parataxis.c`, so live fibers cannot reach 2000 - the
+  thousands come from workers acquiring again as tokens refill). Every timestamp is checked against the bound: the
+  request numbered `k` may not have completed before `(k - burst)/rate`. Not one of the 2400 beat it, the measured
+  worst overshoot being 0.0ms, while the run still cost at least the theoretical 2.30s and finished near the
+  requested rate instead of stalling;
+- acquires park when the bucket is empty and resume as tokens refill, with no busy-wait: after spending the lone
+  `burst => 1` token, the next `acquire` is shown parked with `waiters == 1` and `dump_fibers` reporting state
+  `WAITING` and the reason `RateLimiter acquire` - a spinning fiber would instead show `RUNNABLE` or `RUNNING` - and
+  it does not complete until the ~100ms refill lands, then leaves the waiter list;
+- a deadline interrupts a parked `acquire` and the waiter unregisters: `with_timeout(80, sub { $rl->acquire })` on an
+  empty bucket throws `Acme::Parataxis::Error::Timeout`, `waiters` drops from 1 back to 0 so no later refill can wake
+  a fiber that no longer wants a token, and the bucket still hands out tokens afterwards;
+- documents the burst-vs-strict-rate tradeoff: t/051 pairs a behavioural check (20 `burst` tokens are spent back to
+  back with no wait between them, then 5 more at `rate => 50` cost at least 4 refill periods, so the burst really is
+  instant while the sustained rate really is `rate`) with a read of `RateLimiter.pod` requiring a
+  `BURST VS. STRICT RATE` section, so the documentation cannot be dropped without failing the suite.
+
+**Composition:** the bucket is a plain `Semaphore` sized to `burst`, and a Card-6 `Ticker` firing `rate` times a second
+refills exactly one token per tick while the bucket sits below its ceiling. That is what keeps `acquire` a plain
+`down`: the park path, cancellation and unregister-on-interrupt all come with it rather than being reimplemented.
+`stop()` halts refills and lets a parked acquirer through rather than stranding it, while a later `acquire` croaks
+instead of parking forever with nobody left to refill.
 
 Source: #10 - "The Rate Limiter (Token Bucket)". Apps that hit rate-limited APIs need an app-wide speed limit.
 
