@@ -27,7 +27,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Async Streams - FRP over channels (#9)                    | [x] done      | Card 5 - `Stream`, t/057 |
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
 | Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
-| Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [ ] pending   | Card 8 |
+| Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [x] done      | Card 8 - `Compat`, t/058 |
 | Full park-site backtrace - `dump_fibers` depth (#7)       | [ ] pending   | Card 9 |
 
 ## Carried over from the previous roadmap
@@ -396,26 +396,45 @@ Acceptance (t/0XX):
 - documents the burst-vs-strict-rate tradeoff.
 
 
-### 8 Transparent unblocking (CORE::GLOBAL overrides)
+### 8 Transparent unblocking (CORE::GLOBAL overrides) - done
+
+**Shipped:** `lib/Acme/Parataxis/Compat.pm` + `Compat.pod`, plus `enable_transparent_unblocking` /
+`disable_transparent_unblocking` / `transparent_unblocking` on `Acme::Parataxis`, tested by t/058 (8 subtests). All
+three acceptance bullets below are covered:
+
+- `sleep` inside a fiber yields: t/058 runs a fiber doing `sleep 0.05` beside a sibling fiber ticking counters and
+  requires the sleeper to come back after ~0.05s with the sibling having made progress, and the implicit `$_`
+  argument form is covered too;
+- `CORE::sleep` and the raw builtins are unchanged outside the scheduler: at the top level `sleep 0.05` truncates
+  and returns immediately, top-level `read`/`sysread` fill their caller buffers, and after
+  `disable_transparent_unblocking` a freshly compiled `sleep 0.05` shows the truncated-integer CORE:: result;
+- documented coverage and non-coverage: `sleep`, `read`, `sysread` are covered - `read`/`sysread` park the fiber on
+  `await_read` readiness and perform one real read, and the overrides are deliberately unprototyped because the
+  compiler passes the builtin's second argument BY VALUE to a prototyped `CORE::GLOBAL` override (so the result is
+  written back through the aliased slot). `select`, `alarm`, `time`, `DBI` (C-level), and other threads are not
+  covered: `CORE::GLOBAL` is a per-interpreter mechanism, so a spawned thread starts with unmodified builtins, and a
+  read on a handle select() cannot watch (a regular file, a pipe) falls back to the raw builtin instead of spinning.
 
 Source: #10 - "Gevent-style Transparent Unblocking". Intercept blocking builtins so existing synchronous CPAN
 modules (`LWP::UserAgent`, `DBI`) become cooperative without rewrites. `sleep 5` → `await_sleep(5000)`; `read` →
 readiness-framed reads.
 
-Design notes:
+Design notes (as shipped):
 
-- Opt-in only - a separate module (`Acme::Parataxis::Compat`?) or an import flag, and/or gated on
-  `$ENV{PARATAXIS_TRANSPARENT}`. Never default (dark magic).
-- Mechanism per the article: `CORE::GLOBAL::sleep`/`read`/`sysread`... prototypes, delegating to `CORE::` when NOT
-  inside a scheduled fiber (top level, worker threads) so nothing outside the scheduler changes.
-- Set honest expectations per builtin: `sleep` maps to `await_sleep`; `read`/`sysread` need an `await_read`-framed
-  loop; `DBI` is mostly C and will stay blocking.
+- Opt-in only, via an explicit class method: `Acme::Parataxis->enable_transparent_unblocking()` (no import flag, no
+  env). Never default (dark magic) - `disable_transparent_unblocking`/`transparent_unblocking` manage/report it.
+- Mechanism per the article: `CORE::GLOBAL::sleep`/`read`/`sysread`, delegating to `CORE::` when NOT inside a
+  scheduled fiber (top level, other interpreters) so nothing outside the scheduler changes; installs happen at
+  compile time, so code must be compiled after the call to be affected (install in `BEGIN`).
+- Honest expectations per builtin: `sleep` maps to `await_sleep` (ms-accurate, returns the requested duration);
+  `read`/`sysread` are `await_read`-framed loops that fall back to the raw builtin for handles select() cannot
+  watch; `DBI` is mostly C and stays blocking.
 
-Acceptance (t/0XX):
+Acceptance (now t/058):
 
 - `sleep` inside a fiber yields: two fibers, one blocked in a legacy module's `sleep`, the other makes progress;
 - `CORE::sleep` and the raw builtins are unchanged outside the scheduler;
-- no interception on worker threads; docs list which builtins are covered and which are not.
+- no interception on other threads; docs list which builtins are covered and which are not.
 
 
 ### 9 Diagnostics depth (full park-site backtraces)

@@ -787,6 +787,35 @@ C<batch>/C<batch_time> both emit a partial final batch on shutdown. Every stage 
 wait machinery, so C<with_timeout> and cancellation tokens interrupt a stage mid-loop cleanly. See
 L<Acme::Parataxis::Stream> for the full method list.
 
+=head2 Transparent Unblocking
+
+L<Acme::Parataxis::Compat> is the gevent-style escape hatch for legacy, synchronous
+code: it overrides the blocking builtins so existing loops and modules become
+cooperative without rewrites. It is opt-in dark magic - nothing is overridden unless
+you ask for it, and even then only code I<compiled after> the call is affected; the
+overrides delegate to the raw C<CORE::> builtin everywhere outside the scheduler.
+
+    use v5.40;
+    use blib;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Compat;
+
+    BEGIN { Acme::Parataxis->enable_transparent_unblocking(); }   # opt in, in BEGIN
+
+    async {
+        my $f1 = fiber { sleep 0.05 };      # cooperative: yields, does not park the thread
+        my $f2 = fiber { my $b = ""; read( $sock, $b, 4 ) };    # framed on await_read
+        $f1->await;
+        $f2->await;
+    };
+
+C<sleep> maps to C<await_sleep> (millisecond-accurate, fractional seconds included);
+C<read> and C<sysread> park on C<await_read> until the handle is readable, then
+perform one real read, falling back to the raw builtin for handles the readiness
+probe cannot watch (regular files answer instantly). C<disable_transparent_unblocking>
+and C<transparent_unblocking()> manage and report the install. Not covered:
+C<select>, C<alarm>, C<time>, and C<DBI> - see L<Acme::Parataxis::Compat>.
+
 =head2 Signals
 
 An object with a two-state flag and a FIFO queue of waiters. A fiber parked in C<wait> does not busy-wait; it is

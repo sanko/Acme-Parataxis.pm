@@ -82,6 +82,10 @@
          "file" : "lib/Acme/Parataxis/Channel.pm",
          "version" : "v0.1.1"
       },
+      "Acme::Parataxis::Compat" : {
+         "file" : "lib/Acme/Parataxis/Compat.pm",
+         "version" : "v0.1.1"
+      },
       "Acme::Parataxis::Driver" : {
          "file" : "lib/Acme/Parataxis/Driver.pm",
          "version" : "v0.1.1"

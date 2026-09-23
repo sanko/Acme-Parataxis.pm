@@ -1,0 +1,95 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Compat - Make blocking builtins cooperate (transparent unblocking)
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use blib;
+    use Acme::Parataxis qw[async fiber];
+    use Acme::Parataxis::Compat;
+
+    BEGIN { Acme::Parataxis->enable_transparent_unblocking(); }   # opt in, per process
+
+    async {
+        my $fh = IO::Socket::INET->new( PeerAddr => '127.0.0.1:80' );
+        my $f1 = fiber { sleep 0.05; say 'f1: woke up' };       # sleep is now cooperative
+        my $f2 = fiber { print "f2: reading...\n"; my $buf = ""; read( $fh, $buf, 4 ) };
+        $f1->await;
+        $f2->await;
+    };
+
+=head1 DESCRIPTION
+
+C<Acme::Parataxis::Compat> installs C<CORE::GLOBAL> overrides for the blocking
+builtins so that legacy synchronous code becomes cooperative without rewrites, the
+way gevent monkey-patches Python. It is opt-in dark magic and never the default.
+
+Nothing changes unless you call C<< Acme::Parataxis->enable_transparent_unblocking() >>.
+And even then, the overrides apply only to code I<compiled after installation> - every
+override delegates to the raw C<CORE::> builtin outside the scheduler (top level,
+worker threads), so programs that never call it, and regions of a program compiled
+before it, behave exactly as before.
+
+=head1 COVERAGE
+
+=over 4
+
+=item * C<sleep> - covered.
+
+Maps to C<await_sleep> at millisecond precision (CORE::sleep truncates fractional
+seconds away); inside a fiber the return value is the requested duration, fractional
+or not, and the fiber yields while it waits. Outside the scheduler it delegates to
+CORE::sleep unchanged.
+
+=item * C<read> - covered.
+
+An C<await_read>-framed loop: the read parks the fiber until the scheduler reports
+the handle readable, then performs one blocking C<read>. A handle the readiness
+probe cannot watch (a regular file, a pipe) falls back to the raw builtin, which
+regular files answer instantly.
+
+=item * C<sysread> - covered.
+
+Framed exactly like C<read>.
+
+=item * Everything else - not covered.
+
+C<select>, C<alarm>, C<time> and friends still mean what Perl means; any net
+readiness should use C<await_read>/C<await_write> explicitly. C<DBI> is mostly C
+and stays blocking - use an I/O driver or a worker thread for it.
+
+=back
+
+=head1 CAVEATS
+
+=over 4
+
+=item * Compile-time, per interpreter
+
+The C<CORE::GLOBAL> mechanism is resolved when each piece of code is compiled, so
+code is only affected if it is compiled after installation - a separate
+interpreter (a spawned thread) starts with unmodified builtins. Install in
+C<BEGIN> (after your C<use> lines) to cover the whole file.
+
+=item * Buffered vs careful reads
+
+C<read> on a C<PerlIO>-buffered handle reads whatever is already buffered when the
+scheduler reports readiness and returns a count possibly smaller than requested,
+exactly like a raw blocking C<read>.
+
+=item * Never surprising when disabled
+
+C<disable_transparent_unblocking> restores the saved globs; only freshly compiled
+code observes the restore, since earlier call sites were already compiled against
+the override.
+
+=back
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis>

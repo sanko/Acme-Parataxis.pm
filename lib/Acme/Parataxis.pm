@@ -564,6 +564,35 @@ package Acme::Parataxis v0.1.1 {
         return $DRIVER;
     }
 
+    # -- Card 8 transparent unblocking (CORE::GLOBAL overrides). Opt-in only: never
+    # -- installed by default. enable_transparent_unblocking() makes sleep/read/sysread
+    # -- cooperative inside scheduled fibers (sleep -> await_sleep, read/sysread framed
+    # -- on await_read) and delegates to the raw builtin outside one, so synchronous
+    # -- CPAN modules become cooperative once they are compiled after installation.
+    # -- Full coverage table and caveats live in Acme::Parataxis::Compat.
+    sub enable_transparent_unblocking {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        require Acme::Parataxis::Compat;
+        Acme::Parataxis::Compat->install;
+        return 1;
+    }
+
+    sub disable_transparent_unblocking {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        require Acme::Parataxis::Compat;
+        Acme::Parataxis::Compat->disable;
+        return 1;
+    }
+
+    sub transparent_unblocking {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        return 0 unless $INC{'Acme/Parataxis/Compat.pm'};
+        return Acme::Parataxis::Compat->installed ? 1 : 0;
+    }
+
     sub _driver_sleep ( $driver, $ms ) {
         my $fid = Acme::Parataxis->current_fid;
         croak 'await_sleep() must be called from inside a scheduled fiber' if $fid < 0;
