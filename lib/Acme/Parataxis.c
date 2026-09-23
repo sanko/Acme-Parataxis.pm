@@ -523,6 +523,9 @@ static size_t fiber_guard_sz;
  * and FreeBSD map it with MAP_NORESERVE, which makes a large reservation free. macOS has no MAP_NORESERVE, so every
  * anonymous mapping counts against the process memory budget at full size but a 64 MB stack times a tableful of fibers
  * gets the process SIGKILLed on Apple Silicon. For macOS we use a small reservation instead (depth - 20000).
+ * OpenBSD defines MAP_NORESERVE as 0 too, so it also gets an 8 MiB reservation; its RLIMIT_DATA counts every
+ * anonymous mmap at full size and the fiber-budget probe clamps the limit to fit. DragonFly has no MAP_NORESERVE
+ * either but charges only brk/sbrk to RLIMIT_DATA, so 8 MiB is safe there too.
  *
  * Perl recursion fits in a ~1 MB OS fiber on Windows, so 8 MB leaves ample headroom even in a DEBUGGING build. The
  * bottom fiber_guard_sz bytes are PROT_NONE; hitting them means genuine >FIBER_STACK_SZ C-stack usage, which the
@@ -535,7 +538,7 @@ static size_t fiber_guard_sz;
 #define FIBER_STACK_SZ   (8 * 1024 * 1024)
 #define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_STACK)
 #else
-#ifdef MAP_NORESERVE
+#if defined(MAP_NORESERVE) && MAP_NORESERVE != 0
 #define FIBER_STACK_SZ   (64 * 1024 * 1024)
 #define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_STACK)
 #else
@@ -2212,8 +2215,9 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
  * @brief Allocates a fiber stack backed by a lazily-committed mmap mapping.
  *
  * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it. The mapping uses FIBER_MMAP_FLAGS:
- * MAP_NORESERVE where the platform has it (Linux, FreeBSD), so a 64 MB reservation is free until touched, and a small
- * FIBER_STACK_SZ where it does not (macOS), so a tableful of fibers stays under the process memory budget. No
+ * MAP_NORESERVE as a real flag (Linux, FreeBSD), so a 64 MB reservation is free until touched, and a small
+ * FIBER_STACK_SZ where it is missing or a 0-valued legacy no-op (macOS, OpenBSD), so a tableful of fibers stays
+ * under the process memory budget. No
  * physical pages are consumed until they are used.
  *
  * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
@@ -2575,17 +2579,20 @@ static void install_note(const char * stage, int err) {
 /**
  * @brief Right-sizes the default fiber limit to the platform's anonymous-memory budget.
  *
- * Every fiber reserves FIBER_STACK_SZ plus one guard page of anonymous memory. Where MAP_NORESERVE exists (Linux,
- * FreeBSD, DragonFly) that mapping is a free reservation, and RLIMIT_DATA is usually unlimited anyway, so this is a
- * no-op. OpenBSD deliberately has no MAP_NORESERVE and its RLIMIT_DATA counts every anonymous mmap at full size, so
- * the generous DEFAULT_FIBER_LIMIT would let the very first big spawn explode the process budget; the failing mmap
- * then surfaces as a confusing table-full message. The probe raises the soft limit to the hard limit when permitted
- * and clamps max_fibers to the number of stacks that actually fit, leaving four frames of headroom for perl, the
- * tables, the worker pool and the crash-report alt stack.
+ * Every fiber reserves FIBER_STACK_SZ plus one guard page of anonymous memory. Where MAP_NORESERVE is a real flag
+ * (Linux, FreeBSD) the mapping is a free reservation and RLIMIT_DATA does not count it, so this is a no-op. OpenBSD
+ * defines MAP_NORESERVE as 0, a legacy no-op the preprocessor sees but that reserves nothing, and its RLIMIT_DATA
+ * counts every anonymous mmap at full size, so the generous DEFAULT_FIBER_LIMIT would let the very first big spawn
+ * explode the process budget; the failing mmap then surfaces as a confusing table-full message. DragonFly has no
+ * MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The probe raises the soft limit
+ * to the hard limit when permitted and clamps max_fibers to the number of stacks that actually fit, leaving four
+ * frames of headroom for perl, the tables, the worker pool and the crash-report alt stack. Keying on the
+ * MAP_NORESERVE macro itself would compile this OUT on OpenBSD (defined as 0) and IN on DragonFly (undefined), the
+ * exact inversion of the intent, so the guard names __OpenBSD__ directly.
  */
 static void probe_fiber_budget(void) {
 #ifndef _WIN32
-#ifndef MAP_NORESERVE
+#if defined(__OpenBSD__)
     struct rlimit rl;
     if (getrlimit(RLIMIT_DATA, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY)
         return;
