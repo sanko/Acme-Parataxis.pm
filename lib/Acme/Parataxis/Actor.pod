@@ -92,9 +92,9 @@ The fiber id of the actor's dedicated fiber.
 
 =head2 C<on_death( $cb )>
 
-Registers C<$cb>, a C<CODE> ref, and returns C<$self>. It fires exactly once when the actor is gone, as
-C<$cb-E<gt>( $actor, $error )>, where C<$error> is whatever killed it or C<undef> for a graceful stop. An actor that
-is already done calls back immediately, so a watcher never has to check first. This is how an
+Registers C<$cb>, a C<CODE> ref, and returns C<$self>. It fires exactly once when the actor is gone, as C<$cb-E<gt>(
+$actor, $error )>, where C<$error> is whatever killed it or C<undef> for a graceful stop. An actor that is already done
+calls back immediately, so a watcher never has to check first. This is how an
 L<Acme::Parataxis::Supervisor|Acme::Parataxis::Supervisor> learns a supervised child died. Croaks if C<$cb> is not a
 code ref.
 
@@ -111,7 +111,8 @@ C<supervisor-E<gt>child($name)> returns a different actor after a restart.
 
 =head1 SEE ALSO
 
-L<Acme::Parataxis>, L<Acme::Parataxis::Supervisor>, L<Acme::Parataxis::Channel>, L<Acme::Parataxis::Future>, L<Acme::Parataxis::Generator>
+L<Acme::Parataxis>, L<Acme::Parataxis::Supervisor>, L<Acme::Parataxis::Channel>, L<Acme::Parataxis::Future>,
+L<Acme::Parataxis::Generator>
 
 =head1 AUTHOR
 

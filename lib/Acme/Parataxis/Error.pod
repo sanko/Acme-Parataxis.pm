@@ -45,16 +45,16 @@ unchanged.
 
 =head2 Acme::Parataxis::Error::Nursery
 
-Kind C<'nursery'>. Thrown by L<Acme::Parataxis::Nursery> when one or more children died: C<-E<gt>failures> lists
-every child error in spawn order, C<-E<gt>primary> the first natural (non-cancelled) one. Also see
+Kind C<'nursery'>. Thrown by L<Acme::Parataxis::Nursery> when one or more children died: C<-E<gt>failures> lists every
+child error in spawn order, C<-E<gt>primary> the first natural (non-cancelled) one. Also see
 L<Acme::Parataxis::Nursery>.
 
 =head2 Acme::Parataxis::Error::Supervisor
 
 Kind C<'supervisor'>. Thrown by L<Acme::Parataxis::Supervisor>'s C<run> when a supervised tree exhausts its restart
-budget, after the tree has already been torn down. C<-E<gt>failures> lists every death that counted against the
-budget in the order it happened, C<-E<gt>primary> is the one that blew it, and C<-E<gt>child> names that child.
-Neither C<wait_reason> nor C<seconds> applies to it.
+budget, after the tree has already been torn down. C<-E<gt>failures> lists every death that counted against the budget
+in the order it happened, C<-E<gt>primary> is the one that blew it, and C<-E<gt>child> names that child. Neither
+C<wait_reason> nor C<seconds> applies to it.
 
 =head1 METHODS
 
@@ -77,8 +77,8 @@ C<Error::Timeout> only: the bound, in seconds, of the wait whose deadline fired.
 
 =head2 C<failures( )>
 
-C<Error::Nursery> and C<Error::Supervisor> only: every failure that counted, in the order it happened, as a list
-(the aggregate is also stringifiable).
+C<Error::Nursery> and C<Error::Supervisor> only: every failure that counted, in the order it happened, as a list (the
+aggregate is also stringifiable).
 
 =head2 C<primary( )>
 

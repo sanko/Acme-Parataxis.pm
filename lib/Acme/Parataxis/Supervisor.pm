@@ -10,7 +10,7 @@ use feature 'class';
 # machinery: one supervision fiber owns the tree and learns a child died through that child's own
 # teardown (an actor's on_death hook, or a wrapper fiber around a nested supervisor's run).
 class Acme::Parataxis::Supervisor v0.1.1 {
-    use Acme::Parataxis        qw[fiber];
+    use Acme::Parataxis qw[fiber];
     use Acme::Parataxis::Channel;
     use Acme::Parataxis::Error;
     use Scalar::Util qw[blessed];
@@ -40,18 +40,14 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     # Where dying instances report [ $child, $token, $err ]. Oversized so a report can never park a
     # fiber that is in the middle of tearing itself down.
     field $deaths;
-
     field $running  = false;
     field $stopping = false;
     field $started  = false;
-
     ADJUST {
         croak "Supervisor->new: strategy must be OneForOne, OneForAll or RestForOne (got '$strategy')"
             unless defined $strategy && ( $strategy eq 'OneForOne' || $strategy eq 'OneForAll' || $strategy eq 'RestForOne' );
-        croak 'Supervisor->new: max_restarts must be a non-negative integer'
-            unless defined $max_restarts && $max_restarts =~ /\A\d+\z/;
-        croak 'Supervisor->new: within must be a non-negative number of seconds'
-            unless defined $within && $within >= 0;
+        croak 'Supervisor->new: max_restarts must be a non-negative integer'     unless defined $max_restarts && $max_restarts =~ /\A\d+\z/;
+        croak 'Supervisor->new: within must be a non-negative number of seconds' unless defined $within       && $within >= 0;
         $deaths = Acme::Parataxis::Channel->new( capacity => 4096 );
     }
 
@@ -62,16 +58,15 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     method supervise ( $thing, %opts ) {
         croak 'Supervisor->supervise() may not add children once run() has started' if $started;
         croak 'Supervisor->supervise() requires an Acme::Parataxis::Actor, an Acme::Parataxis::Supervisor, or a CODE ref factory'
-            unless ref $thing eq 'CODE'
-            || ( blessed($thing) && ( $thing->isa('Acme::Parataxis::Actor') || $thing->isa('Acme::Parataxis::Supervisor') ) );
+            unless ref $thing eq 'CODE' ||
+            ( blessed($thing) && ( $thing->isa('Acme::Parataxis::Actor') || $thing->isa('Acme::Parataxis::Supervisor') ) );
         my $unknown = join ', ', grep { $_ ne 'name' } sort keys %opts;
         croak "Supervisor->supervise(): unknown options: $unknown" if length $unknown;
         my $name = defined $opts{name} ? $opts{name} : 'child_' . ( scalar(@children) + 1 );
-        croak 'Supervisor->supervise(): name must be a non-empty string' if ref $name || !defined $name || $name eq '';
-        croak "Supervisor->supervise(): a child named '$name' is already supervised"
-            if grep { $_->{name} eq $name } @children;
-
+        croak 'Supervisor->supervise(): name must be a non-empty string'             if ref $name || !defined $name || $name eq '';
+        croak "Supervisor->supervise(): a child named '$name' is already supervised" if grep { $_->{name} eq $name } @children;
         my ( $factory, $initial );
+
         if ( ref $thing eq 'CODE' ) {
             $factory = $thing;
         }
@@ -83,8 +78,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             $factory = sub { $thing->respawn };
             $initial = $thing;
         }
-        push @specs,   [ $thing, %opts ];
-        push @children, {
+        push @specs, [ $thing, %opts ];
+        push @children,
+            {
             name     => $name,
             factory  => $factory,
             initial  => $initial,
@@ -93,7 +89,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             pending  => 0,
             restarts => 0,
             index    => scalar @children,
-        };
+            };
         return $self;
     }
 
@@ -119,8 +115,8 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     # of the tree outlives it.
     method run () {
         croak 'Supervisor->run() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
-        croak 'Supervisor->run() requires at least one supervised child'      unless @children;
-        croak 'Supervisor->run() may only be called once'                      if $started;
+        croak 'Supervisor->run() requires at least one supervised child' unless @children;
+        croak 'Supervisor->run() may only be called once' if $started;
         $started = $running = true;
         my $ok  = eval { $self->_supervise_loop; 1 };
         my $err = $@;
@@ -171,7 +167,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         while ( !$stopping ) {
             my $ev = $deaths->get;
             last if $stopping;
-            next if @$ev == 1;    # wake marker from a stop() already seen above
+            next if @$ev == 1;                # wake marker from a stop() already seen above
             my ( $child, $token, $err ) = @$ev;
             next unless ref $child eq 'HASH' && defined $child->{token} && $child->{token} == $token;
 
@@ -180,8 +176,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             # the token it was started with, which no longer matches.
             $child->{pending} = 0;
             my $reason = defined $err ? $err : "child '$child->{name}' exited cleanly";
-
-            my $now = time;
+            my $now    = time;
             @budget = grep { $now - $_->[0] < $within } @budget;    # within => 0 keeps nothing: the budget never trips
             if ( @budget >= $max_restarts ) {
                 my @failures = ( ( map { $_->[2] } @budget ), $reason );
@@ -202,11 +197,8 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     # Which children a death of $dead drags down with it, in start order. Restarting in start
     # order keeps RestForOne's suffix (and OneForAll's set) coming back up the way it went down.
     method _apply_strategy ($dead) {
-        my @set = grep {
-                $strategy eq 'OneForOne' ? $_ == $dead
-              : $strategy eq 'OneForAll' ? 1
-              :                            $_->{index} >= $dead->{index}
-        } sort { $a->{index} <=> $b->{index} } @children;
+        my @set = grep { $strategy eq 'OneForOne' ? $_ == $dead : $strategy eq 'OneForAll' ? 1 : $_->{index} >= $dead->{index} }
+            sort { $a->{index} <=> $b->{index} } @children;
         $self->_restart_child($_) for @set;
         return;
     }
@@ -234,15 +226,16 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         # a nested supervisor already built); every start after that goes through the factory, which
         # is what makes a restart a fresh instance instead of a second run of a dead one.
         if ( defined $child->{initial} ) { ( $inst, $ok ) = ( delete $child->{initial}, 1 ) }
-        else                             { $ok = eval { $inst = $child->{factory}->(); 1 }; $err = $@ unless $ok }
+        else {
+            $ok  = eval { $inst = $child->{factory}->(); 1 };
+            $err = $@ unless $ok;
+        }
         croak "Supervisor child '$child->{name}' factory must return an Acme::Parataxis::Actor or an Acme::Parataxis::Supervisor"
             if $ok && ( !blessed($inst) || ( !$inst->isa('Acme::Parataxis::Actor') && !$inst->isa('Acme::Parataxis::Supervisor') ) );
-
         my $token = [];
-        $child->{token}   = $token;
+        $child->{token}    = $token;
         $child->{instance} = $inst;
         $child->{pending}  = 1;
-
         if ( !defined $inst ) {    # the factory itself died: that is the child's death
             $deaths->put( [ $child, $token, $err ] );
             return;
@@ -259,7 +252,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             }
             1;
         };
-        unless ($hooked) {         # could not watch it (e.g. no fiber slot left): report and give up on it
+        unless ($hooked) {    # could not watch it (e.g. no fiber slot left): report and give up on it
             my $e = $@;
             $child->{instance} = undef;
             $deaths->put( [ $child, $token, $e ] );
@@ -273,7 +266,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     }
 
     # ---- introspection -------------------------------------------------
-    method children () { return map { $_->{name} } @children }
+    method children () {
+        return map { $_->{name} } @children;
+    }
 
     method child ($name) {
         croak 'Supervisor->child() requires a child name' unless defined $name && !ref $name;
@@ -293,9 +288,8 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         croak "Supervisor->restarts(): no supervised child named '$name'" unless $child;
         return $child->{restarts};
     }
-
-    method running  () { $running }
-    method stopping () { $stopping }
-}
-#
-1;
+    method running ()  {$running}
+    method stopping () {$stopping}
+    }
+    #
+    1;

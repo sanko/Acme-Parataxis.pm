@@ -110,8 +110,8 @@ Ticks the ticker has published since construction.
 
     $tick->dropped;     # ticks discarded
 
-Ticks discarded because nobody collected them before the next one came due. The ticks actually handed to a consumer
-are C<fired - dropped - pending>.
+Ticks discarded because nobody collected them before the next one came due. The ticks actually handed to a consumer are
+C<fired - dropped - pending>.
 
 =head2 C<skipped()>
 

@@ -117,7 +117,6 @@ package Acme::Parataxis::Actor v0.1.1 {
         push $self->{on_death}->@*, $cb;
         return $self;
     }
-
     sub error ($self) { $self->{error} }    # why it died, or undef if it stopped gracefully
 
     # A fresh, already-running actor with the same handler, mailbox size and options: what a
@@ -143,7 +142,7 @@ package Acme::Parataxis::Actor v0.1.1 {
                 warn "Acme::Parataxis::Actor: handler died: $err";
             }
         }
-        return $err;    # undef when the handler returned normally; the caller turns it into a crash if supervised
+        return $err;                            # undef when the handler returned normally; the caller turns it into a crash if supervised
     }
 
     sub send ( $self, $value ) {

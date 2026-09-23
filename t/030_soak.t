@@ -46,6 +46,7 @@ sub one_wave ( $seed, $scale ) {
         W => $scale * ( 1 + $rand->(10) ),
         A => $rand->(2) ? $scale * ( 4 + $rand->(10) ) : 0
     );
+
     # A wave's fibers are all live at once, so on a platform whose budget cannot host them (no MAP_NORESERVE, e.g.
     # OpenBSD) the plan is scaled down to fit the capacity the library reported, keeping the mixed workload shape and
     # every end-of-wave boundary check intact.
@@ -62,7 +63,6 @@ sub one_wave ( $seed, $scale ) {
     my $chan = Acme::Parataxis::Channel->new( capacity => 1 );
     my %inv;
     my @fibers;
-
     for ( 1 .. $plan{S} ) {
         push @fibers, fiber { await_sleep( 1 + $rand->(5) ) }
     }
@@ -167,7 +167,7 @@ while ( time - $t0 < $SECONDS && $waves < $MAX_WAVES ) {
 my $elapsed = sprintf '%.1fs', time - $t0;
 ok $fails == 0, "soak: $waves waves in $elapsed (peak scale $max_scale)";
 note 'peak live fibers: ' . $peak_live . " (limit ~" . $FIBER_CAP . ')' if $peak_live;
-note 'peak outstanding jobs: ' . $peak_jobs                       if $peak_jobs;
+note 'peak outstanding jobs: ' . $peak_jobs                             if $peak_jobs;
 note join "\n", @problems_out if @problems_out;
 #
 done_testing;

@@ -34,11 +34,11 @@ building it this way: the park already goes through the scheduler's usual path, 
 interruptible by C<with_timeout> and cancellation tokens, unregisters itself from the bucket when interrupted, and
 never busy-waits.
 
-Refills are driven by a Card-6 L<Acme::Parataxis::Ticker> waking the refill fiber C<rate> times a second, and each
-wake credits every whole token accrued since the previous one on the wall clock (the fraction carries over), so the
+Refills are driven by a Card-6 L<Acme::Parataxis::Ticker> waking the refill fiber C<rate> times a second, and each wake
+credits every whole token accrued since the previous one on the wall clock (the fraction carries over), so the
 delivered rate tracks real time however coarsely the platform wakes the ticker. Tokens are credited only while the
-bucket sits below its ceiling, so nothing accumulates while the limiter is idle, and a busy limiter hands out tokens
-at a steady C<rate> forever.
+bucket sits below its ceiling, so nothing accumulates while the limiter is idle, and a busy limiter hands out tokens at
+a steady C<rate> forever.
 
 =head1 BURST VS. STRICT RATE
 

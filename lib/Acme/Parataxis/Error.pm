@@ -75,7 +75,7 @@ package Acme::Parataxis::Error v0.1.1 {
             $failures = [] unless ref $failures eq 'ARRAY';
             my $child   = delete $args{child};
             my $primary = delete $args{primary};
-            $primary //= ( grep { defined } @$failures )[0];
+            $primary //= ( grep {defined} @$failures )[0];
             my $label   = 'supervisor failure';
             my $message = 'supervisor failure: restart budget exhausted';
             $message .= " by child '$child'" if defined $child;

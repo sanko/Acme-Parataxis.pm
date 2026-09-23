@@ -14,7 +14,7 @@ BEGIN {
     $SIG{__WARN__} = sub { return if $_[0] =~ /^Deep recursion on subroutine/; warn @_ }
 }
 sub live_count { Acme::Parataxis::get_live_fiber_count() }
-my $BASE = live_count();
+my $BASE      = live_count();
 my $FIBER_CAP = Acme::Parataxis::get_max_fibers();    # platforms without MAP_NORESERVE (OpenBSD) clamp this to what fits under RLIMIT_DATA
 subtest 'thousands of concurrent acquire never exceed rate x wall-time + burst' => sub {
 

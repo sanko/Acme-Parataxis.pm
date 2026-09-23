@@ -476,8 +476,8 @@ disturbs fibers that already exist.
 ## `set_max_fibers( $count )`
 
 Sets how many fibers may exist at once. The default is 65536, clamped to a hard internal ceiling of 1048576 so that
-what `max_fibers` reports is always what the table could really hold. Creating a fiber past the limit croaks with
-"the fiber table is full" until enough fibers finish; values below 1 are ignored.
+what `max_fibers` reports is always what the table could really hold. Creating a fiber past the limit croaks with "the
+fiber table is full" until enough fibers finish; values below 1 are ignored.
 
 ```
 # Allow a hundred thousand fibers
@@ -821,8 +821,8 @@ supervisor below restarts.
 
 ## Supervisors
 
-An [Acme::Parataxis::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASupervisor) runs a set of
-actors (or nested supervisors) and restarts whichever ones die, OTP style, until a restart budget runs out.
+An [Acme::Parataxis::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASupervisor) runs a set of actors (or nested supervisors) and restarts whichever ones die, OTP
+style, until a restart budget runs out:
 
 ```perl
 use Acme::Parataxis::Supervisor;
@@ -839,17 +839,18 @@ $sup->supervise(
 $sup->run;    # supervises until stop() is called or the budget runs out
 ```
 
-- `OneForOne` (the default) restarts only the child that died; `OneForAll` restarts the whole set, because the
-  children share whatever state the death just broke; `RestForOne` restarts the dead child plus everything that
-  started after it.
-- Restarts are budgeted: `max_restarts` deaths inside `within` seconds tear the tree down and `run` dies with an
-  [Acme::Parataxis::Error::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ASupervisor)
-  aggregate (`->failures` lists every death that counted, `->primary` the one that blew the budget, `->child` its
-  name). `within => 0` keeps nothing in the window, so the budget never trips.
-- A restart is a fresh instance: a restarted actor owns a new mailbox and the asks in flight against the dead one
-  are failed there, never hung; a restarted subtree is rebuilt from its configuration rather than resumed.
-- Supervisors supervise supervisors: `supervise` accepts an actor, a nested `Supervisor`, or a factory (`CODE`)
-  returning either, and `children`/`child`/`restarts`/`running`/`stopping` introspect the tree.
+`OneForOne` (the default) restarts only the child that died; `OneForAll` restarts the whole set, because the children
+share whatever state the death just broke; `RestForOne` restarts the dead child plus everything that started after it.
+Restarts are budgeted: `max_restarts` deaths inside `within` seconds tear the tree down and `run` dies with an
+[Acme::Parataxis::Error::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ASupervisor) aggregate (`->failures` lists every death
+that counted, `->primary` the one that blew the budget, `->child` its name); `within => 0` keeps nothing
+in the window, so the budget never trips.
+
+A restart is a fresh instance: a restarted actor owns a new mailbox and the asks in flight against the dead one are
+failed there, never hung or silently dropped, and a restarted subtree is rebuilt from its configuration rather than
+resumed. Supervisors supervise supervisors: `supervise` accepts an actor, a nested `Supervisor`, or a factory
+(`CODE`) returning either, and `children`/`child`/`restarts`/`running`/`stopping` introspect the tree. See
+[Acme::Parataxis::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASupervisor).
 
 ## Diagnostics
 
@@ -896,14 +897,14 @@ debug builds of Perl, calling a shared subroutine from multiple fibers can trigg
 landing pad before every context switch, restoring each `@_` slot to Perl's canonical REIFY-only, empty state, to
 satisfy these assertions without clobbering active lexical state.
 
-`CvDEPTH` is one shared counter per CV, so it also has to survive *asymmetric* parking: when several fibers park
-inside the same shared subroutine (`Channel->get`, the wait helpers, ...) and shallower frames leave, the counter dips
+`CvDEPTH` is one shared counter per CV, so it also has to survive _asymmetric_ parking: when several fibers park
+inside the same shared subroutine (`Channel-`get>, the wait helpers, ...) and shallower frames leave, the counter dips
 below the depth of a frame some other fiber parked there, and the next entry would land on that parked frame's pad and
 overwrite its `$self`, `@_`, and `my` lexicals in place. The switcher therefore keeps a per-CV registry of parked
 depths, sets `CvDEPTH` to the deepest parked frame before a resume (using the core's own `olddepth + 1` convention
 for frames still on the resuming stack, which `cx_popsub_args`' DEBUGGING assert requires), and only cleans a landing
-pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are
-purged when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
+pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are purged
+when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
 `t/055_shared_pads.t`.
 
 ## `eval` vs. `try/catch`

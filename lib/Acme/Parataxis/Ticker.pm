@@ -24,7 +24,8 @@ class Acme::Parataxis::Ticker v0.1.1 {
     field $running = false;
     field $fired   : reader = 0;         # ticks produced
     field $dropped : reader = 0;         # ticks discarded: superseded uncollected ones (boundaries missed while the
-                                        # host slept past the schedule are counted as skipped, never as fired)
+
+    # host slept past the schedule are counted as skipped, never as fired)
     field $skipped : reader = 0;         # tick boundaries leapfrogged after a late wakeup: never fired, never delivered
 
     # after waking far behind schedule

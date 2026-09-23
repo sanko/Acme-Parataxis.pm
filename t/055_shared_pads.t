@@ -15,7 +15,6 @@ $|++;
 # dip; let both re-enter get (this is where C used to steal D's pad); wake C again so it vacates;
 # then wake the victim D and the untouched control B. Every fiber must come back with its
 # lexical, its own value, and no error.
-
 our ( $entered, $left, $goA, $goC ) = ( 0, 0, 0, 0 );
 our %REPORT;
 
@@ -46,34 +45,30 @@ sub staged ( $ch1, $ch2, $ready_ref, $go_ref, $name ) {
     $$ready_ref = 1;
     eval { $ch1->get };
     $left++;
-    spin( sub { $$go_ref }, "the go flag for $name" );
+    spin( sub {$$go_ref}, "the go flag for $name" );
     $entered++;
     my ( $got, $err );
     eval { $got = $ch2->get; 1 } or $err = $@;
     report( $name, $lex, $got, $err );
 }
-
 my $base = Acme::Parataxis::get_live_fiber_count();
-
 my $chA1 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chA2 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chB  = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chC1 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chC2 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chD  = Acme::Parataxis::Channel->new( capacity => 4 );
-
 my ( $rA, $rB, $rC, $rD ) = ( 0, 0, 0, 0 );
-
 my $ran = eval {
     async {
         fiber { staged( $chA1, $chA2, \$rA, \$goA, 'A' ) };
-        spin( sub { $rA }, 'A to park' );
+        spin( sub {$rA}, 'A to park' );
         fiber { single( $chB, \$rB, 'B' ) };
-        spin( sub { $rB }, 'B to park' );
+        spin( sub {$rB}, 'B to park' );
         fiber { staged( $chC1, $chC2, \$rC, \$goC, 'C' ) };
-        spin( sub { $rC }, 'C to park' );
+        spin( sub {$rC}, 'C to park' );
         fiber { single( $chD, \$rD, 'D' ) };
-        spin( sub { $rD }, 'D to park' );
+        spin( sub {$rD}, 'D to park' );
 
         # A leaves, then C leaves: CvDEPTH drops below the deepest parked pad.
         $chA1->put('wakeA');
@@ -90,7 +85,6 @@ my $ran = eval {
         # C vacates again, then the victim wakes with D's own data waiting.
         $chC2->put('wakeC2');
         spin( sub { exists $REPORT{C} }, 'C to report' );
-
         $chD->put('wakeD');
         spin( sub { exists $REPORT{D} }, 'D to report' );
         $chB->put('wakeB');
@@ -101,7 +95,6 @@ my $ran = eval {
     1;
 };
 ok $ran, 'the choreography ran to completion' or diag $@;
-
 for my $spec ( [ A => 'wakeA2' ], [ B => 'wakeB' ], [ C => 'wakeC2' ], [ D => 'wakeD' ] ) {
     my ( $name, $expect ) = @$spec;
     my $r = $REPORT{$name};
@@ -110,6 +103,5 @@ for my $spec ( [ A => 'wakeA2' ], [ B => 'wakeB' ], [ C => 'wakeC2' ], [ D => 'w
     is $r->[1], $expect,     "$name received its own value";
     is $r->[2], '',          "$name saw no error";
 }
-
 is Acme::Parataxis::get_live_fiber_count(), $base, 'and every fiber was reaped';
 done_testing;

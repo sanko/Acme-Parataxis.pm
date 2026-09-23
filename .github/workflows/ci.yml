@@ -1,4 +1,7 @@
 ---
+concurrency:
+  cancel-in-progress: true
+  group: '${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}'
 jobs:
   dragonflybsd:
     name: DragonFly BSD
@@ -347,9 +350,6 @@ on:
   schedule:
     - cron: 42 5 * * 0
   workflow_dispatch: ~
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
 permissions:
   actions: read
   contents: read

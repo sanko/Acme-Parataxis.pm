@@ -20,7 +20,6 @@ sub live_count { Acme::Parataxis::get_live_fiber_count() }
 # counted separately as skipped, never fired).
 my $stress_env  = !!( $ENV{PARATAXIS_STRESS_SECONDS} || $ENV{PARATAXIS_STRESS_ITER} );
 my $skip_timing = $stress_env || !!$ENV{AUTOMATED_TESTING};
-
 subtest 'strict cadence under load: 100ms ticks hold their period while do_work takes 30ms' => sub {
     my @arrivals;
     async {
@@ -75,14 +74,14 @@ subtest 'a slow consumer drops ticks instead of queueing them up' => sub {
         note 'fired and receipt-gap margins skipped: automated CI hosts wake timers late enough that these would measure the host, not the ticker';
     }
     else {
-        cmp_ok $fired, '>=', 5, 'several ticks fired while nobody was listening';
+        cmp_ok $fired,   '>=', 5, 'several ticks fired while nobody was listening';
         cmp_ok $dropped, '>=', 3, 'the superseded ticks were dropped rather than kept';
     }
     is $dropped + $pending, $fired, 'every fired tick is pending or dropped, never kept';
     cmp_ok $pending,    '<=', 1, 'only one uncollected tick was ever outstanding - there is no stale-tick backlog to work through';
     cmp_ok scalar @got, '>=', 2, 'the slow consumer still received ticks';
     ok( ( !grep { $got[$_] <= $got[ $_ - 1 ] } 1 .. $#got ), 'each tick it received is newer than the last - no stale tick is replayed' );
-    if (!$skip_timing) {
+    if ( !$skip_timing ) {
         cmp_ok $got[1] - $got[0], '>', 0.08, 'and consecutive receipts jumped over whole periods instead of draining them one by one';
     }
 };

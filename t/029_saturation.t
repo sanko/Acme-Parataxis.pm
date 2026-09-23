@@ -61,7 +61,7 @@ async {
     ok defined $full_err && $full_err =~ /fiber table is full/, 'fiber table: spawning past capacity croaks with "fiber table is full"' or
         diag 'no croak; parked ' . $waiters . ' waiters' . ( $full_err ? "; err=$full_err" : '' );
     is $waiters,     $MAX_FIBERS, 'fiber table: exactly max fibers parked fibers accepted';
-    is live_count(), $waiters,   'fiber table: every accepted fiber is still parked at the cap';
+    is live_count(), $waiters,    'fiber table: every accepted fiber is still parked at the cap';
     $sig->broadcast;
     Acme::Parataxis->yield while live_count() > 1;
     ok live_count() <= 1, 'fiber table: all waiters released and drained';

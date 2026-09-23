@@ -1,4 +1,7 @@
 ---
+concurrency:
+  cancel-in-progress: true
+  group: '${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}'
 jobs:
   results:
     if: always()
@@ -52,9 +55,6 @@ on:
   schedule:
     - cron: 0 12 * * *
   workflow_dispatch: ~
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
 permissions:
   actions: read
   contents: read

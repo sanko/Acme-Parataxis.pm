@@ -844,8 +844,8 @@ supervisor below restarts.
 
 =head2 Supervisors
 
-An L<Acme::Parataxis::Supervisor> runs a set of actors (or nested supervisors) and restarts whichever ones die,
-OTP style, until a restart budget runs out:
+An L<Acme::Parataxis::Supervisor> runs a set of actors (or nested supervisors) and restarts whichever ones die, OTP
+style, until a restart budget runs out:
 
     use Acme::Parataxis::Supervisor;
 
@@ -860,12 +860,12 @@ OTP style, until a restart budget runs out:
     );
     $sup->run;    # supervises until stop() is called or the budget runs out
 
-C<OneForOne> (the default) restarts only the child that died; C<OneForAll> restarts the whole set, because the
-children share whatever state the death just broke; C<RestForOne> restarts the dead child plus everything that started
-after it. Restarts are budgeted: C<max_restarts> deaths inside C<within> seconds tear the tree down and C<run> dies
-with an L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor> aggregate (C<-E<gt>failures> lists
-every death that counted, C<-E<gt>primary> the one that blew the budget, C<-E<gt>child> its name); C<within =E<gt> 0>
-keeps nothing in the window, so the budget never trips.
+C<OneForOne> (the default) restarts only the child that died; C<OneForAll> restarts the whole set, because the children
+share whatever state the death just broke; C<RestForOne> restarts the dead child plus everything that started after it.
+Restarts are budgeted: C<max_restarts> deaths inside C<within> seconds tear the tree down and C<run> dies with an
+L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor> aggregate (C<-E<gt>failures> lists every death
+that counted, C<-E<gt>primary> the one that blew the budget, C<-E<gt>child> its name); C<within =E<gt> 0> keeps nothing
+in the window, so the budget never trips.
 
 A restart is a fresh instance: a restarted actor owns a new mailbox and the asks in flight against the dead one are
 failed there, never hung or silently dropped, and a restarted subtree is rebuilt from its configuration rather than
@@ -930,8 +930,8 @@ below the depth of a frame some other fiber parked there, and the next entry wou
 overwrite its C<$self>, C<@_>, and C<my> lexicals in place. The switcher therefore keeps a per-CV registry of parked
 depths, sets C<CvDEPTH> to the deepest parked frame before a resume (using the core's own C<olddepth + 1> convention
 for frames still on the resuming stack, which C<cx_popsub_args>' DEBUGGING assert requires), and only cleans a landing
-pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are
-purged when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
+pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are purged
+when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
 F<t/055_shared_pads.t>.
 
 =head2 C<eval> vs. C<try/catch>

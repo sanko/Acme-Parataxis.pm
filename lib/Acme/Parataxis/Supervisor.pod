@@ -61,21 +61,21 @@ alone.
 
 =back
 
-Restarts are budgeted: every death is charged against C<max_restarts> restarts per C<within> seconds, and when the
-next death lands inside a window that already holds that many, the budget is exhausted. The whole tree is torn down
-and C<run> dies with L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor>, whose C<-E<gt>failures>
+Restarts are budgeted: every death is charged against C<max_restarts> restarts per C<within> seconds, and when the next
+death lands inside a window that already holds that many, the budget is exhausted. The whole tree is torn down and
+C<run> dies with L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor>, whose C<-E<gt>failures>
 lists every death that counted, in the order it happened, whose C<-E<gt>primary> is the one that blew the budget, and
 whose C<-E<gt>child> names that child. C<within =E<gt> 0> keeps nothing in the window, so the same budget never trips.
 
 This is a pure-Perl layer on the scheduler's ordinary park/wake machinery: the supervision fiber parks on a
-L<Channel|Acme::Parataxis::Channel> of death reports, and dying instances report into it through their own teardown.
-No C changes and no OS threads are involved.
+L<Channel|Acme::Parataxis::Channel> of death reports, and dying instances report into it through their own teardown. No
+C changes and no OS threads are involved.
 
 A restarted child is a I<fresh> instance. A restarted actor is built by C<respawn>, so it owns a new mailbox and the
 asks still in flight against the dead one are failed right there instead of hanging or vanishing silently; a restarted
 supervisor is rebuilt from its configuration rather than resumed from the dead object, so a whole subtree comes back
-from scratch. Supervised actors must be spawned with C<supervised =E<gt> 1>, which is what makes a handler die kill
-the actor (and therefore reach the supervisor) instead of merely failing that one ask.
+from scratch. Supervised actors must be spawned with C<supervised =E<gt> 1>, which is what makes a handler die kill the
+actor (and therefore reach the supervisor) instead of merely failing that one ask.
 
 =head1 CONSTRUCTOR
 
@@ -117,8 +117,8 @@ Registers a child and returns C<$self>. C<$thing> may be:
 
 =item *
 
-an L<Acme::Parataxis::Actor|Acme::Parataxis::Actor>, adopted as-is for the first run and replaced by a fresh
-C<respawn> on every restart;
+an L<Acme::Parataxis::Actor|Acme::Parataxis::Actor>, adopted as-is for the first run and replaced by a fresh C<respawn>
+on every restart;
 
 =item *
 
@@ -141,8 +141,8 @@ Starts the tree and supervises it until L<stop|"stop( )"> is called or the resta
 C<$self>. Either way every child is stopped and drained before this returns, so no fiber of the tree outlives it.
 
 Must be called from inside a scheduled fiber, with at least one registered child, and only once; each of those
-violations croaks. When the budget is exhausted this dies with L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor>
-after the tree has already been torn down.
+violations croaks. When the budget is exhausted this dies with
+L<Acme::Parataxis::Error::Supervisor|Acme::Parataxis::Error::Supervisor> after the tree has already been torn down.
 
 =head2 C<stop( )>
 
@@ -157,13 +157,13 @@ The registered child names, in start order.
 
 =head2 C<child( $name )>
 
-The instance a named child is running right now (the current actor or nested supervisor object). Croaks if no child
-has that name.
+The instance a named child is running right now (the current actor or nested supervisor object). Croaks if no child has
+that name.
 
 =head2 C<restarts( [ $name ] )>
 
-Restart counts: with a name, how often that child has been replaced; without one, the total across the tree. Croaks
-on an unknown name.
+Restart counts: with a name, how often that child has been replaced; without one, the total across the tree. Croaks on
+an unknown name.
 
 =head2 C<running( )>
 

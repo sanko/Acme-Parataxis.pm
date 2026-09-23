@@ -47,10 +47,9 @@ async {
     # On platforms without MAP_NORESERVE (OpenBSD) the library clamps the default limit to the number of 8 MiB
     # stacks RLIMIT_DATA can host, so the old 1100/1300 targets are replaced by the achievable default minus two
     # (the policy, not the stack mmap, must be what refuses the next spawn).
-
     # 1) With nobody configuring anything, the default must already be reachable in one burst.
     $default = Acme::Parataxis::max_fibers();
-    $want1 = $default > 1024 ? 1100 : $default - 2;
+    $want1   = $default > 1024 ? 1100 : $default - 2;
     my $sig1 = Acme::Parataxis::Signal->new;
     my ( $made1, $err1 ) = spawn_parked( $want1, $sig1 );
     $r1 = [ $made1, $err1, live() ];
@@ -101,7 +100,7 @@ subtest 'the limit is live: lowering it bites immediately, raising it works agai
     is $r3->[3], 40, 'max_fibers() reads back the lowered limit';
     is $r3->[2], 40, 'and it stopped at 40 even though the table had already been allocated far larger';
     like $r3->[1], qr/fiber table is full/, 'with the same message';
-    is $r4->[0], 50, 'raising it again let fibers through with no restart';
+    is $r4->[0], 50,  'raising it again let fibers through with no restart';
     is $r4->[1], U(), 'and none of those croaked';
 };
 is live(), $BASE, 'every fiber these scenarios created was reaped';

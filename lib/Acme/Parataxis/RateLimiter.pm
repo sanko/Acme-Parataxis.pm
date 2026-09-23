@@ -40,10 +40,11 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
                 my $now = time;
                 my $due = int( ( $now - $last ) * $rate );
                 $last += $due / $rate;    # advance over exactly the window these whole tokens cover
-                                           # (any fraction carries to the next wake; a backwards clock resyncs)
+
+                # (any fraction carries to the next wake; a backwards clock resyncs)
                 # The first wake can be arbitrarily late when the limiter was built before run() started. That
                 # window was spent idle at the ceiling, so it must not be credited as backfill.
-                $due = 1 if $first && $due > 1;
+                $due   = 1 if $first && $due > 1;
                 $first = 0;
                 next if $due < 1;
                 my $room = $burst - $bucket->count;
