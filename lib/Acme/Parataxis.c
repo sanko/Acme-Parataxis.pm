@@ -112,6 +112,7 @@ typedef CRITICAL_SECTION para_mutex_t;
 #endif
 #include <unistd.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -2317,9 +2318,11 @@ static void para_crash_dec(char * b, size_t cap, size_t * n, long v) {
  * (for SIGILL that is the illegal instruction itself), the instruction, stack
  * and frame pointers where the platform's headers are known, the assembly
  * switch landmarks so a reader can tell whether the trampoline's ud2 was
- * reached, the current fiber id, and a raw word dump of the crash stack for
- * offline return-address recovery. Only write(2) and stack buffers are used:
- * printf and malloc are not signal safe.
+ * reached, the current fiber id, and a raw word dump of the crash stack
+ * starting 16 bytes below rsp for offline return-address recovery. A copy
+ * is also appended to /tmp/parataxis-crash.log so a lost stderr still
+ * leaves evidence. printf and malloc are not signal safe; open, write and
+ * close are, and only stack buffers are used.
  *
  * @param sig Signal number.
  * @param si  Fault info (si_addr carries the faulting address).
@@ -2360,16 +2363,27 @@ static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
     para_crash_str(buf, sizeof buf, &n, "\n");
 #endif
     if (sp && (sp & 7) == 0) {
-        unsigned long long * w = (unsigned long long *)sp;
+        /* Start 16 bytes below rsp: the slot a final ret popped sits there,
+         * which is exactly the value needed to confirm or rule out a bogus
+         * ret target after a context switch. */
+        unsigned long long * w = (unsigned long long *)sp - 2;
         int i;
-        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words:");
-        for (i = 0; i < 16 && n + 20 < sizeof buf; i++) {
+        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words from rsp-16:");
+        for (i = 0; i < 18 && n + 20 < sizeof buf; i++) {
             para_crash_str(buf, sizeof buf, &n, " ");
             para_crash_hex(buf, sizeof buf, &n, w[i]);
         }
         para_crash_str(buf, sizeof buf, &n, "\n");
     }
     write(2, buf, n);
+    /* A second copy to a fixed file: a harness that swallows stderr still
+     * leaves the report behind for a post-run dump. open, write and close
+     * are async-signal-safe. */
+    int fd = open("/tmp/parataxis-crash.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        write(fd, buf, n);
+        close(fd);
+    }
 }
 
 /**
@@ -2426,6 +2440,28 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
 }
 
 /**
+ * @brief Prints an install-time probe line to stderr (POSIX).
+ *
+ * install_stack_guard runs during interpreter startup, so a plain write(2)
+ * is enough. The line names the failed setup step and errno; the success
+ * path prints a separate "crash reporter armed" line, letting a test log
+ * with no report be told apart from a reporter that never installed.
+ *
+ * @param stage Name of the setup step that failed.
+ * @param err   errno value observed right after the failure.
+ */
+static void install_note(const char * stage, int err) {
+    char b[160];
+    size_t n = 0;
+    para_crash_str(b, sizeof b, &n, "Parataxis: crash: install ");
+    para_crash_str(b, sizeof b, &n, stage);
+    para_crash_str(b, sizeof b, &n, " errno ");
+    para_crash_dec(b, sizeof b, &n, err);
+    para_crash_str(b, sizeof b, &n, "\n");
+    write(2, b, n);
+}
+
+/**
  * @brief Installs the fiber stack guard handler (POSIX).
  *
  * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber running into its guard page is detected and
@@ -2440,22 +2476,29 @@ static void install_stack_guard(void) {
     guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (guard_alt_stack == MAP_FAILED) {
         guard_alt_stack = NULL;
+        install_note("mmap", errno);
         return;
     }
     stack_t ss = {0};
     ss.ss_sp = guard_alt_stack;
     ss.ss_size = alt_sz;
-    sigaltstack(&ss, NULL);
+    if (sigaltstack(&ss, NULL) == -1)
+        install_note("sigaltstack", errno);
     struct sigaction act = {0};
     act.sa_sigaction = stack_guard_handler;
     act.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&act.sa_mask);
-    sigaction(SIGSEGV, &act, &prev_sigsegv_act);
+    if (sigaction(SIGSEGV, &act, &prev_sigsegv_act) == -1)
+        install_note("sigaction SIGSEGV", errno);
     /* SIGILL and SIGBUS get the plain reporter: the trampoline's ud2 and any
      * teardown-phase illegal instruction we are otherwise blind to. */
     act.sa_sigaction = crash_report_handler;
-    sigaction(SIGILL, &act, NULL);
-    sigaction(SIGBUS, &act, NULL);
+    if (sigaction(SIGILL, &act, NULL) == -1)
+        install_note("sigaction SIGILL", errno);
+    if (sigaction(SIGBUS, &act, NULL) == -1)
+        install_note("sigaction SIGBUS", errno);
+    static const char armed[] = "Parataxis: crash reporter armed\n";
+    write(2, armed, sizeof armed - 1);
 }
 #endif /* !_WIN32 */
 
