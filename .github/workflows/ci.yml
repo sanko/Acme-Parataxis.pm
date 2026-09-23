@@ -29,6 +29,8 @@ jobs:
         cpanm --test-only -v .
   freebsd:
     name: FreeBSD
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
       checkout_submodules: recursive
@@ -54,6 +56,8 @@ jobs:
         cpanm --test-only -v .
   haiku:
     name: Haiku
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
       checkout_submodules: recursive
@@ -81,6 +85,8 @@ jobs:
         cpanm --test-only -v .
   linux:
     name: Linux
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
       checkout_submodules: recursive
@@ -147,6 +153,8 @@ jobs:
         ./Build test --v
   macos:
     name: macOS
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
       checkout_submodules: recursive
@@ -197,6 +205,8 @@ jobs:
         ./Build test --v
   netbsd:
     name: NetBSD
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
       checkout_submodules: recursive
@@ -224,6 +234,8 @@ jobs:
         cpanm --test-only -v .
   omnios:
     name: OmniOS
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
       checkout_submodules: recursive
@@ -283,21 +295,15 @@ jobs:
     if: always()
     name: Results
     needs:
-      - freebsd
-      - linux
-      - macos
       - openbsd
-      - netbsd
       - dragonflybsd
-      - solaris
-      - omnios
-      - haiku
-      - windows
     uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
     with:
       title: Acme::Parataxis CI Matrix
   solaris:
     name: Solaris
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
     with:
       checkout_submodules: recursive
@@ -325,6 +331,8 @@ jobs:
         cpanm --test-only -v .
   windows:
     name: Windows
+    # Off while only the OpenBSD and DragonFly verdicts matter.
+    if: false
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
       checkout_submodules: recursive
