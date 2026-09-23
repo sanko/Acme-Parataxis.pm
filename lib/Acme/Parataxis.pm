@@ -470,8 +470,11 @@ package Acme::Parataxis v0.1.1 {
         }
         @_ = ();
         my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
-        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
-            unless $fiber && ref $fiber;
+        if ( !ref $fiber ) {
+            croak defined $fiber && $fiber == -3
+                ? 'could not allocate a fiber: this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
+                : 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)';
+        }
         my $status = $fiber->[F_LAST_STATUS];
         if ( $status == 1 ) {
             my $err = $fiber->[F_ERROR];
@@ -802,7 +805,10 @@ package Acme::Parataxis v0.1.1 {
     sub new ( $class, %args ) {
         my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
-        croak 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)' if $fid < 0;
+        croak $fid == -3
+            ? 'could not allocate a fiber: this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
+            : 'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
+            if $fid < 0;
         $self->[F_FID] = $fid;
         return $self;
     }

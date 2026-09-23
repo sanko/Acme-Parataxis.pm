@@ -40,19 +40,25 @@ sub drain ( $sig, $here ) {
     $sig->broadcast;
     Acme::Parataxis->yield while live() > $here;
 }
-my ( $default, $r1, $r2, $r3, $r4 );
+my ( $default, $want1, $target2, $r1, $r2, $r3, $r4 );
 async {
     my $here = live();    # this run's fiber, which exists for the whole block below
 
-    # 1) With nobody configuring anything, the default must already reach past the old hard 1024.
+    # On platforms without MAP_NORESERVE (OpenBSD) the library clamps the default limit to the number of 8 MiB
+    # stacks RLIMIT_DATA can host, so the old 1100/1300 targets are replaced by the achievable default minus two
+    # (the policy, not the stack mmap, must be what refuses the next spawn).
+
+    # 1) With nobody configuring anything, the default must already be reachable in one burst.
     $default = Acme::Parataxis::max_fibers();
+    $want1 = $default > 1024 ? 1100 : $default - 2;
     my $sig1 = Acme::Parataxis::Signal->new;
-    my ( $made1, $err1 ) = spawn_parked( 1100, $sig1 );
+    my ( $made1, $err1 ) = spawn_parked( $want1, $sig1 );
     $r1 = [ $made1, $err1, live() ];
     drain( $sig1, $here );
 
     # 2) A limit the user sets is enforced exactly and read back exactly.
-    Acme::Parataxis::set_max_fibers(1300);
+    $target2 = $default > 1024 ? 1300 : $default - 2;
+    Acme::Parataxis::set_max_fibers($target2);
     my $sig2 = Acme::Parataxis::Signal->new;
     my ( $made2, $err2 ) = spawn_parked( 5000, $sig2 );    # keeps going until it croaks
     $r2 = [ $made2, $err2, live(), Acme::Parataxis::max_fibers() ];
@@ -72,16 +78,23 @@ async {
     $r4 = [ $made4, $err4 ];
     drain( $sig4, $here );
 };
-subtest 'the default limit already reaches past the old hard 1024' => sub {
-    cmp_ok $default, '>', 1024, sprintf 'default fiber limit is %d, beyond the 1024 the table used to be compiled to', $default;
-    is $r1->[0], 1100, 'spawned 1100 fibers unconfigured, where the fixed table croaked at 1024';
+subtest 'the default limit is reachable without configuring anything' => sub {
+    if ( $default > 1024 ) {
+        cmp_ok $default, '>', 1024, sprintf 'default fiber limit is %d, beyond the 1024 the table used to be compiled to', $default;
+        is $r1->[0], 1100, 'spawned 1100 fibers unconfigured, where the fixed table croaked at 1024';
+    }
+    else {
+        note "platform without MAP_NORESERVE clamps the default to $default (RLIMIT_DATA / FIBER_STACK_SZ)";
+        cmp_ok $default, '>', 8, 'the clamp still leaves a usable default limit';
+        is $r1->[0], $default - 2, sprintf 'spawned to the clamped default without croaking (%d)', $r1->[0];
+    }
     ok !defined $r1->[1], 'and not one of them croaked' or diag "err: $r1->[1]";
-    cmp_ok $r1->[2], '>=', 1100, sprintf 'control: all of them were live at once (%d)', $r1->[2];
+    cmp_ok $r1->[2], '>=', $r1->[0], sprintf 'control: all of them were live at once (%d)', $r1->[2];
 };
 subtest 'set_max_fibers caps the table exactly, and reports back what it was set to' => sub {
-    is $r2->[3], 1300, 'max_fibers() reads back the limit that was set';
-    is $r2->[2], 1300, 'and exactly 1300 fibers existed when spawning stopped';
-    is $r2->[0], 1300, sprintf 'spawned exactly that many before the limit refused the next one (%d)', $r2->[0];
+    is $r2->[3], $target2, 'max_fibers() reads back the limit that was set';
+    is $r2->[2], $target2, 'and exactly the limit fibers existed when spawning stopped';
+    is $r2->[0], $target2, sprintf 'spawned exactly that many before the limit refused the next one (%d)', $r2->[0];
     like $r2->[1], qr/fiber table is full/, 'with the documented message';
 };
 subtest 'the limit is live: lowering it bites immediately, raising it works again' => sub {

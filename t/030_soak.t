@@ -32,6 +32,7 @@ sub newsrng {
 my $BASE_SEED = $ENV{PARATAXIS_STRESS_SEED}    // 0x5EED;
 my $SECONDS   = $ENV{PARATAXIS_STRESS_SECONDS} // 3;
 my $MAX_WAVES = 5000;
+my $FIBER_CAP = Acme::Parataxis::get_max_fibers();    # platforms without MAP_NORESERVE clamp this to RLIMIT_DATA / stack
 sub live_count  { Acme::Parataxis::get_live_fiber_count() }
 sub outstanding { Acme::Parataxis::get_outstanding_jobs() }
 
@@ -45,6 +46,16 @@ sub one_wave ( $seed, $scale ) {
         W => $scale * ( 1 + $rand->(10) ),
         A => $rand->(2) ? $scale * ( 4 + $rand->(10) ) : 0
     );
+    # A wave's fibers are all live at once, so on a platform whose budget cannot host them (no MAP_NORESERVE, e.g.
+    # OpenBSD) the plan is scaled down to fit the capacity the library reported, keeping the mixed workload shape and
+    # every end-of-wave boundary check intact.
+    my $tot = $plan{S} + $plan{G} + 2 * $plan{P} + $plan{W} + $plan{A};
+    if ( $tot > $FIBER_CAP - 6 ) {
+        my $factor = ( $FIBER_CAP - 6 ) / $tot;
+        for my $k (qw[S G P W A]) {
+            $plan{$k} = $plan{$k} ? ( int( $plan{$k} * $factor ) || 1 ) : 0;
+        }
+    }
     my $fut  = Acme::Parataxis::Future->new;
     my $sem  = Acme::Parataxis::Semaphore->new( count => 2 );
     my $sig  = Acme::Parataxis::Signal->new;
@@ -155,7 +166,7 @@ while ( time - $t0 < $SECONDS && $waves < $MAX_WAVES ) {
 }
 my $elapsed = sprintf '%.1fs', time - $t0;
 ok $fails == 0, "soak: $waves waves in $elapsed (peak scale $max_scale)";
-note 'peak live fibers: ' . $peak_live . " (limit ~" . 1024 . ')' if $peak_live;
+note 'peak live fibers: ' . $peak_live . " (limit ~" . $FIBER_CAP . ')' if $peak_live;
 note 'peak outstanding jobs: ' . $peak_jobs                       if $peak_jobs;
 note join "\n", @problems_out if @problems_out;
 #

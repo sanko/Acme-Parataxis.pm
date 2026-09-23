@@ -112,6 +112,7 @@ typedef CRITICAL_SECTION para_mutex_t;
 #endif
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <fcntl.h>
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/sysctl.h>
@@ -148,6 +149,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
 #ifndef _WIN32
 static void install_stack_guard(void);
+static void probe_fiber_budget(void);
 #endif
 
 typedef struct para_fiber_t para_fiber_t;
@@ -1960,6 +1962,7 @@ DLLEXPORT int init_system() {
     }
 #ifndef _WIN32
     install_stack_guard();
+    probe_fiber_budget();
 #endif
 #ifdef _WIN32
     /* Convert the main thread into a fiber so it can be switched out */
@@ -2570,6 +2573,52 @@ static void install_note(const char * stage, int err) {
 }
 
 /**
+ * @brief Right-sizes the default fiber limit to the platform's anonymous-memory budget.
+ *
+ * Every fiber reserves FIBER_STACK_SZ plus one guard page of anonymous memory. Where MAP_NORESERVE exists (Linux,
+ * FreeBSD, DragonFly) that mapping is a free reservation, and RLIMIT_DATA is usually unlimited anyway, so this is a
+ * no-op. OpenBSD deliberately has no MAP_NORESERVE and its RLIMIT_DATA counts every anonymous mmap at full size, so
+ * the generous DEFAULT_FIBER_LIMIT would let the very first big spawn explode the process budget; the failing mmap
+ * then surfaces as a confusing table-full message. The probe raises the soft limit to the hard limit when permitted
+ * and clamps max_fibers to the number of stacks that actually fit, leaving four frames of headroom for perl, the
+ * tables, the worker pool and the crash-report alt stack.
+ */
+static void probe_fiber_budget(void) {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_DATA, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY)
+        return;
+    if (rl.rlim_max > rl.rlim_cur) {
+        struct rlimit nr = rl;
+        nr.rlim_cur = rl.rlim_max;
+        if (setrlimit(RLIMIT_DATA, &nr) == 0)
+            rl.rlim_cur = rl.rlim_max;
+    }
+    /* A hard infinity made the raise go unlimited too; nothing to clamp against. */
+    if (rl.rlim_cur == RLIM_INFINITY)
+        return;
+    init_guard_sz();
+    size_t frame = FIBER_STACK_SZ + fiber_guard_sz;
+    long cap = (long)( rl.rlim_cur / (rlim_t)frame ) - 4;
+    if (cap < 8)
+        cap = 8;
+    if (cap < DEFAULT_FIBER_LIMIT) {
+        max_fibers = (int)cap;
+        char b[192];
+        size_t n = 0;
+        para_crash_str(b, sizeof b, &n, "Parataxis: fiber budget RLIMIT_DATA cur ");
+        para_crash_dec(b, sizeof b, &n, (long)rl.rlim_cur);
+        para_crash_str(b, sizeof b, &n, " max ");
+        para_crash_dec(b, sizeof b, &n, (long)( rl.rlim_max == RLIM_INFINITY ? -1 : (long)rl.rlim_max ));
+        para_crash_str(b, sizeof b, &n, " frame ");
+        para_crash_dec(b, sizeof b, &n, (long)frame);
+        para_crash_str(b, sizeof b, &n, " capacity ");
+        para_crash_dec(b, sizeof b, &n, (long)max_fibers);
+        para_crash_str(b, sizeof b, &n, "\n");
+        para_emit(b, n);
+    }
+}
+
+/**
  * @brief Installs the fiber stack guard handler (POSIX).
  *
  * Sets up an alternate signal stack and hooks SIGSEGV so that a fiber running into its guard page is detected and
@@ -2947,7 +2996,9 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
     int fid = create_fiber(user_code, objrv);
     if (fid < 0) {
         SvREFCNT_dec(objrv);
-        return &PL_sv_undef;
+        /* Carry the create_fiber error code out: -2 is the policy limit ("table full"), -3 is a failed stack mmap
+         * (address-space / data-segment budget on platforms without MAP_NORESERVE). The caller distinguishes them. */
+        return newSViv(fid);
     }
     av_store(obj, 4, newSViv(fid)); /* F_FID */
     int st = run_fiber_checked(fid, &PL_sv_undef);

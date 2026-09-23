@@ -13,12 +13,15 @@ $|++;
 BEGIN {
     $SIG{__WARN__} = sub { return if $_[0] =~ /^Deep recursion on subroutine/; warn @_ }
 }
-use constant MAX_FIBERS => 1024;
-use constant MAX_JOBS   => 1024;
+use constant MAX_JOBS => 1024;
 
-# The fiber table now grows on demand, so this file pins it at the size it was written against: everything below is
-# written in terms of exactly 1024 parked fibers and the next spawn croaking.
-Acme::Parataxis::set_max_fibers(MAX_FIBERS);
+# The fiber table used to be a fixed 1024-slot array, so this file pinned that size. The table grows on demand now,
+# but every fiber still reserves FIBER_STACK_SZ of anonymous memory, and platforms without MAP_NORESERVE (OpenBSD)
+# clamp the default fiber limit to what fits under RLIMIT_DATA. Everything below scales to the achievable capacity so
+# the same properties (an exact cap, a deterministic refusal past it, a clean drain) are checked on every platform.
+my $CAP        = Acme::Parataxis::get_max_fibers();
+my $MAX_FIBERS = $CAP < 1024 ? $CAP - 4 : 1024;
+Acme::Parataxis::set_max_fibers($MAX_FIBERS);
 sub live_count  { Acme::Parataxis::get_live_fiber_count() }
 sub outstanding { Acme::Parataxis::get_outstanding_jobs() }
 
@@ -41,13 +44,13 @@ async {
 };
 ok outstanding() == 0, 'job pool: nothing left outstanding after the pool drain';
 
-# Park 1023 fibers on a signal (no sleep jobs, no timers) to fill the 1024-slot fiber table alongside the running main
-# fiber; the next spawn must croak.
+# Park MAX_FIBERS fibers on a signal (no sleep jobs, no timers) so the next spawn hits the cap; that spawn must
+# croak deterministically.
 async {
     my $sig     = Acme::Parataxis::Signal->new;
     my $waiters = 0;
     my $full_err;
-    for ( 1 .. MAX_FIBERS + 2 ) {
+    for ( 1 .. $MAX_FIBERS + 2 ) {
         my $ok = eval {
             fiber { $sig->wait };
             1;
@@ -57,7 +60,7 @@ async {
     }
     ok defined $full_err && $full_err =~ /fiber table is full/, 'fiber table: spawning past capacity croaks with "fiber table is full"' or
         diag 'no croak; parked ' . $waiters . ' waiters' . ( $full_err ? "; err=$full_err" : '' );
-    is $waiters,     MAX_FIBERS, 'fiber table: exactly MAX_FIBERS parked fibers accepted';
+    is $waiters,     $MAX_FIBERS, 'fiber table: exactly max fibers parked fibers accepted';
     is live_count(), $waiters,   'fiber table: every accepted fiber is still parked at the cap';
     $sig->broadcast;
     Acme::Parataxis->yield while live_count() > 1;
@@ -72,7 +75,7 @@ ok live_count() == 0 && outstanding() == 0, 'fiber table: table and job pool cle
 async {
     my $chan = Acme::Parataxis::Channel->new( capacity => 1 );
     my ( $seq, $consumed ) = ( 0, 0 );
-    my $pairs = 64;
+    my $pairs = int( ( $MAX_FIBERS - 2 ) / 2 );
     my @f;
     for ( 1 .. $pairs ) {
         push @f, fiber { $chan->put( ++$seq ) }
@@ -92,7 +95,7 @@ ok live_count() == 0, 'channel cascade: all producers/consumers drained';
 async {
     my $sem    = Acme::Parataxis::Semaphore->new( count => 2 );
     my $guards = 0;
-    my $g      = 200;
+    my $g      = $MAX_FIBERS - 4;
     my @f;
     for ( 1 .. $g ) {
         push @f, fiber { $sem->guard; $guards++ }
@@ -103,10 +106,10 @@ async {
     yield    for 1 .. 5;
     is $guards, $g, 'semaphore burst: every guard acquired a permit';
 
-    # Each of the 198 dial-ups hands a permit to one parked guard. That guard's RAII guard destructor returns the
+    # Each of the $g - 2 dial-ups hands a permit to one parked guard. That guard's RAII guard destructor returns the
     # permit on release, so every dial-up nets +1 on top of the 2 initial permits the first two guards consumed and
-    # already restored: 2 + 198 = 200. The count drifting up is correct holder-ownership behaviour.
-    is $sem->count, 200, 'semaphore burst: count reflects permits returned by released guards';
+    # already restored: 2 + (g - 2) = g. The count drifting up is correct holder-ownership behaviour.
+    is $sem->count, $g, 'semaphore burst: count reflects permits returned by released guards';
 };
 ok live_count() == 0, 'semaphore burst: all guards drained';
 
