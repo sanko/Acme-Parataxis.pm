@@ -1,7 +1,7 @@
 ---
 jobs:
   results:
-    if: false
+    if: always()
     name: Summary
     needs:
       - stress-linux
@@ -9,8 +9,6 @@ jobs:
     uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
   stress-linux:
     name: Stress Linux
-    # Off while only the OpenBSD and DragonFly verdicts matter.
-    if: false
     secrets: inherit
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
@@ -30,8 +28,6 @@ jobs:
         PARATAXIS_STRESS_ITER=400 PARATAXIS_STRESS_SECONDS=30 cpanm -v .
   stress-macos:
     name: Stress macOS
-    # Off while only the OpenBSD and DragonFly verdicts matter.
-    if: false
     secrets: inherit
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
     with:
