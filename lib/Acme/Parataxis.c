@@ -144,6 +144,7 @@ typedef pthread_mutex_t para_mutex_t;
 // Forward declarations
 DLLEXPORT SV * coro_yield(SV * ret_val);
 DLLEXPORT SV * coro_transfer(int fiber_id, SV * args);
+DLLEXPORT SV * coro_call(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
 #ifndef _WIN32
 static void install_stack_guard(void);
@@ -2409,10 +2410,12 @@ static void resume_probe(int target_id, para_fiber_t * to) {
  *
  * Runs on the alternate signal stack. Prints the signal, the fault address
  * (for SIGILL that is the illegal instruction itself), the instruction, stack
- * and frame pointers where the platform's headers are known, the assembly
- * switch landmarks so a reader can tell whether the trampoline's ud2 was
- * reached, the current fiber id, and a raw word dump of the crash stack
- * starting 16 bytes below rsp for offline return-address recovery. A copy
+ * and frame pointers where the platform's headers are known, the distance
+ * from rsp to the fiber stack top, a landmark ladder of the switch and call
+ * chain functions so dumped text words bracket to a function offline, the
+ * current fiber id, and a raw word dump of the crash stack starting 64
+ * bytes below rsp, wide enough to show what a ret popped next to the six
+ * registers a switch pops. A copy
  * is also appended to /tmp/parataxis-crash.log so a lost stderr still
  * leaves evidence. printf and malloc are not signal safe; open, write and
  * close are, and only stack buffers are used.
@@ -2425,7 +2428,7 @@ static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
     if (crash_reporting)
         return;
     crash_reporting = 1;
-    char buf[768];
+    char buf[1024];
     size_t n = 0;
     const char * nm = sig == SIGSEGV ? "SIGSEGV" : sig == SIGILL ? "SIGILL" : sig == SIGBUS ? "SIGBUS" : "signal?";
     para_uc_t * u = (para_uc_t *)ucp;
@@ -2445,6 +2448,13 @@ static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
     para_crash_hex(buf, sizeof buf, &n, sp);
     para_crash_str(buf, sizeof buf, &n, " rbp ");
     para_crash_hex(buf, sizeof buf, &n, fp);
+    int fid = current_fiber_id;
+    para_fiber_t * cf = (fid >= 0 && fid < fiber_capacity) ? fibers[fid] : NULL;
+    if (cf && cf->stack_p && cf->stack_sz) {
+        unsigned long long ftop = (unsigned long long)(uintptr_t)((char *)cf->stack_p + cf->stack_sz);
+        para_crash_str(buf, sizeof buf, &n, " gap ");
+        para_crash_hex(buf, sizeof buf, &n, ftop > sp ? ftop - sp : 0);
+    }
     para_crash_str(buf, sizeof buf, &n, "\n");
 #ifdef USE_ASM_CORO
     para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: landmarks trampoline ");
@@ -2453,16 +2463,25 @@ static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
     para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_coro_switch);
     para_crash_str(buf, sizeof buf, &n, " entry_point ");
     para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_entry_point);
+    para_crash_str(buf, sizeof buf, &n, " perform_switch ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)perform_switch);
+    para_crash_str(buf, sizeof buf, &n, " coro_yield ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_yield);
+    para_crash_str(buf, sizeof buf, &n, " coro_call ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_call);
+    para_crash_str(buf, sizeof buf, &n, " coro_transfer ");
+    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_transfer);
     para_crash_str(buf, sizeof buf, &n, "\n");
 #endif
     if (sp && (sp & 7) == 0) {
-        /* Start 16 bytes below rsp: the slot a final ret popped sits there,
-         * which is exactly the value needed to confirm or rule out a bogus
-         * ret target after a context switch. */
-        unsigned long long * w = (unsigned long long *)sp - 2;
+        /* Start 64 bytes below rsp: a final ret's slot sits at rsp-8 and the
+         * six registers a switch pops sit just above it, so one window shows
+         * the faulting frame bottom whether that ret belonged to the switch
+         * or to an ordinary call in the chain. */
+        unsigned long long * w = (unsigned long long *)sp - 8;
         int i;
-        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words from rsp-16:");
-        for (i = 0; i < 18 && n + 20 < sizeof buf; i++) {
+        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words from rsp-64:");
+        for (i = 0; i < 24 && n + 20 < sizeof buf; i++) {
             para_crash_str(buf, sizeof buf, &n, " ");
             para_crash_hex(buf, sizeof buf, &n, w[i]);
         }
