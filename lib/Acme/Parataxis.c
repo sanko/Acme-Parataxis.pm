@@ -501,6 +501,10 @@ static int outstanding_jobs = 0;
 #define MAP_ANON 0x1000
 #endif
 
+#ifndef MAP_STACK
+#define MAP_STACK 0
+#endif
+
 /**
  * @brief Red zone protecting the bottom of each fiber stack.
  *
@@ -524,17 +528,17 @@ static size_t fiber_guard_sz;
  */
 #ifdef __linux__
 #define FIBER_STACK_SZ   (64 * 1024 * 1024)
-#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_STACK)
 #elif defined(__APPLE__)
 #define FIBER_STACK_SZ   (8 * 1024 * 1024)
-#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_STACK)
 #else
 #ifdef MAP_NORESERVE
 #define FIBER_STACK_SZ   (64 * 1024 * 1024)
-#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_STACK)
 #else
 #define FIBER_STACK_SZ   (8 * 1024 * 1024)
-#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_STACK)
 #endif
 #endif
 /** @brief Lazy-init: set fiber_guard_sz to the system page size. */
@@ -2577,7 +2581,7 @@ static void install_stack_guard(void) {
     init_guard_sz();
     guard_owner_thread = pthread_self();
     size_t alt_sz = 256 * 1024;
-    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_STACK, -1, 0);
     if (guard_alt_stack == MAP_FAILED) {
         guard_alt_stack = NULL;
         install_note("mmap", errno);
