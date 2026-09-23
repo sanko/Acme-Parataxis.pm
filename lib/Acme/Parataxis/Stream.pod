@@ -1,0 +1,137 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Stream - Chainable async streams over bounded Channels
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async];
+    use Acme::Parataxis::Channel;
+    use Acme::Parataxis::Stream;
+
+    async {
+        my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );
+
+        Acme::Parataxis::Stream->from_channel($raw)
+            ->map(    sub ($line) { decode_json($line)        } )
+            ->filter( sub ($msg)  { $msg->{status} >= 500     } )
+            ->throttle( 100 )                                  # at most 100/s
+            ->batch_time( 1000 )                               # ...or one batch a second
+            ->batch( 100 )                                     # ...or 100 items
+            ->consume( sub (@batch) { db_bulk_insert(@batch) } );
+    };
+
+=head1 DESCRIPTION
+
+A Stream is a chainable pipeline over bounded Channels. Every stage is a factory: C<map>, C<filter>, C<batch>,
+C<batch_time> and C<throttle> each allocate a fresh bounded output Channel, spawn one background fiber that loops
+over the stage's input applying the operation, and hand back a new Stream wrapping the output, so stages compose
+left to right exactly as the method calls read.
+
+Everything rides on the scheduler's ordinary Channel parks, which is what makes the pipeline safe by construction:
+
+=over 4
+
+=item *
+
+Backpressure is free. A bounded output Channel that fills up parks the stage's producer, and that park propagates
+all the way upstream, so a slow C<consume> (or a slow stage) throttles the raw producer instead of queueing
+unbounded memory.
+
+=item *
+
+A stream ends when its source Channel shuts down. Each stage's fiber sees the shutdown as C<undef> from C<get> and
+then shuts its own output down, so a consumed chain unwinds fiber-by-fiber back to the source and the live fiber
+count returns to its baseline: no stage can park forever on a source that quit, and no orphan fibers are left
+behind.
+
+=item *
+
+Every stage parks through the same wait machinery as any other Channel wait, so an enclosing C<with_timeout> or a
+cancellation token interrupts a stage mid-loop cleanly.
+
+=back
+
+=head1 CONSTRUCTOR
+
+=head2 C<from_channel( $ch, stage_capacity => $n )>
+
+    my $stream = Acme::Parataxis::Stream->from_channel($raw);
+    my $small  = Acme::Parataxis::Stream->from_channel($raw, stage_capacity => 4);
+
+Wraps an existing Channel as the head of a new pipeline. C<stage_capacity> (default 128) is the capacity of every
+bounded output Channel the stages of this pipeline allocate: pick it small to make backpressure bite early, large to
+let a burst flow through before any producer parks. The head itself never allocates a Channel; it reads C<$ch>
+directly, which is also the handle the pipeline shuts down.
+
+=head1 METHODS
+
+Stepping on a stream returns a new stream; the original is untouched and can be read from twice.
+
+=head2 C<map( sub ($item) { ... } )>
+
+Applies the callback to every item and emits the result. The callback result replaces the item, so an arrayref
+produced here is spread as a list by C<consume> just like a C<batch> group.
+
+=head2 C<filter( sub ($item) { ... } )>
+
+Emits an item only when the callback returns true.
+
+=head2 C<batch( $n )>
+
+Groups items into arrayrefs of C<$n>. A source that shuts down mid-batch emits the partial group as the final
+batch, so nothing buffered is ever lost.
+
+=head2 C<batch_time( $ms )>
+
+Groups items by deadline instead of by count: the first item of a batch arms a C<$ms> timer, and the batch is
+flushed either when it fills by count alone (no count limit: it stays open) or when the deadline fires. A source
+that shuts down mid-batch emits the partial group, like C<batch>.
+
+=head2 C<throttle( $per_s )>
+
+Paces the stream to at most C<$per_s> items a second. Each emission schedules the next one one period ahead and the
+stage sleeps only the remainder, so the rate is an upper bound reached from below in steady state; a stage held up
+by downstream backpressure emits immediately afterwards and never tries to "catch up".
+
+=head2 C<consume( sub (@items) { ... } )>
+
+The terminal stage. Runs the callback on every item as it arrives: a batch (arrayref) is spread into the callback's
+argument list, anything else is passed whole. Returns the fiber handle, which you can C<await> if you want the
+sink to have finished. The sink fiber ends when the source shuts down, at which point the whole pipeline is done.
+
+=head2 C<shutdown()>
+
+Shuts the head's source Channel down (and, through each stage's link, the whole chain upstream), which ends every
+stage fiber and releases any parked consumer. Mostly a convenience: shutting down the original Channel yourself has
+the same effect.
+
+=head2 C<chain()>
+
+The upstream Stream a stage was built from, or C<undef> at the head. Introspection, chiefly useful in tests.
+
+=head2 C<cap()>
+
+The stage capacity this pipeline was built with.
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis> - the fiber runtime all of this runs on, L<Acme::Parataxis::Channel> - the bounded Channel every
+stage is built from, and L<Acme::Parataxis::Ticker>, whose drift-free cadence the C<throttle> pacing borrows from.
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

@@ -24,7 +24,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 |
 | Supervisor trees - OTP restart strategies (#9)            | [x] done      | Card 3 - `Supervisor`, t/054, t/055 |
 | Software transactional memory - TVar / `atomically` (#9)  | [x] done      | Card 4 - `TVar`, t/056 |
-| Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
+| Async Streams - FRP over channels (#9)                    | [x] done      | Card 5 - `Stream`, t/057 |
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
 | Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [ ] pending   | Card 8 |
@@ -256,7 +256,18 @@ Acceptance (t/0XX):
 - side-effect warning documented in the POD.
 
 
-### 5 Async Streams (Channel-backed FRP)
+### 5 Async Streams (Channel-backed FRP) - done
+
+**Shipped:** `lib/Acme/Parataxis/Stream.pm` + `Stream.pod`, tested by t/057 (4 subtests). All four acceptance bullets
+below are covered: map/filter/batch produce only transformed/filtered/grouped items in order (t/057's ordered-prefix
+checks, including a map that yields arrayrefs and a consume that spreads them like a batch), backpressure is verified
+directly by counting parked puts on the upstream channel while a slow consume drains a bounded stage, batch fires on
+count and on deadline (the deadline branch uses `Channel->select` get-with-deadline, so a lone item after the last
+flush still trips its `batch_time` timer - the reason t/057 had to drive a stage whose input stalled), throttle caps
+the rate (a measured wall-clock spacing with the `await_sleep`-only remainder, never a "catch up" burst after
+backpressure), and quitting the source channel ends the chain with the live-fiber count back at its baseline - each
+stage's fiber sees the shutdown as `undef` from `get`, flushes a partial final batch, shuts its own output down, and
+unwinds fiber-by-fiber to the source, leaving zero leaked fibers.
 
 Source: #9 - "Async Streams (Functional Reactive Programming)". Channels (M5) + fibers + generators (M6) are the
 recipe; a `Stream` wraps a channel in a chainable pipeline. Subsumes the old planner's "Channel combinators".
@@ -280,7 +291,7 @@ Design notes:
 - Teardown: the stream ends when its source channel shuts down; `consume`'s fiber exits and the live-fiber count
   returns to baseline (no orphan fibers - M4's closing argument).
 
-Acceptance (t/0XX):
+Acceptance (t/0XX) - all covered by t/057:
 
 - map/filter/batch produce only transformed/filtered/grouped items, in order;
 - backpressure verified directly: a slow `consume` blocks the upstream producer (count parked fibers);
@@ -428,3 +439,21 @@ Acceptance (t/0XX):
 - wait_reason records gain an optional backtrace (default depth configurable);
 - per-park overhead stays bounded (compare against the M5-era micro-benchmarks);
 - deadlock diagnostics show each parked fiber's chain back to user code - the point of #7's tracing.
+
+
+### 10 Strip the roadmap labels (Card N / M#) from shipped files - deferred until the roadmap is done
+
+Source: housekeeping, not a discussion. The codebase is organized around milestones (M1-M8) and roadmap cards;
+comments in `lib/*.pm` and prose in `lib/**/*.pod` still say "M5's Channel", "Card 4 STM", "see Card 2" and the
+like. Those pointers mean nothing to someone who installs the dist without this repo, where TODO.md is not
+shipped. Stripping them is the last thing we do, after cards 4-9, because the labels are load-bearing while the
+roadmap is live (they tell a reviewer where each feature came from).
+
+Acceptance (a grep, no new tests):
+
+- no `Card \d` or `M\d+` milestone reference remains in `lib/`, `eg/`, or `t/`;
+- POD prose reads standalone: plain feature descriptions replace roadmap pointers; cross-feature relationships
+  are named directly ("Channel->select can multiplex ..." instead of "M5's select");
+- the navigational milestone comments in `lib/Acme/Parataxis.pm` (the M0/M8 slot-layout and diagnostics notes)
+  are either dropped or rewritten as architecture notes with no milestone names;
+- public API names are untouched - this card is documentation and comments only.

@@ -754,6 +754,39 @@ use size C<2>, and so on.
         say $q->get for 1 .. 8;                  # consumer
     };
 
+=head2 Streams
+
+An L<Acme::Parataxis::Stream> is a chainable pipeline over bounded channels. Every stage is a factory: C<map>,
+C<filter>, C<batch>, C<batch_time>, and C<throttle> each allocate a fresh bounded output channel, spawn one
+background fiber that loops the stage's input applying the operation, and hand back a new C<Stream> wrapping the
+output:
+
+    use Acme::Parataxis qw[fiber await_sleep];
+    use Acme::Parataxis::Channel;
+    use Acme::Parataxis::Stream;
+
+    my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );
+
+    async {
+        Acme::Parataxis::Stream->from_channel($raw)
+            ->map(    sub ($line) { decode_json($line)        } )
+            ->filter( sub ($msg)  { $msg->{status} >= 500     } )
+            ->throttle( 100 )                                  # at most 100/s
+            ->batch_time( 1000 )                               # ...or one batch a second
+            ->batch( 100 )                                     # ...or 100 items
+            ->consume( sub (@batch) { db_bulk_insert(@batch) } );
+    };
+
+Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that
+park propagates all the way upstream, so a slow C<consume> throttles the raw producer instead of queueing unbounded
+memory. A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as C<undef> from
+C<get>, flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the
+source, so no stage can park forever on a source that quit and no orphan fibers are left behind. C<batch_time> groups
+by deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
+C<batch>/C<batch_time> both emit a partial final batch on shutdown. Every stage parks through the ordinary channel
+wait machinery, so C<with_timeout> and cancellation tokens interrupt a stage mid-loop cleanly. See
+L<Acme::Parataxis::Stream> for the full method list.
+
 =head2 Signals
 
 An object with a two-state flag and a FIFO queue of waiters. A fiber parked in C<wait> does not busy-wait; it is

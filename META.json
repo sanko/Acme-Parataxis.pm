@@ -149,6 +149,10 @@
          "file" : "lib/Acme/Parataxis/Signal.pm",
          "version" : "v0.1.1"
       },
+      "Acme::Parataxis::Stream" : {
+         "file" : "lib/Acme/Parataxis/Stream.pm",
+         "version" : "v0.1.1"
+      },
       "Acme::Parataxis::Supervisor" : {
          "file" : "lib/Acme/Parataxis/Supervisor.pm",
          "version" : "v0.1.1"
