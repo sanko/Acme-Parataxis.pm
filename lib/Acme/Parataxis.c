@@ -1970,6 +1970,11 @@ DLLEXPORT int init_system() {
     return 0;
 }
 
+#ifdef USE_ASM_CORO
+/** @brief Checks a resume target's saved frame for corruption; defined with the crash probes below. */
+static void resume_probe(int target_id, para_fiber_t * to);
+#endif
+
 /**
  * @brief Performs the low-level OS context switch.
  *
@@ -1993,6 +1998,7 @@ void perform_switch(int target_id, int set_last_sender) {
     else
         SwitchToFiber(to->context);
 #elif defined(USE_ASM_CORO)
+    resume_probe(target_id, to);
     para_coro_switch(&from->rsp, &to->rsp);
 #else
     swapcontext(&from->context, &to->context);
@@ -2312,6 +2318,93 @@ static void para_crash_dec(char * b, size_t cap, size_t * n, long v) {
 }
 
 /**
+ * @brief Emits a probe or report line to stderr and the crash log file (POSIX).
+ *
+ * Every line is duplicated into /tmp/parataxis-crash.log, so a harness that swallows stderr still leaves the
+ * evidence behind for a post-run dump. open, write and close are async-signal-safe, so signal handlers may call
+ * this too.
+ *
+ * @param b Line bytes; a NUL terminator is not required.
+ * @param n Byte count.
+ */
+static void para_emit(const char * b, size_t n) {
+    write(2, b, n);
+    int fd = open("/tmp/parataxis-crash.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        write(fd, b, n);
+        close(fd);
+    }
+}
+
+#ifdef USE_ASM_CORO
+/**
+ * @brief Validates a resume target's saved frame just before switching into it (POSIX asm switch).
+ *
+ * The assembly switch pops six registers and then returns through slot[6], so a slot whose slot[6] is not a code
+ * address in this shared object, or a slot outside the target's own stack, means the frame was clobbered between
+ * the last yield and this resume. Healthy runs print nothing. A bad slot prints its address, the distance below
+ * the stack top, the word the ret is about to pop, and all seven words while they are still intact, giving the
+ * crash report that follows a before image to pair with its after.
+ *
+ * @param target_id ID about to be resumed (-1 for Main).
+ * @param to        Target context whose rsp slot is about to be popped.
+ */
+static void resume_probe(int target_id, para_fiber_t * to) {
+    if (!to || !to->rsp)
+        return;
+    char * sl = (char *)to->rsp;
+    int pos_ok = 1;
+    if (to->stack_p && to->stack_sz) {
+        if (sl < (char *)to->stack_p || sl + 56 > (char *)to->stack_p + to->stack_sz)
+            pos_ok = 0;
+    }
+    int bad = !pos_ok;
+    unsigned long retw = 0;
+    if (pos_ok) {
+        retw = (unsigned long)(uintptr_t)((void **)sl)[6];
+        unsigned long lo = (unsigned long)(uintptr_t)&para_coro_switch;
+        unsigned long a = (unsigned long)(uintptr_t)&para_trampoline;
+        if (a < lo)
+            lo = a;
+        a = (unsigned long)(uintptr_t)&para_entry_point;
+        if (a < lo)
+            lo = a;
+        a = (unsigned long)(uintptr_t)perform_switch;
+        if (a < lo)
+            lo = a;
+        if (retw < lo || retw >= lo + 0x1000000UL)
+            bad = 1;
+    }
+    if (!bad)
+        return;
+    char b[512];
+    size_t n = 0;
+    unsigned long long top = to->stack_p ? (unsigned long long)(uintptr_t)((char *)to->stack_p + to->stack_sz) : 0;
+    para_crash_str(b, sizeof b, &n, "Parataxis: resume: target ");
+    para_crash_dec(b, sizeof b, &n, target_id);
+    para_crash_str(b, sizeof b, &n, " slot ");
+    para_crash_hex(b, sizeof b, &n, (unsigned long long)(uintptr_t)sl);
+    para_crash_str(b, sizeof b, &n, " gap ");
+    para_crash_hex(b, sizeof b, &n, top ? top - (unsigned long long)(uintptr_t)sl : 0);
+    para_crash_str(b, sizeof b, &n, " ret ");
+    para_crash_hex(b, sizeof b, &n, retw);
+    para_crash_str(b, sizeof b, &n, " words");
+    if (pos_ok) {
+        void ** w = (void **)sl;
+        int i;
+        for (i = 0; i < 7; i++) {
+            para_crash_str(b, sizeof b, &n, " ");
+            para_crash_hex(b, sizeof b, &n, (unsigned long long)(uintptr_t)w[i]);
+        }
+    }
+    else
+        para_crash_str(b, sizeof b, &n, " unreadable");
+    para_crash_str(b, sizeof b, &n, "\n");
+    para_emit(b, n);
+}
+#endif /* USE_ASM_CORO */
+
+/**
  * @brief Async-signal-safe crash report for SIGSEGV, SIGILL and SIGBUS.
  *
  * Runs on the alternate signal stack. Prints the signal, the fault address
@@ -2375,15 +2468,7 @@ static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
         }
         para_crash_str(buf, sizeof buf, &n, "\n");
     }
-    write(2, buf, n);
-    /* A second copy to a fixed file: a harness that swallows stderr still
-     * leaves the report behind for a post-run dump. open, write and close
-     * are async-signal-safe. */
-    int fd = open("/tmp/parataxis-crash.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        write(fd, buf, n);
-        close(fd);
-    }
+    para_emit(buf, n);
 }
 
 /**
@@ -2435,7 +2520,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
         return;
     }
     static const char msg[] = "Parataxis: fatal: fiber C-stack overflow (> 64MB used); aborting\n";
-    write(2, msg, sizeof(msg) - 1);
+    para_emit(msg, sizeof(msg) - 1);
     signal(SIGSEGV, SIG_DFL);
 }
 
@@ -2458,7 +2543,7 @@ static void install_note(const char * stage, int err) {
     para_crash_str(b, sizeof b, &n, " errno ");
     para_crash_dec(b, sizeof b, &n, err);
     para_crash_str(b, sizeof b, &n, "\n");
-    write(2, b, n);
+    para_emit(b, n);
 }
 
 /**
@@ -2498,7 +2583,57 @@ static void install_stack_guard(void) {
     if (sigaction(SIGBUS, &act, NULL) == -1)
         install_note("sigaction SIGBUS", errno);
     static const char armed[] = "Parataxis: crash reporter armed\n";
-    write(2, armed, sizeof armed - 1);
+    para_emit(armed, sizeof armed - 1);
+}
+
+/**
+ * @brief Names the current disposition of a crash signal for the shutdown probe.
+ *
+ * @param sig Signal number to classify.
+ * @param cur Disposition just read back from the kernel.
+ * @return "ours", "DFL", "IGN" or "other".
+ */
+static const char * disp_class(int sig, const struct sigaction * cur) {
+    void * h;
+    if (cur->sa_flags & SA_SIGINFO)
+        h = (void *)(uintptr_t)cur->sa_sigaction;
+    else
+        h = (void *)(uintptr_t)cur->sa_handler;
+    if (h == (void *)(uintptr_t)SIG_DFL)
+        return "DFL";
+    if (h == (void *)(uintptr_t)SIG_IGN)
+        return "IGN";
+    if (sig == SIGSEGV && h == (void *)(uintptr_t)stack_guard_handler)
+        return "ours";
+    if ((sig == SIGILL || sig == SIGBUS) && h == (void *)(uintptr_t)crash_report_handler)
+        return "ours";
+    return "other";
+}
+
+/**
+ * @brief Prints each crash signal's current disposition at a shutdown phase (POSIX).
+ *
+ * A crash report later proves the handler still ran; this line proves what the kernel held even when no report
+ * appeared, and the phase names bracket teardown so a wipe can be ordered against the death that follows it.
+ *
+ * @param phase Shutdown stage this snapshot was taken at.
+ */
+static void disposition_note(const char * phase) {
+    char b[192];
+    size_t n = 0;
+    struct sigaction cur;
+    static const int sigs[3] = {SIGILL, SIGSEGV, SIGBUS};
+    static const char * nms[3] = {" SIGILL=", " SIGSEGV=", " SIGBUS="};
+    para_crash_str(b, sizeof b, &n, "Parataxis: disposition");
+    for (int i = 0; i < 3; i++) {
+        const char * cl = (sigaction(sigs[i], NULL, &cur) == 0) ? disp_class(sigs[i], &cur) : "err";
+        para_crash_str(b, sizeof b, &n, nms[i]);
+        para_crash_str(b, sizeof b, &n, cl);
+    }
+    para_crash_str(b, sizeof b, &n, " at ");
+    para_crash_str(b, sizeof b, &n, phase);
+    para_crash_str(b, sizeof b, &n, "\n");
+    para_emit(b, n);
 }
 #endif /* !_WIN32 */
 
@@ -3044,6 +3179,9 @@ DLLEXPORT void destroy_coro(int fiber_id) {
  */
 DLLEXPORT void cleanup() {
     dTHX;
+#ifndef _WIN32
+    disposition_note("shutdown");
+#endif
     /* Restore the original exit op so any exit() during global destruction (after this DLL could be unmapped) behaves
      * like a plain perl exit. */
     if (parataxis_saved_pp_exit && PL_ppaddr[OP_EXIT] == parataxis_pp_exit)
@@ -3100,4 +3238,7 @@ DLLEXPORT void cleanup() {
         SvREFCNT_dec(main_context.transfer_data);
         main_context.transfer_data = &PL_sv_undef;
     }
+#ifndef _WIN32
+    disposition_note("cleanup-done");
+#endif
 }
