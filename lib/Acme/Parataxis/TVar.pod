@@ -1,0 +1,129 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::TVar - Software Transactional Memory
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber await atomically retry];
+    use Acme::Parataxis::TVar;
+
+    # A deadlock-proof 50-coin transfer between two accounts:
+    my $a = Acme::Parataxis::TVar->new( value => 100 );
+    my $b = Acme::Parataxis::TVar->new( value => 100 );
+
+    async {
+        my $r = fiber {
+            atomically {
+                my $from = $a->get;
+                my $to   = $b->get;
+                yield;                     # open a scheduling gap so transfers can race
+                $a->set( $from - 50 );
+                $b->set( $to + 50 );
+                return 1;
+            }
+        };
+        await $r;
+        say 'a = ', $a->value, ', b = ', $b->value;
+    };
+
+=head1 DESCRIPTION
+
+TVar is the transactional cell at the heart of Card 4's Software Transactional Memory: a versioned, mutable value that
+is only ever observed and changed through L<atomically|/atomically>. Inside a transaction every read and write is
+journaled; writes to the real TVars happen only when the transaction commits, and only if nothing the transaction read
+changed in the meantime. That is what makes lock ordering a non-problem: two transactions moving money in opposite
+directions between the same two accounts resolve by one of them rolling back and re-running, never by deadlocking.
+
+=head2 TVar operations
+
+=over 4
+
+=item C<< Acme::Parataxis::TVar->new( value => $v ) >>
+
+Builds a TVar holding the committed value C<$v>. There is no unlock, no destroy, and no actor: any fiber may transact
+on a TVar.
+
+=item C<< $tv->get >>
+
+Reads the committed value and journals the read. Repeated reads of the same TVar inside one transaction journal only
+the first. Reading a TVar your own transaction already wrote returns that uncommitted write (read-your-writes). Croaks
+outside an C<atomically> block.
+
+=item C<< $tv->set($v) >>
+
+Stages a write for the current transaction. The committed TVar is untouched until the outermost C<atomically> commits.
+Croaks outside an C<atomically> block.
+
+=item C<< $tv->value >>
+
+The committed value, readable from anywhere (no transaction). Use this to inspect state from a signal handler, a
+supervision tree, or a test.
+
+=back
+
+=head2 atomically
+
+C<< Acme::Parataxis->atomically( sub { ... } ) >> (also available as a plain C<atomically { ... }> after
+L<importing|Acme::Parataxis> it) runs its block as one transaction on the calling fiber:
+
+=over 4
+
+=item *
+
+The block may run many times. On commit it re-runs from the top whenever a TVar it read was written by a transaction
+that committed while it was suspended (for example the block C<yield>ed inside the transaction).
+
+=item *
+
+C<retry()> aborts the block and parks the fiber until any TVar it has read changes, then re-runs it from the top.
+
+=item *
+
+Nested C<atomically> calls join the enclosing transaction: they commit together, and a C<retry()> or conflict at any
+depth aborts and re-runs the outermost block.
+
+=item *
+
+The transaction's value is the block's return value. A block that dies with anything but the internal C<retry()>
+exception aborts the transaction and rethrows the error unchanged.
+
+=item *
+
+C<with_timeout> and cancellation compose: interrupting a transaction parked by C<retry()> unregisters it from every
+TVar it was watching and surfaces the usual C<Error::Timeout> / C<Error::Cancelled>, leaving the TVars untouched.
+
+=back
+
+=head1 SIDE EFFECTS
+
+=over 4
+
+=item *
+
+The block may run many times, so it must not have irreversible side effects. Do not print, do not write files, do not
+send network messages, and do not C<put> to a channel from inside a transaction. If you must, do it after C<atomically>
+returns, or re-check your artefacts for the double-run.
+
+=item *
+
+A transaction that never read a TVar cannot park: C<retry()> with an empty read set would spin forever, so it croaks.
+Read at least one TVar before calling C<retry()>.
+
+=item *
+
+Getting the same TVar from two different transactions always yields the committed history: no transaction can ever
+observe another's partial success.
+
+=back
+
+=head1 SEE ALSO
+
+L<Acme::Parataxis> - the fiber runtime this transaction log rides on, L<Acme::Parataxis::Sync::Mutex> and friends - the
+blocking primitives STM grows out of.
+
+=cut

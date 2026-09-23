@@ -88,6 +88,16 @@ package Acme::Parataxis::Error v0.1.1 {
         sub primary  ($self) { $self->{primary} }                # the death that exhausted it
         sub child    ($self) { $self->{child} }                  # name of that child
     }
+
+    # Control flow for Card 4 STM, not a user-facing error: thrown by retry() inside an
+    # atomically block and caught by atomically itself, which discards the transaction's
+    # writes, parks on the read set, and re-runs the block. It never escapes atomically -
+    # retry() outside a transaction croaks before this is constructed.
+    package Acme::Parataxis::Error::STM_Retry v0.1.1 {
+        use parent 'Acme::Parataxis::Error';
+        sub new  ( $class, %args ) { bless { label => 'STM retry', message => 'STM retry (internal)', %args, }, $class }
+        sub kind ($self)           {'stm_retry'}
+    }
 };
 #
 1;

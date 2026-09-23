@@ -23,7 +23,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Deadlock tracing - `dump_fibers`, wait_reason (#7)        | [x] done      | M8, t/045 (full backtrace deferred → Card 9) |
 | Event-loop integration - Mojo / IO::Async (#9)            | [x] done      | Card 2 - `attach_loop`, `Driver::{Mojo,IOAsync}`, t/047, t/048 |
 | Supervisor trees - OTP restart strategies (#9)            | [x] done      | Card 3 - `Supervisor`, t/054, t/055 |
-| Software transactional memory - TVar / `atomically` (#9)  | [ ] pending   | Card 4 |
+| Software transactional memory - TVar / `atomically` (#9)  | [x] done      | Card 4 - `TVar`, t/056 |
 | Async Streams - FRP over channels (#9)                    | [ ] pending   | Card 5 |
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
 | Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
@@ -200,7 +200,20 @@ Acceptance (t/0XX):
 - actors restart with a clean mailbox; in-flight asks fail; live-fiber count returns to baseline.
 
 
-### 4 STM (TVar + atomically)
+### 4 STM (TVar + atomically) - done
+
+**Shipped:** `lib/Acme/Parataxis/TVar.pm` + `TVar.pod`, plus `Acme::Parataxis::Error::STM_Retry` and the
+`atomically`/`retry` exports on the main module (with an `&` prototype so the POD synopsis's bare-block form is
+truthful; a runtime CODE-ref guard keeps the non-block-value error honest), tested by t/056 (7 subtests). The four
+acceptance bullets below are covered: a single-writer transfer commits exactly once (the re-run counter proves no
+spurious restarts); the classic opposite-transfers deadlock (A→B vs B→A) resolves with neither side hanging - one
+transfer commits, the loser's commit fails under the global commit lock and rolls back + re-runs, while the ledger
+stays conserved (t/036's Mutex counterpart, inverted); writes are invisible until commit, so a reader never observes
+a half-applied transfer and a loser's rollback leaves the shared state untouched (t/034's staged-write subtest is the
+mutex-only control); `retry()` parks the fiber on its read set and wakes exactly when a read TVar commits, while
+nested `atomically` blocks join the outer log (read-your-writes) so the inner block sees staged writes and the whole
+write set commits as one transaction - it never deadlocks on itself. A timeout interrupts a retry-parked transaction
+cleanly, unregistering it from every watcher and leaving the TVars untouched (t/056 subtest 6).
 
 Source: #9 - "Software Transactional Memory (STM)". Mutexes are hard to compose and deadlock-prone; STM makes shared
 state feel lock-free and atomic. The article even sketches a workable `atomically`.

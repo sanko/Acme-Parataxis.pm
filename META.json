@@ -106,6 +106,14 @@
          "file" : "lib/Acme/Parataxis/Error.pm",
          "version" : "v0.1.1"
       },
+      "Acme::Parataxis::Error::STM_Retry" : {
+         "file" : "lib/Acme/Parataxis/Error.pm",
+         "version" : "v0.1.1"
+      },
+      "Acme::Parataxis::Error::Supervisor" : {
+         "file" : "lib/Acme/Parataxis/Error.pm",
+         "version" : "v0.1.1"
+      },
       "Acme::Parataxis::Error::Timeout" : {
          "file" : "lib/Acme/Parataxis/Error.pm",
          "version" : "v0.1.1"
@@ -141,6 +149,10 @@
          "file" : "lib/Acme/Parataxis/Signal.pm",
          "version" : "v0.1.1"
       },
+      "Acme::Parataxis::Supervisor" : {
+         "file" : "lib/Acme/Parataxis/Supervisor.pm",
+         "version" : "v0.1.1"
+      },
       "Acme::Parataxis::Sync" : {
          "file" : "lib/Acme/Parataxis/Sync.pm",
          "version" : "v0.1.1"
@@ -169,6 +181,10 @@
       },
       "Acme::Parataxis::Sync::WaitGroup" : {
          "file" : "lib/Acme/Parataxis/Sync/WaitGroup.pm",
+         "version" : "v0.1.1"
+      },
+      "Acme::Parataxis::TVar" : {
+         "file" : "lib/Acme/Parataxis/TVar.pm",
          "version" : "v0.1.1"
       },
       "Acme::Parataxis::Ticker" : {

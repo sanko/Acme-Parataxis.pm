@@ -20,6 +20,7 @@ package Acme::Parataxis v0.1.1 {
                 await_sleep await_read await_write await_core_id
                 current_fid tid root maybe_yield on_wake with_timeout nursery
                 set_max_threads max_threads set_max_fibers max_fibers dump_fibers
+                atomically retry
                 ]
         ]
     );
@@ -424,6 +425,31 @@ package Acme::Parataxis v0.1.1 {
         }
         die $err unless $ok;
         return $rv;
+    }
+
+    # Card 4 STM. atomically() runs $code as one transaction on the calling fiber: reads are
+    # journaled, writes stay in a write set until the outermost atomically commits (validating
+    # every read first, re-running on conflict), and retry() parks the fiber until a TVar it
+    # read changes. The block may run many times - no irreversible side effects inside it.
+    # See Acme::Parataxis::TVar for the semantics and the SIDE EFFECTS warning.
+    sub atomically : prototype(&) {
+        my $o    = _arg_offset( $_[0] );
+        my $code = $_[$o];
+        croak 'atomically() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'atomically() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        @_ = ();
+        require Acme::Parataxis::TVar;
+        return Acme::Parataxis::TVar::_atomically($code);
+    }
+
+    # Card 4 STM. Aborts the enclosing atomically block and re-runs it once a TVar the
+    # transaction has read changes; croaks anywhere else.
+    sub retry {
+        my $o = _arg_offset( $_[0] );
+        croak 'retry() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        @_ = ();
+        require Acme::Parataxis::TVar;
+        Acme::Parataxis::TVar::_retry();
     }
 
     # Structured concurrency (M4). $code runs in the calling fiber with an Acme::Parataxis::Nursery

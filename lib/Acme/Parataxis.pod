@@ -429,6 +429,43 @@ to exactly C<rate> per second. Over any window no more than C<rate x window + bu
 C<burst> never raises the long-run average - it only decides how much of it can arrive at once. See
 L<Acme::Parataxis::RateLimiter> for how to choose it.
 
+=head2 Software Transactional Memory
+
+L<Acme::Parataxis::TVar> is a versioned, mutable cell you transact on through
+C<< Acme::Parataxis->atomically( sub { ... } ) >> (also available as a plain C<atomically { ... }> after importing
+it). Readers and writers are never locked and never ordered; instead, each transaction journals its reads and writes,
+and when it commits it checks that every TVar it read still holds its committed value before flushing its writes all
+at once:
+
+    use Acme::Parataxis qw[async fiber await atomically retry];
+    use Acme::Parataxis::TVar;
+
+    # A deadlock-proof 50-coin transfer between two accounts:
+    my $a = Acme::Parataxis::TVar->new( value => 100 );
+    my $b = Acme::Parataxis::TVar->new( value => 100 );
+
+    async {
+        my $r = fiber {
+            atomically {
+                my $from = $a->get;
+                my $to   = $b->get;
+                yield;                     # open a scheduling gap so transfers can race
+                $a->set( $from - 50 );
+                $b->set( $to + 50 );
+                return 1;
+            }
+        };
+        await $r;
+        say 'a = ', $a->value, ', b = ', $b->value;
+    };
+
+Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling
+back and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes
+another's partial state. C<retry()> aborts the transaction and parks the fiber until any TVar it read changes, then
+re-runs it from the top, and nested C<atomically> blocks join the enclosing transaction so their writes commit
+together. The block may run many times, so it must not have irreversible side effects - no printing, file I/O, or
+channel C<put> inside a transaction (see L<Acme::Parataxis::TVar> for the full SIDE EFFECTS warning).
+
 =head1 Thread Pool Configuration
 
 C<Acme::Parataxis> uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
