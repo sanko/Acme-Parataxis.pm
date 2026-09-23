@@ -12,8 +12,10 @@ sub live_count { Acme::Parataxis::get_live_fiber_count() }
 # involved. This is not Stress-only: the macOS legs of the regular CI matrix measured mean 0.123s, span 3.57s and
 # fired 4 against limits of 0.110/3.10/5, while a quiet local run sits at 0.100/2.90/7. Stress jobs (marked by
 # PARATAXIS_STRESS_*) are the same problem turned up further. Every CI task script exports AUTOMATED_TESTING=1 and
-# local ./Build test does not, so those margins run at full strength only where a quiet host can be assumed; the
-# structural and lower-bound assertions in the same subtests still run everywhere.
+# local ./Build test does not, so those margins run at full strength only where a quiet host can be assumed. The
+# dropped >= 3 bound is one of those margins: dropped counts up with fired, fired starves first on a late host, and
+# a stress macOS leg measured dropped 2, so it rides the same gate. The structural assertions in the same subtests
+# (fired = dropped + pending, pending <= 1, monotonic receipts) still run everywhere.
 my $stress_env  = !!( $ENV{PARATAXIS_STRESS_SECONDS} || $ENV{PARATAXIS_STRESS_ITER} );
 my $skip_timing = $stress_env || !!$ENV{AUTOMATED_TESTING};
 
@@ -72,8 +74,9 @@ subtest 'a slow consumer drops ticks instead of queueing them up' => sub {
     }
     else {
         cmp_ok $fired, '>=', 5, 'several ticks fired while nobody was listening';
+        cmp_ok $dropped, '>=', 3, 'the superseded ticks were dropped rather than kept';
     }
-    cmp_ok $dropped,    '>=', 3, 'the superseded ticks were dropped rather than kept';
+    is $dropped + $pending, $fired, 'every fired tick is pending or dropped, never kept';
     cmp_ok $pending,    '<=', 1, 'only one uncollected tick was ever outstanding - there is no stale-tick backlog to work through';
     cmp_ok scalar @got, '>=', 2, 'the slow consumer still received ticks';
     ok( ( !grep { $got[$_] <= $got[ $_ - 1 ] } 1 .. $#got ), 'each tick it received is newer than the last - no stale tick is replayed' );
