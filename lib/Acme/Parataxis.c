@@ -2584,6 +2584,8 @@ static void install_note(const char * stage, int err) {
  * tables, the worker pool and the crash-report alt stack.
  */
 static void probe_fiber_budget(void) {
+#ifndef _WIN32
+#ifndef MAP_NORESERVE
     struct rlimit rl;
     if (getrlimit(RLIMIT_DATA, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY)
         return;
@@ -2616,6 +2618,8 @@ static void probe_fiber_budget(void) {
         para_crash_str(b, sizeof b, &n, "\n");
         para_emit(b, n);
     }
+#endif
+#endif
 }
 
 /**
