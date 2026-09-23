@@ -28,7 +28,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Drift-free `Ticker` (#10)                                 | [x] done      | Card 6 - `Ticker`, t/050 |
 | Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [x] done      | Card 8 - `Compat`, t/058 |
-| Full park-site backtrace - `dump_fibers` depth (#7)       | [ ] pending   | Card 9 |
+| Full park-site backtrace - `dump_fibers` depth (#7)       | [x] done      | Card 9 - t/059 |
 
 ## Carried over from the previous roadmap
 
@@ -437,27 +437,36 @@ Acceptance (now t/058):
 - no interception on other threads; docs list which builtins are covered and which are not.
 
 
-### 9 Diagnostics depth (full park-site backtraces)
+### 9 Diagnostics depth (full park-site backtraces) - done
 
 Source: #7's "Deadlock tracing" + M8's deferred nice-to-have. `dump_fibers` (M8) gives `{ fid, state, reason =>
 [reason, file, line] }` and prints each parked fiber's reason and *site* - the frame that entered the wait, not a
 backtrace. #7 asked for "the perl-level stack trace where they called `yield`."
 
-Design notes:
+Shipped (subject-only "Add park-site backtraces (wait_reason)"):
 
-- Capture a bounded callchain at the `_park` site (a few `caller` frames / `Devel::Callsite` when available) and hang
-  it off the wait-reason record - or compute lazily on request to keep the per-park cost at zero. Benchmark
-  `spawn`/`await` before and after; keep the delta bounded.
-- Keep `dump_fibers` returning structured data by default (the existing contract); the FATAL deadlock report and the
-  human `$fh` form add the backtrace section.
-- No weak-reference layer needed: C already holds the strong `self_ref` for every fiber (Article 2), so parked
-  fibers stay alive long enough to inspect.
+- `_park` captures a bounded, user-side callchain at every park and hangs it off the wait-reason record, which is
+  now `[ $reason, $file, $line, $backtrace ]`; each backtrace frame is `[ pkg, file, line, sub ]`, running from just
+  below the recorded site back to the fiber body, with `Acme::Parataxis*` frames filtered out. `wait_reason` on
+  fibers and on the interruption errors both expose it; `Error::_new` renders the site from the first three elements
+  only, so error messages are unchanged.
+- `dump_fibers` carries the chain in its records and prints it as indented `at` lines in the human `$fh` form; the
+  scheduler's `FATAL: deadlock detected` report prints each parked fiber's chain back to user code - #7's exact ask.
+- Configurable and bounded: `backtrace_depth( $n )` (class method, also exported) sets the capture cap, defaults to
+  6, rejects negative/non-integer values, and `backtrace_depth(0)` disables the capture entirely for the zero-cost
+  path the design note's laziness was meant to protect. Captured eagerly because a park's stack is gone by the time
+  a diagnostics tool asks for it.
+- Overhead: measured on this machine with the private `eg/_benchmark.pl` harness (HEAD shadow vs Card-9 build) -
+  parallel spawn+await, series spawn+wait, gated semaphore, and size-1 channel hand-offs were all within the
+  machine's own run-to-run noise; a focused micro-probe (2000-park series, capture depth 0/2/6) put the default
+  6-frame capture at well under 2% of per-park time, and `depth => 0` at zero.
 
-Acceptance (t/0XX):
+Acceptance (now t/059):
 
-- wait_reason records gain an optional backtrace (default depth configurable);
-- per-park overhead stays bounded (compare against the M5-era micro-benchmarks);
-- deadlock diagnostics show each parked fiber's chain back to user code - the point of #7's tracing.
+- wait_reason records gain an optional backtrace and the default depth is configurable (subtests 1-3);
+- per-park overhead stays bounded against the M5-era micro-benchmarks (measured, above);
+- deadlock diagnostics show each parked fiber's chain back to user code (subtest 5), and the `dump_fibers` records
+  and human report expose the same chain (subtest 4).
 
 
 ### 10 Strip the roadmap labels (Card N / M#) from shipped files - deferred until the roadmap is done

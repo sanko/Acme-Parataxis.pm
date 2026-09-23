@@ -234,9 +234,9 @@ token fires.
 
 =back
 
-Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reason, file, line ]> describing the wait
-that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is awaiting it no longer
-kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
+Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reason, file, line, backtrace ]>
+describing the wait that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is
+awaiting it no longer kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
 
 =head2 Bare C<nursery( sub ($n) { ... } )>
 
@@ -575,12 +575,13 @@ is released and it can no longer be called.
 =head2 C<< $fiber->wait_reason() >>
 
 While a fiber is suspended inside a blocking wait (C<await_sleep>, C<await>, C<await_read>, a semaphore C<down>, a
-C<Signal-E<gt>wait>, a Channel C<get>/C<put>, or a busy C<wait> for a child), returns a 3-element arrayref recording
-how it parked: C<[ $reason, $file, $line ]> where C<$reason> is a short label and C<$file>/C<$line> are the caller's
-location that entered the wait. Returns C<undef> for a fiber that is running, finished, or merely cooperatively
-yielded.
+C<Signal-E<gt>wait>, a Channel C<get>/C<put>, or a busy C<wait> for a child), returns the record of how it parked:
+C<[ $reason, $file, $line, $backtrace ]> where C<$reason> is a short label, C<$file>/C<$line> are the caller's
+location that entered the wait, and C<$backtrace> is an arrayref of C<< [ pkg, file, line, sub ] >> user-side frames
+from just below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is
+disabled). Returns C<undef> for a fiber that is running, finished, or merely cooperatively yielded.
 
-    my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42 ]
+    my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42, [...] ]
 
 This is read-only diagnostic metadata; workers waiting on the same primitive are unaffected by it.
 
@@ -906,15 +907,19 @@ L<Acme::Parataxis::Supervisor>.
 
 Every fiber that parks in a wait records where and why (M0's wait_reason), and C<dump_fibers> exposes it: each live
 fiber with its state (C<WAITING> / C<READY> / C<RUNNING> / C<RUNNABLE>) and, when parked, the wait reason together with
-the source site where it yielded.
+the source site where it yielded and a short callchain back to the fiber body (Card 9's park-site backtraces).
 
     my $fibers = Acme::Parataxis->dump_fibers;       # data only
     Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable report
 
-C<dump_fibers()> returns an arrayref of C<< { fid, state, reason => [ reason, file, line ] } >> records. It is safe to
-call at any time, including top level; outside a run it reports fibers leaked by an earlier deadlocked run. The
-scheduler's fatal deadlock message ("no runnable work and no outstanding jobs") is the same report, listing every
-parked fiber of the deadlocked run with its reason and site.
+C<dump_fibers()> returns an arrayref of C<< { fid, state, reason => [ reason, file, line, backtrace ] } >> records
+(C<backtrace> is the arrayref of C<< [ pkg, file, line, sub ] >> frames described under C<wait_reason>; C<[]> when the
+capture is off or there is no user frame below the site). It is safe to call at any time, including top level;
+outside a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no
+runnable work and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its
+reason, site, and chain back to user code. C<backtrace_depth> (class method, also exported) sets and reports the
+capture cap: default 6 frames, C<backtrace_depth(0)> disables the capture entirely for a zero-cost diag path; the
+capture itself is roughly a microsecond per park (bounded against the M5-era spawn/await micro-benchmarks).
 
 =head1 Best Practices & Gotchas
 

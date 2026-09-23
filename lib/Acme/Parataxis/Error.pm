@@ -6,13 +6,13 @@ use v5.40;
 package Acme::Parataxis::Error v0.1.1 {
     use overload '""' => sub { $_[0]->message }, fallback => 1;
     sub message     ($self) { $self->{message} }
-    sub wait_reason ($self) { $self->{wait_reason} }    # the [reason, file, line] the interrupted wait parked with
+    sub wait_reason ($self) { $self->{wait_reason} }    # the [reason, file, line, backtrace] the interrupted wait parked with
 
     # Shared constructor: blessed into the calling subclass. $label seeds the default message.
     sub _new ( $class, $label, %args ) {
         my $reason = delete $args{wait_reason};
         my $site   = 'an unknown wait';
-        $site = sprintf '%s (%s line %d)', @$reason if ref $reason eq 'ARRAY' && @$reason == 3;
+        $site = sprintf '%s (%s line %d)', @{ $reason }[ 0 .. 2 ] if ref $reason eq 'ARRAY' && @$reason >= 3;
         bless { label => $label, message => "$label at $site", wait_reason => $reason, %args, }, $class;
     }
 

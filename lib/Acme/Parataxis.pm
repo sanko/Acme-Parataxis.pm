@@ -20,6 +20,7 @@ package Acme::Parataxis v0.1.1 {
                 await_sleep await_read await_write await_core_id
                 current_fid tid root maybe_yield on_wake with_timeout nursery
                 set_max_threads max_threads set_max_fibers max_fibers dump_fibers
+                backtrace_depth
                 atomically retry
                 ]
         ]
@@ -34,6 +35,7 @@ package Acme::Parataxis v0.1.1 {
     my %PARKED;           # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
     my %PARK_REGS;        # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;    # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
+    my $BACKTRACE_DEPTH = 6;    # Card 9: max user-side caller frames captured at each park (0 disables the capture)
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -81,9 +83,10 @@ package Acme::Parataxis v0.1.1 {
     # live fiber that still carries a reason (or is in %PARKED) is blocked, not merely preempted. WAITING =
     # parked on a wait; READY = in the scheduler run queue; RUNNING = the fiber calling the snapshot (only
     # when taken from inside a run); RUNNABLE = live but neither parked nor queued (e.g. a generator's body
-    # or a fiber surrendered mid-quantum). A Perl-level stack capture of the yield site is a later nice-to-have;
-    # for now the recorded site is the wait_reason site (the user's call for direct waits like await_sleep, the
-    # wait's own method for Sync/Channel waits whose level targeting is tuned for their error messages).
+    # or a fiber surrendered mid-quantum). Since Card 9 each record also carries the bounded user-side caller
+    # chain (its fourth element) captured at the park; the top site is still the wait_reason site (the user's
+    # call for direct waits like await_sleep, the wait's own method for Sync/Channel waits whose level
+    # targeting is tuned for their error messages).
     sub _fiber_snapshot () {
         my $current = get_current_parataxis_id();
         my @rows;
@@ -101,10 +104,11 @@ package Acme::Parataxis v0.1.1 {
         return [ sort { $a->{fid} <=> $b->{fid} } @rows ];
     }
 
-    # Dumps every live fiber. Returns the arrayref of { fid, state, reason (wait_reason site) } records and, when
-    # called with a filehandle, also prints a human-readable report there (dump_fibers() with no argument only
-    # returns the data). Safe to call from anywhere: top-level (outside a run) reports fibers leaked by an earlier
-    # deadlocked run, inside a run it classifies each live fiber exactly.
+    # Dumps every live fiber. Returns the arrayref of { fid, state, reason (wait_reason site; its fourth element is
+    # the Card-9 backtrace arrayref of [pkg, file, line, sub] user-side frames, [] when the capture is off or empty) }
+    # records and, when called with a filehandle, also prints a human-readable report there (dump_fibers() with no
+    # argument only returns the data). Safe to call from anywhere: top-level (outside a run) reports fibers leaked by
+    # an earlier deadlocked run, inside a run it classifies each live fiber exactly.
     sub dump_fibers {
         my $invocant = shift;
         if ( !defined $invocant ||
@@ -120,6 +124,9 @@ package Acme::Parataxis v0.1.1 {
         for my $r (@$rows) {
             my ( $file, $line ) = $r->{reason} ? @{ $r->{reason} }[ 1, 2 ] : ( '-', '-' );
             say $fh sprintf '  %-4d %-8s %-17s %s:%s', $r->{fid}, $r->{state}, ( $r->{reason} && $r->{reason}[0] ) // '-', $file, $line;
+            for my $bt ( @{ $r->{reason}[3] // [] } ) {
+                say $fh sprintf '        at %s:%d  %s', @$bt[ 1, 2, 3 ];
+            }
         }
         return $rows;
     }
@@ -221,6 +228,9 @@ package Acme::Parataxis v0.1.1 {
     # $level is the caller stack depth (relative to _park) of the *user* frame whose location should be attributed:
     # 1 for direct wait sites, 2 for a Semaphore down(), 3 for a Channel get()/put().
     #
+    # Card 9: the wait-reason record is [reason, file, line] plus a fourth element, a bounded backtrace of the
+    # user-side callchain (caller frames from just below the recorded site back to the fiber body). Capturing it
+    # is a short caller() loop (~100ns per frame), so it runs unconditionally; backtrace_depth(0) disables it.
     # On the *re-entry* after the yield returns, a pending interrupt (set by _interrupt) is consumed and thrown, so a
     # cancelled wait unwinds with Acme::Parataxis::Error::Cancelled (or ::Timeout) right here the caller of the wait
     # sees the parked wait's own reason in the error's wait_reason.
@@ -228,6 +238,20 @@ package Acme::Parataxis v0.1.1 {
     # $dereg, when given, is a coderef that removes the *parking* fiber from whatever waiter list it is parked on
     # (Semaphore/Signal/Future/child-await). It runs only when this park is interrupted, before the error is thrown, so
     # a cancelled fiber never leaves a stale id behind that a later wake could fire at a reused fiber.
+    sub backtrace_depth {
+        my $invocant = shift;
+        if ( !defined $invocant ||
+            ( ( ref $invocant || $invocant ) ne __PACKAGE__ && !( builtin::blessed($invocant) && $invocant->isa(__PACKAGE__) ) ) ) {
+            unshift @_, $invocant if defined $invocant;
+            $invocant = __PACKAGE__;
+        }
+        return $BACKTRACE_DEPTH unless @_;
+        my ($depth) = @_;
+        croak 'backtrace_depth must be a non-negative integer' if !defined $depth || $depth !~ /^\d+$/;
+        $BACKTRACE_DEPTH = $depth;
+        return $BACKTRACE_DEPTH;
+    }
+
     sub _park ( $reason, $level = 1, $dereg = undef ) {
         my $fid = Acme::Parataxis->current_fid;
         croak '_park() must be called from inside a scheduled fiber' if $fid < 0;
@@ -252,7 +276,16 @@ package Acme::Parataxis v0.1.1 {
             die $err;
         }
         my ( $file, $line ) = ( caller($level) )[ 1, 2 ];
-        my $site = [ $reason, $file, $line ];
+        my $bt = [];
+        if ($BACKTRACE_DEPTH) {
+            for ( my $i = 1; $i <= $BACKTRACE_DEPTH; $i++ ) {
+                my @c = caller( $level + $i );
+                last unless defined $c[0];
+                next if index( $c[0], 'Acme::Parataxis' ) == 0;    # user-side frames only
+                push @$bt, [ $c[0], $c[1], $c[2], $c[3] ];
+            }
+        }
+        my $site = [ $reason, $file, $line, $bt ];
         $fiber->[F_WAIT_REASON] = $site;
         $PARKED{$fid}           = 1;
         $PARK_REGS{$fid}        = $dereg if defined $dereg;
@@ -832,6 +865,9 @@ package Acme::Parataxis v0.1.1 {
                                     $r->{reason} ? $r->{reason}[0]                               : '-',
                                     $r->{reason} ? sprintf( '%s:%d', @{ $r->{reason} }[ 1, 2 ] ) : '-'
                                 );
+                                for my $bt ( @{ $r->{reason}[3] // [] } ) {
+                                    $body .= sprintf( "        at %s:%d  %s\n", @$bt[ 1, 2, 3 ] );
+                                }
                             }
                             $body .= "  (no live fibers from this run)\n" unless @mine;
                             my $leaked = @$rows - @mine;
@@ -972,7 +1008,7 @@ package Acme::Parataxis v0.1.1 {
         }
         return 0;
     }
-    sub wait_reason ($self) { $self->[F_WAIT_REASON] }    # [reason, file, line] while parked, undef otherwise
+    sub wait_reason ($self) { $self->[F_WAIT_REASON] }    # [reason, file, line, backtrace] while parked, undef otherwise
 
     sub wait ($self) {
         if ( !$self->is_done && Acme::Parataxis->current_fid < 0 ) {

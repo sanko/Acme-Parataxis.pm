@@ -68,8 +68,8 @@ The machine-readable discriminator: C<'cancelled'>, C<'timeout'>, C<'nursery'>, 
 
 =head2 C<wait_reason( )>
 
-The C<[ reason, file, line ]> triple the interrupted wait parked with (the same value available on a fiber via
-C<wait_reason>). May be undef if the wait did not record one.
+The C<[ reason, file, line, backtrace ]> record the interrupted wait parked with (the same value available on a fiber
+via C<wait_reason>; see Acme::Parataxis for the backtrace's shape). May be undef if the wait did not record one.
 
 =head2 C<seconds( )>
 
