@@ -2576,6 +2576,14 @@ static void install_note(const char * stage, int err) {
     para_emit(b, n);
 }
 
+/** @brief Per-fiber anonymous-memory charge beyond the stack itself.
+ *
+ * OpenBSD's RLIMIT_DATA counts every anonymous mapping and the whole malloc arena, and each fiber additionally
+ * allocates five Perl control stacks (FIBER_STACK_DEPTH entries each), a context stack, its context struct and a
+ * share of the grown table. Measured on the 7.8 CI runner: 504 of the 507 predicted 8 MiB frames fit a 4 GiB
+ * budget, a 64 MiB shortfall over ~500 fibers, so allow 160 KiB per fiber, comfortably over the ~130 KiB charged. */
+#define FIBER_CHARGED_OVERHEAD (160 * 1024)
+
 /**
  * @brief Right-sizes the default fiber limit to the platform's anonymous-memory budget.
  *
@@ -2585,8 +2593,9 @@ static void install_note(const char * stage, int err) {
  * counts every anonymous mmap at full size, so the generous DEFAULT_FIBER_LIMIT would let the very first big spawn
  * explode the process budget; the failing mmap then surfaces as a confusing table-full message. DragonFly has no
  * MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The probe raises the soft limit
- * to the hard limit when permitted and clamps max_fibers to the number of stacks that actually fit, leaving four
- * frames of headroom for perl, the tables, the worker pool and the crash-report alt stack. Keying on the
+ * to the hard limit when permitted and clamps max_fibers to the number of full frames that actually fit: each
+ * frame is the stack plus the per-fiber charge FIBER_CHARGED_OVERHEAD, and four frames stay free as headroom for
+ * perl, the tables, the worker pool and the crash-report alt stack. Keying on the
  * MAP_NORESERVE macro itself would compile this OUT on OpenBSD (defined as 0) and IN on DragonFly (undefined), the
  * exact inversion of the intent, so the guard names __OpenBSD__ directly.
  */
@@ -2606,7 +2615,7 @@ static void probe_fiber_budget(void) {
     if (rl.rlim_cur == RLIM_INFINITY)
         return;
     init_guard_sz();
-    size_t frame = FIBER_STACK_SZ + fiber_guard_sz;
+    size_t frame = FIBER_STACK_SZ + fiber_guard_sz + FIBER_CHARGED_OVERHEAD;
     long cap = (long)( rl.rlim_cur / (rlim_t)frame ) - 4;
     if (cap < 8)
         cap = 8;
