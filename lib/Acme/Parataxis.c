@@ -102,18 +102,10 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <errno.h>
 #ifndef USE_ASM_CORO
 #include <ucontext.h>
-#elif defined(__linux__) || defined(__NetBSD__)
-/* The crash reporter reads ucontext register state on the asm path too. OpenBSD
- * ships no ucontext header at all (its ucontext_t is struct sigcontext, which
- * <signal.h> above already provides), and every other asm platform reports
- * zeros for those registers while still getting si_addr, so only these two
- * widen the include. */
-#include <ucontext.h>
 #endif
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <fcntl.h>
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -149,7 +141,7 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args);
 DLLEXPORT void destroy_coro(int fiber_id);
 #ifndef _WIN32
 static void install_stack_guard(void);
-static void probe_fiber_budget(void);
+static void rightsize_fiber_limit(void);
 #endif
 
 typedef struct para_fiber_t para_fiber_t;
@@ -524,7 +516,7 @@ static size_t fiber_guard_sz;
  * anonymous mapping counts against the process memory budget at full size but a 64 MB stack times a tableful of fibers
  * gets the process SIGKILLed on Apple Silicon. For macOS we use a small reservation instead (depth - 20000).
  * OpenBSD defines MAP_NORESERVE as 0 too, so it also gets an 8 MiB reservation; its RLIMIT_DATA counts every
- * anonymous mmap at full size and the fiber-budget probe clamps the limit to fit. DragonFly has no MAP_NORESERVE
+ * anonymous mmap at full size and rightsize_fiber_limit clamps the limit to fit. DragonFly has no MAP_NORESERVE
  * either but charges only brk/sbrk to RLIMIT_DATA, so 8 MiB is safe there too.
  *
  * Perl recursion fits in a ~1 MB OS fiber on Windows, so 8 MB leaves ample headroom even in a DEBUGGING build. The
@@ -1969,7 +1961,7 @@ DLLEXPORT int init_system() {
     }
 #ifndef _WIN32
     install_stack_guard();
-    probe_fiber_budget();
+    rightsize_fiber_limit();
 #endif
 #ifdef _WIN32
     /* Convert the main thread into a fiber so it can be switched out */
@@ -1984,11 +1976,6 @@ DLLEXPORT int init_system() {
     init_threads();
     return 0;
 }
-
-#ifdef USE_ASM_CORO
-/** @brief Checks a resume target's saved frame for corruption; defined with the crash probes below. */
-static void resume_probe(int target_id, para_fiber_t * to);
-#endif
 
 /**
  * @brief Performs the low-level OS context switch.
@@ -2013,7 +2000,6 @@ void perform_switch(int target_id, int set_last_sender) {
     else
         SwitchToFiber(to->context);
 #elif defined(USE_ASM_CORO)
-    resume_probe(target_id, to);
     para_coro_switch(&from->rsp, &to->rsp);
 #else
     swapcontext(&from->context, &to->context);
@@ -2257,270 +2243,6 @@ static struct sigaction prev_sigsegv_act;
 static char * guard_alt_stack;
 /** @brief Thread that owns the fiber scheduler (main thread). */
 static pthread_t guard_owner_thread;
-/** @brief Reentrancy guard: a fault raised while reporting must not recurse. */
-static volatile sig_atomic_t crash_reporting = 0;
-
-/* Register accessors for the crash reporter, guarded by both OS and arch so
- * only header layouts that were actually read get used. glibc hides its REG_*
- * names behind __USE_GNU (deliberately unset here) but the x86_64 gregset
- * order is frozen: REG_RBP=10, REG_RSP=15, REG_RIP=16; aarch64 glibc has no
- * gregs member at all (its mcontext_t carries regs/sp/pc directly). NetBSD
- * keeps its registers in __gregs behind the _REG_* enum. On OpenBSD amd64
- * ucontext_t IS struct sigcontext. Everything else reports zeros and still
- * gets si_addr, which for SIGILL is the faulting instruction itself, so the
- * illegal-instruction flakes stay diagnosable on every platform. */
-#if defined(__linux__) && defined(__x86_64__)
-typedef ucontext_t para_uc_t;
-#define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.gregs[16]))
-#define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.gregs[15]))
-#define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.gregs[10]))
-#elif defined(__NetBSD__) && defined(__x86_64__)
-typedef ucontext_t para_uc_t;
-#define PARA_REG_PC(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RIP]))
-#define PARA_REG_SP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RSP]))
-#define PARA_REG_FP(u) ((unsigned long long)((u)->uc_mcontext.__gregs[_REG_RBP]))
-#elif defined(__OpenBSD__) && defined(__x86_64__)
-typedef struct sigcontext para_uc_t;
-#define PARA_REG_PC(u) ((unsigned long long)((u)->sc_rip))
-#define PARA_REG_SP(u) ((unsigned long long)((u)->sc_rsp))
-#define PARA_REG_FP(u) ((unsigned long long)((u)->sc_rbp))
-#else /* no verified register layout: report zeros, rely on si_addr */
-typedef void para_uc_t;
-#define PARA_REG_PC(u) (0ULL)
-#define PARA_REG_SP(u) (0ULL)
-#define PARA_REG_FP(u) (0ULL)
-#endif
-
-/** @brief Append a literal string into a fixed buffer (signal-safe). */
-static void para_crash_str(char * b, size_t cap, size_t * n, const char * s) {
-    while (*s && *n + 1 < cap)
-        b[(*n)++] = *s++;
-    b[*n] = '\0';
-}
-
-/** @brief Append an unsigned value as hex (signal-safe). */
-static void para_crash_hex(char * b, size_t cap, size_t * n, unsigned long long v) {
-    char tmp[20];
-    int i = 0;
-    para_crash_str(b, cap, n, "0x");
-    if (!v)
-        tmp[i++] = '0';
-    while (v) {
-        int d = (int)(v & 15);
-        tmp[i++] = (char)(d < 10 ? '0' + d : 'a' + (d - 10));
-        v >>= 4;
-    }
-    while (i > 0 && *n + 1 < cap)
-        b[(*n)++] = tmp[--i];
-    b[*n] = '\0';
-}
-
-/** @brief Append a signed decimal (signal-safe). */
-static void para_crash_dec(char * b, size_t cap, size_t * n, long v) {
-    char tmp[24];
-    int i = 0;
-    unsigned long u = v < 0 ? (unsigned long)(-(v + 1)) + 1 : (unsigned long)v;
-    if (!u)
-        tmp[i++] = '0';
-    while (u) {
-        tmp[i++] = (char)('0' + (u % 10));
-        u /= 10;
-    }
-    if (v < 0 && *n + 1 < cap)
-        b[(*n)++] = '-';
-    while (i > 0 && *n + 1 < cap)
-        b[(*n)++] = tmp[--i];
-    b[*n] = '\0';
-}
-
-/**
- * @brief Emits a probe or report line to stderr and the crash log file (POSIX).
- *
- * Every line is duplicated into /tmp/parataxis-crash.log, so a harness that swallows stderr still leaves the
- * evidence behind for a post-run dump. open, write and close are async-signal-safe, so signal handlers may call
- * this too.
- *
- * @param b Line bytes; a NUL terminator is not required.
- * @param n Byte count.
- */
-static void para_emit(const char * b, size_t n) {
-    write(2, b, n);
-    int fd = open("/tmp/parataxis-crash.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        write(fd, b, n);
-        close(fd);
-    }
-}
-
-#ifdef USE_ASM_CORO
-/**
- * @brief Validates a resume target's saved frame just before switching into it (POSIX asm switch).
- *
- * The assembly switch pops six registers and then returns through slot[6], so a slot whose slot[6] is not a code
- * address in this shared object, or a slot outside the target's own stack, means the frame was clobbered between
- * the last yield and this resume. Healthy runs print nothing. A bad slot prints its address, the distance below
- * the stack top, the word the ret is about to pop, and all seven words while they are still intact, giving the
- * crash report that follows a before image to pair with its after.
- *
- * @param target_id ID about to be resumed (-1 for Main).
- * @param to        Target context whose rsp slot is about to be popped.
- */
-static void resume_probe(int target_id, para_fiber_t * to) {
-    if (!to || !to->rsp)
-        return;
-    char * sl = (char *)to->rsp;
-    int pos_ok = 1;
-    if (to->stack_p && to->stack_sz) {
-        if (sl < (char *)to->stack_p || sl + 56 > (char *)to->stack_p + to->stack_sz)
-            pos_ok = 0;
-    }
-    int bad = !pos_ok;
-    unsigned long retw = 0;
-    if (pos_ok) {
-        retw = (unsigned long)(uintptr_t)((void **)sl)[6];
-        unsigned long lo = (unsigned long)(uintptr_t)&para_coro_switch;
-        unsigned long a = (unsigned long)(uintptr_t)&para_trampoline;
-        if (a < lo)
-            lo = a;
-        a = (unsigned long)(uintptr_t)&para_entry_point;
-        if (a < lo)
-            lo = a;
-        a = (unsigned long)(uintptr_t)perform_switch;
-        if (a < lo)
-            lo = a;
-        if (retw < lo || retw >= lo + 0x1000000UL)
-            bad = 1;
-    }
-    if (!bad)
-        return;
-    char b[512];
-    size_t n = 0;
-    unsigned long long top = to->stack_p ? (unsigned long long)(uintptr_t)((char *)to->stack_p + to->stack_sz) : 0;
-    para_crash_str(b, sizeof b, &n, "Parataxis: resume: target ");
-    para_crash_dec(b, sizeof b, &n, target_id);
-    para_crash_str(b, sizeof b, &n, " slot ");
-    para_crash_hex(b, sizeof b, &n, (unsigned long long)(uintptr_t)sl);
-    para_crash_str(b, sizeof b, &n, " gap ");
-    para_crash_hex(b, sizeof b, &n, top ? top - (unsigned long long)(uintptr_t)sl : 0);
-    para_crash_str(b, sizeof b, &n, " ret ");
-    para_crash_hex(b, sizeof b, &n, retw);
-    para_crash_str(b, sizeof b, &n, " words");
-    if (pos_ok) {
-        void ** w = (void **)sl;
-        int i;
-        for (i = 0; i < 7; i++) {
-            para_crash_str(b, sizeof b, &n, " ");
-            para_crash_hex(b, sizeof b, &n, (unsigned long long)(uintptr_t)w[i]);
-        }
-    }
-    else
-        para_crash_str(b, sizeof b, &n, " unreadable");
-    para_crash_str(b, sizeof b, &n, "\n");
-    para_emit(b, n);
-}
-#endif /* USE_ASM_CORO */
-
-/**
- * @brief Async-signal-safe crash report for SIGSEGV, SIGILL and SIGBUS.
- *
- * Runs on the alternate signal stack. Prints the signal, the fault address
- * (for SIGILL that is the illegal instruction itself), the instruction, stack
- * and frame pointers where the platform's headers are known, the distance
- * from rsp to the fiber stack top, a landmark ladder of the switch and call
- * chain functions so dumped text words bracket to a function offline, the
- * current fiber id, and a raw word dump of the crash stack starting 64
- * bytes below rsp, wide enough to show what a ret popped next to the six
- * registers a switch pops. A copy
- * is also appended to /tmp/parataxis-crash.log so a lost stderr still
- * leaves evidence. printf and malloc are not signal safe; open, write and
- * close are, and only stack buffers are used.
- *
- * @param sig Signal number.
- * @param si  Fault info (si_addr carries the faulting address).
- * @param ucp Saved context, cast to the platform's register container.
- */
-static void para_crash_report(int sig, siginfo_t * si, void * ucp) {
-    if (crash_reporting)
-        return;
-    crash_reporting = 1;
-    char buf[1024];
-    size_t n = 0;
-    const char * nm = sig == SIGSEGV ? "SIGSEGV" : sig == SIGILL ? "SIGILL" : sig == SIGBUS ? "SIGBUS" : "signal?";
-    para_uc_t * u = (para_uc_t *)ucp;
-    unsigned long long pc = u ? PARA_REG_PC(u) : 0;
-    unsigned long long sp = u ? PARA_REG_SP(u) : 0;
-    unsigned long long fp = u ? PARA_REG_FP(u) : 0;
-
-    para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: ");
-    para_crash_str(buf, sizeof buf, &n, nm);
-    para_crash_str(buf, sizeof buf, &n, " si_addr ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)(si ? si->si_addr : NULL));
-    para_crash_str(buf, sizeof buf, &n, " fiber ");
-    para_crash_dec(buf, sizeof buf, &n, current_fiber_id);
-    para_crash_str(buf, sizeof buf, &n, "\nParataxis: crash: rip ");
-    para_crash_hex(buf, sizeof buf, &n, pc);
-    para_crash_str(buf, sizeof buf, &n, " rsp ");
-    para_crash_hex(buf, sizeof buf, &n, sp);
-    para_crash_str(buf, sizeof buf, &n, " rbp ");
-    para_crash_hex(buf, sizeof buf, &n, fp);
-    int fid = current_fiber_id;
-    para_fiber_t * cf = (fid >= 0 && fid < fiber_capacity) ? fibers[fid] : NULL;
-    if (cf && cf->stack_p && cf->stack_sz) {
-        unsigned long long ftop = (unsigned long long)(uintptr_t)((char *)cf->stack_p + cf->stack_sz);
-        para_crash_str(buf, sizeof buf, &n, " gap ");
-        para_crash_hex(buf, sizeof buf, &n, ftop > sp ? ftop - sp : 0);
-    }
-    para_crash_str(buf, sizeof buf, &n, "\n");
-#ifdef USE_ASM_CORO
-    para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: landmarks trampoline ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_trampoline);
-    para_crash_str(buf, sizeof buf, &n, " coro_switch ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_coro_switch);
-    para_crash_str(buf, sizeof buf, &n, " entry_point ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)para_entry_point);
-    para_crash_str(buf, sizeof buf, &n, " perform_switch ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)perform_switch);
-    para_crash_str(buf, sizeof buf, &n, " coro_yield ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_yield);
-    para_crash_str(buf, sizeof buf, &n, " coro_call ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_call);
-    para_crash_str(buf, sizeof buf, &n, " coro_transfer ");
-    para_crash_hex(buf, sizeof buf, &n, (unsigned long long)(uintptr_t)coro_transfer);
-    para_crash_str(buf, sizeof buf, &n, "\n");
-#endif
-    if (sp && (sp & 7) == 0) {
-        /* Start 64 bytes below rsp: a final ret's slot sits at rsp-8 and the
-         * six registers a switch pops sit just above it, so one window shows
-         * the faulting frame bottom whether that ret belonged to the switch
-         * or to an ordinary call in the chain. */
-        unsigned long long * w = (unsigned long long *)sp - 8;
-        int i;
-        para_crash_str(buf, sizeof buf, &n, "Parataxis: crash: stack words from rsp-64:");
-        for (i = 0; i < 24 && n + 20 < sizeof buf; i++) {
-            para_crash_str(buf, sizeof buf, &n, " ");
-            para_crash_hex(buf, sizeof buf, &n, w[i]);
-        }
-        para_crash_str(buf, sizeof buf, &n, "\n");
-    }
-    para_emit(buf, n);
-}
-
-/**
- * @brief SIGILL/SIGBUS handler: report, then restore the default disposition.
- *
- * Returning re-executes the faulting instruction, so the process still dies
- * with the original wait status and dumps a core.
- *
- * @param sig Signal number.
- * @param si  Fault info.
- * @param uc  Saved context.
- */
-static void crash_report_handler(int sig, siginfo_t * si, void * uc) {
-    para_crash_report(sig, si, uc);
-    signal(sig, SIG_DFL);
-    raise(sig); /* default action now: die with the original wait status and
-                 * a core, whether the fault re-executes or not */
-}
 
 /**
  * @brief SIGSEGV handler: reports a genuine fiber C-stack overflow.
@@ -2530,7 +2252,6 @@ static void crash_report_handler(int sig, siginfo_t * si, void * uc) {
  * (with a core if enabled). Any other fault is forwarded to the previously installed handler.
  */
 static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
-    para_crash_report(sig, si, uc);
     para_fiber_t * c = (current_fiber_id >= 0 && current_fiber_id < fiber_capacity) ? fibers[current_fiber_id] : NULL;
     if (!pthread_equal(pthread_self(), guard_owner_thread) || current_fiber_id < 0 || current_fiber_id >= fiber_capacity ||
         !fibers[current_fiber_id]) {
@@ -2554,30 +2275,8 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
         return;
     }
     static const char msg[] = "Parataxis: fatal: fiber C-stack overflow (> 64MB used); aborting\n";
-    para_emit(msg, sizeof(msg) - 1);
+    write(2, msg, sizeof(msg) - 1);
     signal(SIGSEGV, SIG_DFL);
-}
-
-/**
- * @brief Prints an install-time probe line to stderr (POSIX).
- *
- * install_stack_guard runs during interpreter startup, so a plain write(2)
- * is enough. The line names the failed setup step and errno; the success
- * path prints a separate "crash reporter armed" line, letting a test log
- * with no report be told apart from a reporter that never installed.
- *
- * @param stage Name of the setup step that failed.
- * @param err   errno value observed right after the failure.
- */
-static void install_note(const char * stage, int err) {
-    char b[160];
-    size_t n = 0;
-    para_crash_str(b, sizeof b, &n, "Parataxis: crash: install ");
-    para_crash_str(b, sizeof b, &n, stage);
-    para_crash_str(b, sizeof b, &n, " errno ");
-    para_crash_dec(b, sizeof b, &n, err);
-    para_crash_str(b, sizeof b, &n, "\n");
-    para_emit(b, n);
 }
 
 /** @brief Per-fiber anonymous-memory charge beyond the stack itself.
@@ -2596,14 +2295,14 @@ static void install_note(const char * stage, int err) {
  * defines MAP_NORESERVE as 0, a legacy no-op the preprocessor sees but that reserves nothing, and its RLIMIT_DATA
  * counts every anonymous mmap at full size, so the generous DEFAULT_FIBER_LIMIT would let the very first big spawn
  * explode the process budget; the failing mmap then surfaces as a confusing table-full message. DragonFly has no
- * MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The probe raises the soft limit
- * to the hard limit when permitted and clamps max_fibers to the number of full frames that actually fit: each
+ * MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The clamp raises the soft limit
+ * to the hard limit when permitted and cuts max_fibers to the number of full frames that actually fit: each
  * frame is the stack plus the per-fiber charge FIBER_CHARGED_OVERHEAD, and four frames stay free as headroom for
- * perl, the tables, the worker pool and the crash-report alt stack. Keying on the
+ * perl, the tables, the worker pool and the guard handler's alt stack. Keying on the
  * MAP_NORESERVE macro itself would compile this OUT on OpenBSD (defined as 0) and IN on DragonFly (undefined), the
  * exact inversion of the intent, so the guard names __OpenBSD__ directly.
  */
-static void probe_fiber_budget(void) {
+static void rightsize_fiber_limit(void) {
 #ifndef _WIN32
 #if defined(__OpenBSD__)
     struct rlimit rl;
@@ -2623,21 +2322,8 @@ static void probe_fiber_budget(void) {
     long cap = (long)( rl.rlim_cur / (rlim_t)frame ) - 4;
     if (cap < 8)
         cap = 8;
-    if (cap < DEFAULT_FIBER_LIMIT) {
+    if (cap < DEFAULT_FIBER_LIMIT)
         max_fibers = (int)cap;
-        char b[192];
-        size_t n = 0;
-        para_crash_str(b, sizeof b, &n, "Parataxis: fiber budget RLIMIT_DATA cur ");
-        para_crash_dec(b, sizeof b, &n, (long)rl.rlim_cur);
-        para_crash_str(b, sizeof b, &n, " max ");
-        para_crash_dec(b, sizeof b, &n, (long)( rl.rlim_max == RLIM_INFINITY ? -1 : (long)rl.rlim_max ));
-        para_crash_str(b, sizeof b, &n, " frame ");
-        para_crash_dec(b, sizeof b, &n, (long)frame);
-        para_crash_str(b, sizeof b, &n, " capacity ");
-        para_crash_dec(b, sizeof b, &n, (long)max_fibers);
-        para_crash_str(b, sizeof b, &n, "\n");
-        para_emit(b, n);
-    }
 #endif
 #endif
 }
@@ -2657,80 +2343,21 @@ static void install_stack_guard(void) {
     guard_alt_stack = mmap(NULL, alt_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_STACK, -1, 0);
     if (guard_alt_stack == MAP_FAILED) {
         guard_alt_stack = NULL;
-        install_note("mmap", errno);
         return;
     }
     stack_t ss = {0};
     ss.ss_sp = guard_alt_stack;
     ss.ss_size = alt_sz;
     if (sigaltstack(&ss, NULL) == -1)
-        install_note("sigaltstack", errno);
+        return;
     struct sigaction act = {0};
     act.sa_sigaction = stack_guard_handler;
     act.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&act.sa_mask);
     if (sigaction(SIGSEGV, &act, &prev_sigsegv_act) == -1)
-        install_note("sigaction SIGSEGV", errno);
-    /* SIGILL and SIGBUS get the plain reporter: the trampoline's ud2 and any
-     * teardown-phase illegal instruction we are otherwise blind to. */
-    act.sa_sigaction = crash_report_handler;
-    if (sigaction(SIGILL, &act, NULL) == -1)
-        install_note("sigaction SIGILL", errno);
-    if (sigaction(SIGBUS, &act, NULL) == -1)
-        install_note("sigaction SIGBUS", errno);
-    static const char armed[] = "Parataxis: crash reporter armed\n";
-    para_emit(armed, sizeof armed - 1);
+        return;
 }
 
-/**
- * @brief Names the current disposition of a crash signal for the shutdown probe.
- *
- * @param sig Signal number to classify.
- * @param cur Disposition just read back from the kernel.
- * @return "ours", "DFL", "IGN" or "other".
- */
-static const char * disp_class(int sig, const struct sigaction * cur) {
-    void * h;
-    if (cur->sa_flags & SA_SIGINFO)
-        h = (void *)(uintptr_t)cur->sa_sigaction;
-    else
-        h = (void *)(uintptr_t)cur->sa_handler;
-    if (h == (void *)(uintptr_t)SIG_DFL)
-        return "DFL";
-    if (h == (void *)(uintptr_t)SIG_IGN)
-        return "IGN";
-    if (sig == SIGSEGV && h == (void *)(uintptr_t)stack_guard_handler)
-        return "ours";
-    if ((sig == SIGILL || sig == SIGBUS) && h == (void *)(uintptr_t)crash_report_handler)
-        return "ours";
-    return "other";
-}
-
-/**
- * @brief Prints each crash signal's current disposition at a shutdown phase (POSIX).
- *
- * A crash report later proves the handler still ran; this line proves what the kernel held even when no report
- * appeared, and the phase names bracket teardown so a wipe can be ordered against the death that follows it.
- *
- * @param phase Shutdown stage this snapshot was taken at.
- */
-static void disposition_note(const char * phase) {
-    char b[192];
-    size_t n = 0;
-    struct sigaction cur;
-    static const int sigs[3] = {SIGILL, SIGSEGV, SIGBUS};
-    static const char * nms[3] = {" SIGILL=", " SIGSEGV=", " SIGBUS="};
-    para_crash_str(b, sizeof b, &n, "Parataxis: disposition");
-    for (int i = 0; i < 3; i++) {
-        const char * cl = (sigaction(sigs[i], NULL, &cur) == 0) ? disp_class(sigs[i], &cur) : "err";
-        para_crash_str(b, sizeof b, &n, nms[i]);
-        para_crash_str(b, sizeof b, &n, cl);
-    }
-    para_crash_str(b, sizeof b, &n, " at ");
-    para_crash_str(b, sizeof b, &n, phase);
-    para_crash_str(b, sizeof b, &n, "\n");
-    para_emit(b, n);
-}
 #endif /* !_WIN32 */
 
 /**
@@ -3277,9 +2904,6 @@ DLLEXPORT void destroy_coro(int fiber_id) {
  */
 DLLEXPORT void cleanup() {
     dTHX;
-#ifndef _WIN32
-    disposition_note("shutdown");
-#endif
     /* Restore the original exit op so any exit() during global destruction (after this DLL could be unmapped) behaves
      * like a plain perl exit. */
     if (parataxis_saved_pp_exit && PL_ppaddr[OP_EXIT] == parataxis_pp_exit)
@@ -3342,7 +2966,4 @@ DLLEXPORT void cleanup() {
         SvREFCNT_dec(main_context.transfer_data);
         main_context.transfer_data = &PL_sv_undef;
     }
-#ifndef _WIN32
-    disposition_note("cleanup-done");
-#endif
 }
