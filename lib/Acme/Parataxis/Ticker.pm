@@ -23,7 +23,9 @@ class Acme::Parataxis::Ticker v0.1.1 {
     field $stop_token;                   # interrupts the ticker fiber's await_sleep when stop() is called
     field $running = false;
     field $fired   : reader = 0;         # ticks produced
-    field $dropped : reader = 0;         # ticks discarded: superseded uncollected ones, plus boundaries skipped
+    field $dropped : reader = 0;         # ticks discarded: superseded uncollected ones (boundaries missed while the
+                                        # host slept past the schedule are counted as skipped, never as fired)
+    field $skipped : reader = 0;         # tick boundaries leapfrogged after a late wakeup: never fired, never delivered
 
     # after waking far behind schedule
     field $next_at;                      # absolute time of the next tick boundary
@@ -56,8 +58,9 @@ class Acme::Parataxis::Ticker v0.1.1 {
                     $next_at += $interval_s;
 
                     # Wound far behind schedule: leapfrog the boundaries already missed rather than burst-firing
-                    # them all at once on the next pass.
-                    while ( $next_at <= time ) { $next_at += $interval_s; $dropped++ }
+                    # them all at once on the next pass. Never fired, so they cannot count as dropped: the invariant
+                    # fired == dropped + pending + consumed (Ticker.pod) stays exact on hosts that wake timers late.
+                    while ( $next_at <= time ) { $next_at += $interval_s; $skipped++ }
                 }
                 1;
             };

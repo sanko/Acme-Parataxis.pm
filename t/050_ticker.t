@@ -15,7 +15,9 @@ sub live_count { Acme::Parataxis::get_live_fiber_count() }
 # local ./Build test does not, so those margins run at full strength only where a quiet host can be assumed. The
 # dropped >= 3 bound is one of those margins: dropped counts up with fired, fired starves first on a late host, and
 # a stress macOS leg measured dropped 2, so it rides the same gate. The structural assertions in the same subtests
-# (fired = dropped + pending, pending <= 1, monotonic receipts) still run everywhere.
+# (fired = dropped + pending, pending <= 1, monotonic receipts) still run everywhere; dropped counts only superseded
+# fired ticks, so the identity holds exactly even when a late wakeup makes the ticker leapfrog boundaries (those are
+# counted separately as skipped, never fired).
 my $stress_env  = !!( $ENV{PARATAXIS_STRESS_SECONDS} || $ENV{PARATAXIS_STRESS_ITER} );
 my $skip_timing = $stress_env || !!$ENV{AUTOMATED_TESTING};
 

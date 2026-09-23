@@ -110,9 +110,16 @@ Ticks the ticker has published since construction.
 
     $tick->dropped;     # ticks discarded
 
-Ticks discarded because nobody collected them before the next one came due, plus boundaries skipped after the ticker
-fiber woke far behind schedule (rather than burst-firing every missed period at once). The ticks actually handed to a
-consumer are C<fired - dropped - pending>.
+Ticks discarded because nobody collected them before the next one came due. The ticks actually handed to a consumer
+are C<fired - dropped - pending>.
+
+=head2 C<skipped()>
+
+    $tick->skipped;     # boundaries never fired
+
+Tick boundaries leapfrogged after the ticker fiber woke far behind schedule: rather than burst-firing every missed
+period at once, each missed boundary is counted here. Skipped periods never produce a tick, so they do not count as
+fired or dropped.
 
 =head1 SEE ALSO
 
