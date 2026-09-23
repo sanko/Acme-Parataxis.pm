@@ -751,12 +751,16 @@ static void _spawn_workers(int count) {
 
         int tid = current_thread_count;
 #ifdef _WIN32
-        thread_handles[tid] = CreateThread(NULL, 0, worker_thread, (LPVOID)(intptr_t)tid, 0, NULL);
+        HANDLE h = CreateThread(NULL, 0, worker_thread, (LPVOID)(intptr_t)tid, 0, NULL);
+        if (h) {
+            thread_handles[tid] = h;
+            current_thread_count++;
+        }
 #else
-        pthread_create(&thread_handles[tid], NULL, worker_thread, (void *)(intptr_t)tid);
-        pthread_detach(thread_handles[tid]);
+        if (pthread_create(&thread_handles[tid], NULL, worker_thread, (void *)(intptr_t)tid) == 0) {
+            current_thread_count++;
+        }
 #endif
-        current_thread_count++;
     }
 }
 
@@ -3286,25 +3290,31 @@ DLLEXPORT void cleanup() {
         PARA_COND_BROADCAST(queue_cond);
         UNLOCK(queue_lock);
 
-#ifdef _WIN32
-        /* Wait for threads to finish and close handles */
-        for (int i = 0; i < current_thread_count; i++) {
-            if (thread_handles[i]) {
-                WaitForSingleObject(thread_handles[i], 100);
-                CloseHandle(thread_handles[i]);
-                thread_handles[i] = NULL;
-            }
-        }
-#else
+#ifndef _WIN32
         /* Wake any workers blocked in select() so they observe threads_keep_running = 0 */
         if (shutdown_pipe[1] >= 0) {
             char byte = 1;
             ssize_t ignored = write(shutdown_pipe[1], &byte, 1);
             (void)ignored;
         }
-        /* Give threads a moment to notice threads_keep_running = 0 */
-        usleep(10000);
 #endif
+
+        for (int i = 0; i < current_thread_count; i++) {
+#ifdef _WIN32
+            /* Wait for threads to finish and close handles */
+            if (thread_handles[i]) {
+                WaitForSingleObject(thread_handles[i], INFINITE);
+                CloseHandle(thread_handles[i]);
+                thread_handles[i] = NULL;
+            }
+#else
+            if (thread_handles[i]) {
+                pthread_join(thread_handles[i], NULL);
+                thread_handles[i] = 0;
+            }
+#endif
+        }
+        current_thread_count = 0;
     }
 
     if (current_fiber_id != -1) {
