@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A scheduled fiber that dies while another fiber is awaiting it (or has an `on_ready` callback) no longer takes down the whole run loop: the error is delivered to the awaiting fiber's `await` instead, matching Coro-style rethrows.
 - Interrupted waits deregister themselves from the sync primitive they were parked on before re-entering, so an id freed by cancellation can be safely reused by a later fiber without spurious wakes.
 - The fiber ceiling is no longer a hard 1024: `max_fibers()` now reports 65536 by default, so a program that assumed spawning past 1024 would croak will instead keep going until it hits the new limit. Code that depends on the old number can pin it back with `set_max_fibers(1024)`.
+- Roadmap/milestone labels (Card N / M#) stripped from the shipped sources: `lib/` comments, POD prose, test headers, `README.md`, and this file now read standalone, with cross-feature relationships named directly instead of pointing at roadmap cards. Public API and behavior untouched - documentation and comments only.
 
 ## [v0.1.0] - 2026-09-21
 
