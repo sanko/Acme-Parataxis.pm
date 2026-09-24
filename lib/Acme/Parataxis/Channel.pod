@@ -35,18 +35,29 @@ consumers.
 
     my $ch = Acme::Parataxis::Channel->new;
     my $ch = Acme::Parataxis::Channel->new(capacity => 10);
+    my $ch = Acme::Parataxis::Channel->new(capacity => 10, timeout => 200);
 
 Creates a new channel. The optional C<capacity> parameter sets the maximum number of items the channel can hold and
-defaults to C<2_000_000_000>.
+defaults to C<2_000_000_000>. The optional C<timeout> parameter (non-negative milliseconds, default C<0>) sets a
+per-channel default wait bound: a C<get> or C<put> that would otherwise park waits at most C<timeout> milliseconds
+before dying with C<Acme::Parataxis::Error::Timeout>. C<timeout =E<gt> 0> (the default) disables the bound, as does
+C<timeout =E<gt> undef>. The effective bound is reported by C<timeout( )>.
 
 =head1 METHODS
+
+=head2 C<timeout( )>
+
+    my $ms = $ch->timeout;
+
+Returns the channel's default wait bound in milliseconds (C<0> when none was configured).
 
 =head2 C<put( $value )>
 
     $ch->put($value);
 
 Append a value to the channel. Blocks the current fiber if the channel is at capacity, waiting until space becomes
-available.
+available. If the channel has a default C<timeout> bound (see C<new( )>), the wait honors it and dies with
+C<Acme::Parataxis::Error::Timeout> when the bound expires.
 
 =head2 C<put_priority( $value )>
 
@@ -59,7 +70,8 @@ Append a value to the channel. Bypasses any yield or parks even if the mailbox i
     my $value = $ch->get;
 
 Remove and return the next value from the channel. Blocks the current fiber if the channel is empty, waiting until a
-value is available.
+value is available. If the channel has a default C<timeout> bound (see C<new( )>), the wait honors it and dies with
+C<Acme::Parataxis::Error::Timeout> when the bound expires.
 
 =head2 C<size( )>
 
@@ -121,7 +133,9 @@ value argument. More than one case may be given, and cases are tried in random o
 starved. An optional C<timeout> (non-negative milliseconds) bounds the wait - when it fires before any case is ready,
 select returns C<( undef, undef )> and an optional C<default> is a code reference run (and returned as the value) when
 no case is ready and nothing is pending, without ever blocking. Giving at least one case is required, as is calling
-select from inside a scheduled fiber (C<async { ... }> or the run block).
+select from inside a scheduled fiber (C<async { ... }> or the run block). When C<timeout> is omitted, each case
+channel's own default bound (see C<new( )>) applies and select parks until the earliest such bound fires; an explicit
+C<timeout> option always wins over the channel defaults.
 
 Each case channel parks the selecting fiber on a private waiter list (see C<select_waiters> below). Only channels being
 selected on are affected; a fiber parked in C<select> is interrupted by C<with_timeout>/cancellation tokens like any

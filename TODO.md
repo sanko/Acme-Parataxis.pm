@@ -13,7 +13,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 15** - monitor & linked death
 - [x] **Card 16** - actor hot-code swap + named registry
 - [ ] **Card 17** - `with_timeout` re-entrancy polish
-- [ ] **Card 18** - `Channel->new( timeout => $ms )`
+- [x] **Card 18** - `Channel->new( timeout => $ms )`
 - [ ] **Card 19** - deterministic mock time
 - [ ] **Card 20** - `spawn_blocking`
 - [ ] **Card 21** - trace propagation
@@ -213,7 +213,7 @@ with_timeout( 2000, sub {
 
 ### Card 18 - `Channel->new( timeout => $ms )`
 
-**Source**: #7's own channel sketch (`Channel->new( capacity => 1024, timeout => 500, ... )`); today only `Channel->select`'s `timeout` option ships. **Status**: API designed.
+**Source**: #7's own channel sketch (`Channel->new( capacity => 1024, timeout => 500, ... )`); today only `Channel->select`'s `timeout` option ships. **Status**: done - ships with the `timeout`/`timeout()` API, `select` composition, and the t/018 + t/041 acceptance tests above.
 
 ```perl
 my $ch = Acme::Parataxis::Channel->new( capacity => 16, timeout => 500 );

@@ -832,7 +832,9 @@ A simple message queue that allows you to send and receive data. If the channel 
 readers block. Both ends can be used by as many fibers as you want concurrently.
 
 A channel of size C<1> is a rendezvous point (no buffering: C<put> waits for a matching C<get>); to buffer one element
-use size C<2>, and so on.
+use size C<2>, and so on. Pass C<timeout =E<gt> $ms> to C<new> for a per-channel default wait bound so a C<get> or
+C<put> that would park gives up with C<Acme::Parataxis::Error::Timeout> instead of blocking forever; C<select> honors
+it too when no explicit C<timeout> is given.
 
     use Acme::Parataxis;
     use Acme::Parataxis::Channel;

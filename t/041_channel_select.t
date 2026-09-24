@@ -1,6 +1,6 @@
 use v5.40;
 use blib;
-use Acme::Parataxis qw[async fiber yield run];
+use Acme::Parataxis qw[async fiber yield run await_sleep];
 use Acme::Parataxis::Channel;
 use Test2::V1 -ipP;
 $|++;
@@ -204,6 +204,78 @@ subtest 'argument validation' => sub {
     like $@, qr/default must be a CODE/, 'non-code default croaks';
     eval { Acme::Parataxis::Channel->select() };
     like $@, qr/at least one case/, 'no cases croaks';
+};
+subtest 'select honors a channel default when no option is given' => sub {
+    my $ch = Acme::Parataxis::Channel->new( timeout => 30 );
+    my ( $chosen, $val, $t0, $elapsed );
+    async {
+        $t0 = Time::HiRes::time();
+        ( $chosen, $val ) = Acme::Parataxis::Channel->select( [ $ch => 'get' ], );
+        $elapsed = ( Time::HiRes::time() - $t0 ) * 1000;
+    };
+    is $chosen, undef, 'no channel chosen when the channel default fired';
+    is $val,    undef, 'no value';
+    ok $elapsed < 200, "fired around the channel's 30ms bound (elapsed=${\(int $elapsed)}ms)";
+    is $ch->select_waiters, 0, 'no select waiter leaked after the default fired';
+    wait_for_drain();
+};
+subtest 'an explicit select timeout wins over the channel default' => sub {
+    my $ch = Acme::Parataxis::Channel->new( timeout => 30000 );
+    my ( $chosen, $val, $t0, $elapsed );
+    async {
+        $t0 = Time::HiRes::time();
+        ( $chosen, $val ) = Acme::Parataxis::Channel->select( [ $ch => 'get' ], timeout => 20, );
+        $elapsed = ( Time::HiRes::time() - $t0 ) * 1000;
+    };
+    is $chosen, undef, 'the option deadline dominated the channel default';
+    ok $elapsed < 200, "fired at the 20ms option bound (elapsed=${\(int $elapsed)}ms)";
+    is $ch->select_waiters, 0, 'no select waiter leaked';
+    wait_for_drain();
+
+    # The reverse holds too: a long explicit option dominates a short channel default.
+    # The channel's 50ms default would otherwise fire select empty around 50ms; the 30000ms
+    # option must instead hold until the producer lands at ~150ms and deliver the value.
+    my $ch2 = Acme::Parataxis::Channel->new( timeout => 50 );
+    my ( $a, $b, $t1, $el2 );
+    async {
+        fiber { yield; await_sleep(150); $ch2->put('value') };
+        $t1 = Time::HiRes::time();
+        ( $a, $b ) = Acme::Parataxis::Channel->select( [ $ch2 => 'get' ], timeout => 30000, );
+        $el2 = ( Time::HiRes::time() - $t1 ) * 1000;
+    };
+    wait_for_drain();
+    ok $a == $ch2, 'the explicit option held past the channel default and took the value';
+    is $b, 'value', 'delivered, not timed out empty at 50ms';
+    ok $el2 >= 100, "select waited out the channel default (elapsed=${\(int $el2)}ms)";
+    is $ch2->select_waiters, 0, 'and cleaned up after itself';
+};
+subtest 'when cases disagree, the earliest channel default wins' => sub {
+    my $fast = Acme::Parataxis::Channel->new( timeout => 40 );
+    my $slow = Acme::Parataxis::Channel->new( timeout => 4000 );
+    my ( $chosen, $val, $t0, $elapsed );
+    async {
+        $t0 = Time::HiRes::time();
+        ( $chosen, $val ) = Acme::Parataxis::Channel->select( [ $fast => 'get' ], [ $slow => 'get' ], );
+        $elapsed = ( Time::HiRes::time() - $t0 ) * 1000;
+    };
+    is $chosen, undef, 'the earliest default (40ms) fired the select';
+    is $val,    undef, 'no value';
+    ok $elapsed < 250, "fired near the shortest bound (elapsed=${\(int $elapsed)}ms)";
+    is $fast->select_waiters, 0, 'fast case cleaned up';
+    is $slow->select_waiters, 0, 'slow case cleaned up';
+    wait_for_drain();
+};
+subtest 'a confirming case beats a channel default (no spurious timeout)' => sub {
+    my $ch = Acme::Parataxis::Channel->new( timeout => 5000 );
+    my ( $chosen, $val );
+    async {
+        fiber { yield; $ch->put('late') };    # arrives well within the bound
+        ( $chosen, $val ) = Acme::Parataxis::Channel->select( [ $ch => 'get' ], );
+    };
+    wait_for_drain();
+    is $chosen,             $ch,    'the default deadline did not preempt a real message';
+    is $val,                'late', 'the produced value arrived';
+    is $ch->select_waiters, 0,      'no select waiter leaked';
 };
 #
 done_testing();

@@ -9,20 +9,59 @@ class Acme::Parataxis::Channel v0.1.1 {
     use Acme::Parataxis::Semaphore;
     use Carp qw[croak];
     field $capacity : param //= 2_000_000_000;
+    field $timeout  : param //= 0;               # per-channel default wait bound in ms; 0 (and undef) means none
     field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
     field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity );
     field @data : reader;
-    field @select_waiters;    # [fid, op] pairs parked here by select(); op is 'get' or 'put'
+    field @select_waiters;                       # [fid, op] pairs parked here by select(); op is 'get' or 'put'
     ADJUST {
-        $capacity >= 1 or die "Channel capacity must be >= 1 (got $capacity)\n";
+        $capacity >= 1                    or die "Channel capacity must be >= 1 (got $capacity)\n";
+        defined $timeout && $timeout >= 0 or die "Channel timeout must be a non-negative number of milliseconds (got $timeout)\n";
+    }
+    method timeout () {$timeout}
+
+    # Runs $op (a get/put body that parks through the channel semaphores) under the channel's default
+    # wait bound. The deadline is armed only when the op may actually park ($may_park): a ready channel
+    # never pays for a timer. Exactly like Channel::select's deadline - one token registered before the
+    # park (register-then-arm closes the lost-wakeup window) and one timer, re-used across the
+    # semaphore's internal re-parks; Error::Timeout on expiry, the waiter unregistered from the
+    # semaphore when interrupted. Teardown unregisters the caller and cancels the token on every exit,
+    # which recalls the timer's armed sleep job instead of leaving a worker sleeping out the bound.
+    method _with_deadline ( $may_park, $op ) {
+        return $op->() if !defined $timeout || $timeout <= 0 || !$may_park;
+        my $deadline = Acme::Parataxis::CancellationToken->new( kind => 'timeout' );
+        $deadline->register;
+        my $ms = $timeout;
+        fiber {
+            $deadline->register;
+            eval { await_sleep($ms); $deadline->cancel; 1 };
+        };
+        my ( $ok, $err, @rv );
+        if (wantarray) {
+            $ok  = eval { @rv = $op->() };
+            $err = $@;
+        }
+        else {
+            $ok  = eval { $rv[0] = $op->() };
+            $err = $@;
+        }
+        $deadline->unregister;
+        $deadline->cancel;
+        die $err if !$ok;
+        return wantarray ? @rv : $rv[0];
     }
 
     method put ($value) {
-        $sem_put->down( 'Channel put', 3 );
-        push @data, $value;
-        $sem_get->up;
-        $self->_wake_select_waiters('get');
-        1;
+        return $self->_with_deadline(
+            @data >= $capacity,
+            sub {
+                $sem_put->down( 'Channel put', 5 );
+                push @data, $value;
+                $sem_get->up;
+                $self->_wake_select_waiters('get');
+                1;
+            }
+        );
     }
 
     method put_priority ($value) {
@@ -41,11 +80,16 @@ class Acme::Parataxis::Channel v0.1.1 {
     }
 
     method get () {
-        $sem_get->down( 'Channel get', 3 );
-        $sem_put->up;
-        my $v = shift @data;
-        $self->_wake_select_waiters('put');
-        return $v;
+        return $self->_with_deadline(
+            @data == 0,
+            sub {
+                $sem_get->down( 'Channel get', 5 );
+                $sem_put->up;
+                my $v = shift @data;
+                $self->_wake_select_waiters('put');
+                return $v;
+            }
+        );
     }
 
     method try_get () {
@@ -126,6 +170,14 @@ sub Acme::Parataxis::Channel::select ( $class, @args ) {
     Carp::croak 'select() needs at least one case' unless @cases;
     my $fid = Acme::Parataxis->current_fid;
     Carp::croak 'select() must be called from inside a scheduled fiber' if $fid < 0;
+
+    # No explicit timeout: each case's channel-level default (Channel->new( timeout => $ms )) applies
+    # and select parks until the earliest fires - so the shared deadline is the smallest positive
+    # default among the cases. An explicit timeout option (including timeout => 0) always wins.
+    if ( !defined $timeout ) {
+        my @bounds = sort { $a <=> $b } grep { defined && $_ > 0 } map { $_->[0]->timeout } @cases;
+        $timeout = @bounds ? $bounds[0] : undef;
+    }
 
     # The timeout deadline is armed once on the first park and reused across re-parks, so a spurious wake can
     # never stack timers. "Register, then arm" (token.register before the sleep job) closes the lost-wakeup
