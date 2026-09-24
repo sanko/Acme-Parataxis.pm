@@ -203,6 +203,61 @@ async {
 };
 ```
 
+## `wait_all( @futures )`
+
+Takes any number of [`Acme::Parataxis::Future`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AFuture) objects and returns a future that is ready
+only once **every** input future has failed or succeeded. You call it as a plain function: `wait_all( $f1, $f2 )`,
+or class-callable: `Acme::Parataxis->wait_all( $f1, $f2 )`. It works outside and inside the scheduler.
+
+The aggregate resolves exactly once. With no failures it is a single `[ $r1, $r2, ... ]` arrayref of every input's
+result in input order. When any input fails, the aggregate settles with that first error copied wholesale (reject-fast,
+`Promise.all` style); the other inputs are not cancelled and keep running, their later results dropped. An already
+resolved input fires its callback inline, so `wait_all` of ready inputs resolves without needing a fiber.
+
+The aggregate does **not** await on your behalf; you still pick a resolution future and `await` it yourself:
+
+```perl
+async {
+    my $all = wait_all( $f, $g, $h );
+    my $results = await( $all );    # croaks with the first input's error on a failure
+    say 'all three succeeded';
+};
+```
+
+## `wait_any( @futures )`
+
+Takes any number of futures and returns a future that is ready as soon as **any one** of them settles - success or
+failure. Call it as `wait_any( $f1, $f2 )` or `Acme::Parataxis->wait_any( $f1, $f2 )`. An already-ready input
+settles it inline, and at least one input is required. The aggregate payload is a wholesale copy of the winner's: its
+result on success or its error on failure. The first input to settle wins; losers are untouched and keep running.
+`error` on the aggregate tells which way it went: `undef` means a winner produced a result, anything defined means the
+winner failed (and `await( $any )` croaks with that error):
+
+```perl
+async {
+    my $any = wait_any( $slow_ok, $fast_fail );
+    # $any->error ? 'first winner failed' : 'first winner produced ' . $any->result
+};
+```
+
+## `pmap( { concurrency =` $n, }, sub ( $item ) { ... }, @items )>
+
+`pmap( )` maps a code reference over a list in parallel using a bounded worker pool: `@items` are handed to at most
+`$n` concurrent fibers at a time, and the results are returned in input order. The optional `concurrency` controls
+the number of workers (any positive integer; the default is one worker per item, capped at the number of items); a pool
+of one runs `@items` serially like `map`. Results come back from the caller's perspective as expected: a list or
+arrayref (use `wantarray`), and mapping an empty list returns an empty result immediately.
+
+```perl
+my @squares = pmap( { concurrency => 4 }, sub ( $n ) { $n * $n }, 1 .. 100 );
+```
+
+Junk inside the `{ ... }` option hash above the `concurrency` key is ignored, mirroring how `nursery` and friends
+treat their options. When any item's block errors, that error is recorded and the pool is cancelled: all in-flight and
+queued blocks are stopped, the cancelled worker errors are suppressed, and `pmap( )` rethrows the first recorded error
+once the pool has drained. Like the rest of the scheduler functions, `pmap( )` croaks when called outside of a running
+scheduler.
+
 # Cancellation
 
 Cooperative cancellation is built on three pieces: a deadline helper (`with_timeout`), a token you can hand out
@@ -246,9 +301,9 @@ deadline expires.
 - [`Acme::Parataxis::Error::Cancelled`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ACancelled) - kind `'cancelled'`, thrown when a
 token fires.
 
-Both expose `message()` and `wait_reason()`; `wait_reason()` returns `[ reason, file, line ]` describing the wait
-that was interrupted (see the `wait_reason` section). A fiber that dies while another fiber is awaiting it no longer
-kills the whole run: the error is delivered to the awaiting fiber's `await` call instead.
+Both expose `message()` and `wait_reason()`; `wait_reason()` returns `[ reason, file, line, backtrace ]`
+describing the wait that was interrupted (see the `wait_reason` section). A fiber that dies while another fiber is
+awaiting it no longer kills the whole run: the error is delivered to the awaiting fiber's `await` call instead.
 
 ## Bare `nursery( sub ($n) { ... } )`
 
@@ -446,6 +501,45 @@ to exactly `rate` per second. Over any window no more than `rate x window + burs
 `burst` never raises the long-run average - it only decides how much of it can arrive at once. See
 [Acme::Parataxis::RateLimiter](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ARateLimiter) for how to choose it.
 
+## Software Transactional Memory
+
+[Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) is a versioned, mutable cell you transact on through
+`Acme::Parataxis->atomically( sub { ... } )` (also available as a plain `atomically { ... }` after importing
+it). Readers and writers are never locked and never ordered; instead, each transaction journals its reads and writes,
+and when it commits it checks that every TVar it read still holds its committed value before flushing its writes all
+at once:
+
+```perl
+use Acme::Parataxis qw[async fiber await atomically retry];
+use Acme::Parataxis::TVar;
+
+# A deadlock-proof 50-coin transfer between two accounts:
+my $a = Acme::Parataxis::TVar->new( value => 100 );
+my $b = Acme::Parataxis::TVar->new( value => 100 );
+
+async {
+    my $r = fiber {
+        atomically {
+            my $from = $a->get;
+            my $to   = $b->get;
+            yield;                     # open a scheduling gap so transfers can race
+            $a->set( $from - 50 );
+            $b->set( $to + 50 );
+            return 1;
+        }
+    };
+    await $r;
+    say 'a = ', $a->value, ', b = ', $b->value;
+};
+```
+
+Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling
+back and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes
+another's partial state. `retry()` aborts the transaction and parks the fiber until any TVar it read changes, then
+re-runs it from the top, and nested `atomically` blocks join the enclosing transaction so their writes commit
+together. The block may run many times, so it must not have irreversible side effects - no printing, file I/O, or
+channel `put` inside a transaction (see [Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) for the full SIDE EFFECTS warning).
+
 # Thread Pool Configuration
 
 `Acme::Parataxis` uses a native thread pool to handle blocking tasks. While it manages itself automatically, you can
@@ -565,13 +659,14 @@ is released and it can no longer be called.
 ## `$fiber->wait_reason()`
 
 While a fiber is suspended inside a blocking wait (`await_sleep`, `await`, `await_read`, a semaphore `down`, a
-`Signal->wait`, a Channel `get`/`put`, or a busy `wait` for a child), returns a 3-element arrayref recording
-how it parked: `[ $reason, $file, $line ]` where `$reason` is a short label and `$file`/`$line` are the caller's
-location that entered the wait. Returns `undef` for a fiber that is running, finished, or merely cooperatively
-yielded.
+`Signal->wait`, a Channel `get`/`put`, or a busy `wait` for a child), returns the record of how it parked:
+`[ $reason, $file, $line, $backtrace ]` where `$reason` is a short label, `$file`/`$line` are the caller's
+location that entered the wait, and `$backtrace` is an arrayref of `[ pkg, file, line, sub ]` user-side frames
+from just below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is
+disabled). Returns `undef` for a fiber that is running, finished, or merely cooperatively yielded.
 
 ```perl
-my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42 ]
+my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42, [...] ]
 ```
 
 This is read-only diagnostic metadata; workers waiting on the same primitive are unaffected by it.
@@ -758,6 +853,72 @@ async {
 };
 ```
 
+## Streams
+
+An [Acme::Parataxis::Stream](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AStream) is a chainable pipeline over bounded channels. Every stage is a factory: `map`,
+`filter`, `batch`, `batch_time`, and `throttle` each allocate a fresh bounded output channel, spawn one
+background fiber that loops the stage's input applying the operation, and hand back a new `Stream` wrapping the
+output:
+
+```perl
+use Acme::Parataxis qw[fiber await_sleep];
+use Acme::Parataxis::Channel;
+use Acme::Parataxis::Stream;
+
+my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );
+
+async {
+    Acme::Parataxis::Stream->from_channel($raw)
+        ->map(    sub ($line) { decode_json($line)        } )
+        ->filter( sub ($msg)  { $msg->{status} >= 500     } )
+        ->throttle( 100 )                                  # at most 100/s
+        ->batch_time( 1000 )                               # ...or one batch a second
+        ->batch( 100 )                                     # ...or 100 items
+        ->consume( sub (@batch) { db_bulk_insert(@batch) } );
+};
+```
+
+Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that
+park propagates all the way upstream, so a slow `consume` throttles the raw producer instead of queueing unbounded
+memory. A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as `undef` from
+`get`, flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the
+source, so no stage can park forever on a source that quit and no orphan fibers are left behind. `batch_time` groups
+by deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
+`batch`/`batch_time` both emit a partial final batch on shutdown. Every stage parks through the ordinary channel
+wait machinery, so `with_timeout` and cancellation tokens interrupt a stage mid-loop cleanly. See
+[Acme::Parataxis::Stream](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AStream) for the full method list.
+
+## Transparent Unblocking
+
+[Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat) is the gevent-style escape hatch for legacy, synchronous
+code: it overrides the blocking builtins so existing loops and modules become
+cooperative without rewrites. It is opt-in dark magic - nothing is overridden unless
+you ask for it, and even then only code _compiled after_ the call is affected; the
+overrides delegate to the raw `CORE::` builtin everywhere outside the scheduler.
+
+```perl
+use v5.40;
+use blib;
+use Acme::Parataxis qw[async fiber];
+use Acme::Parataxis::Compat;
+
+BEGIN { Acme::Parataxis->enable_transparent_unblocking(); }   # opt in, in BEGIN
+
+async {
+    my $f1 = fiber { sleep 0.05 };      # cooperative: yields, does not park the thread
+    my $f2 = fiber { my $b = ""; read( $sock, $b, 4 ) };    # framed on await_read
+    $f1->await;
+    $f2->await;
+};
+```
+
+`sleep` maps to `await_sleep` (millisecond-accurate, fractional seconds included);
+`read` and `sysread` park on `await_read` until the handle is readable, then
+perform one real read, falling back to the raw builtin for handles the readiness
+probe cannot watch (regular files answer instantly). `disable_transparent_unblocking`
+and `transparent_unblocking()` manage and report the install. Not covered:
+`select`, `alarm`, `time`, and `DBI` - see [Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat).
+
 ## Signals
 
 An object with a two-state flag and a FIFO queue of waiters. A fiber parked in `wait` does not busy-wait; it is
@@ -854,19 +1015,23 @@ resumed. Supervisors supervise supervisors: `supervise` accepts an actor, a nest
 
 ## Diagnostics
 
-Every fiber that parks in a wait records where and why (wait_reason), and `dump_fibers` exposes it: each live
+Every fiber that parks in a wait records where and why (wait\_reason), and `dump_fibers` exposes it: each live
 fiber with its state (`WAITING` / `READY` / `RUNNING` / `RUNNABLE`) and, when parked, the wait reason together with
-the source site where it yielded.
+the source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
 
 ```perl
 my $fibers = Acme::Parataxis->dump_fibers;       # data only
 Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable report
 ```
 
-`dump_fibers()` returns an arrayref of `{ fid, state, reason => [ reason, file, line ] }` records. It is safe to
-call at any time, including top level; outside a run it reports fibers leaked by an earlier deadlocked run. The
-scheduler's fatal deadlock message ("no runnable work and no outstanding jobs") is the same report, listing every
-parked fiber of the deadlocked run with its reason and site.
+`dump_fibers()` returns an arrayref of `{ fid, state, reason => [ reason, file, line, backtrace ] }` records
+(`backtrace` is the arrayref of `[ pkg, file, line, sub ]` frames described under `wait_reason`; `[]` when the
+capture is off or there is no user frame below the site). It is safe to call at any time, including top level;
+outside a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no
+runnable work and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its
+reason, site, and chain back to user code. `backtrace_depth` (class method, also exported) sets and reports the
+capture cap: default 6 frames, `backtrace_depth(0)` disables the capture entirely for a zero-cost diag path; the
+capture itself is roughly a microsecond per park (measured against the spawn/await micro-benchmarks).
 
 # Best Practices & Gotchas
 

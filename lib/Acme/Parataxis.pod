@@ -188,6 +188,55 @@ the request to the thread pool and suspends the fiber until the result is ready.
         say "Background task handled by CPU core: $core";
     };
 
+=head2 C<wait_all( @futures )>
+
+Takes any number of L<C<Acme::Parataxis::Future>|Acme::Parataxis::Future> objects and returns a future that is ready
+only once B<every> input future has failed or succeeded. You call it as a plain function: C<< wait_all( $f1, $f2 ) >>,
+or class-callable: C<< Acme::Parataxis->wait_all( $f1, $f2 ) >>. It works outside and inside the scheduler.
+
+The aggregate resolves exactly once. With no failures it is a single C<[ $r1, $r2, ... ]> arrayref of every input's
+result in input order. When any input fails, the aggregate settles with that first error copied wholesale (reject-fast,
+C<Promise.all> style); the other inputs are not cancelled and keep running, their later results dropped. An already
+resolved input fires its callback inline, so C<wait_all> of ready inputs resolves without needing a fiber.
+
+The aggregate does B<not> await on your behalf; you still pick a resolution future and C<await> it yourself:
+
+    async {
+        my $all = wait_all( $f, $g, $h );
+        my $results = await( $all );    # croaks with the first input's error on a failure
+        say 'all three succeeded';
+    };
+
+=head2 C<wait_any( @futures )>
+
+Takes any number of futures and returns a future that is ready as soon as B<any one> of them settles - success or
+failure. Call it as C<< wait_any( $f1, $f2 ) >> or C<< Acme::Parataxis->wait_any( $f1, $f2 ) >>. An already-ready input
+settles it inline, and at least one input is required. The aggregate payload is a wholesale copy of the winner's: its
+result on success or its error on failure. The first input to settle wins; losers are untouched and keep running.
+C<error> on the aggregate tells which way it went: C<undef> means a winner produced a result, anything defined means
+the winner failed (and C<await( $any )> croaks with that error):
+
+    async {
+        my $any = wait_any( $slow_ok, $fast_fail );
+        # $any->error ? 'first winner failed' : 'first winner produced ' . $any->result
+    };
+
+=head2 C<pmap( { concurrency => $n, }, sub ( $item ) { ... }, @items )>
+
+C<pmap( )> maps a code reference over a list in parallel using a bounded worker pool: C<@items> are handed to at most
+C<$n> concurrent fibers at a time, and the results are returned in input order. The optional C<concurrency> controls
+the number of workers (any positive integer; the default is one worker per item, capped at the number of items); a pool
+of one runs C<@items> serially like C<map>. Results come back from the caller's perspective as expected: a list or
+arrayref (use C<wantarray>), and mapping an empty list returns an empty result immediately.
+
+    my @squares = pmap( { concurrency => 4 }, sub ( $n ) { $n * $n }, 1 .. 100 );
+
+Junk inside the C<{ ... }> option hash above the C<concurrency> key is ignored, mirroring how C<nursery> and friends
+treat their options. When any item's block errors, that error is recorded and the pool is cancelled: all in-flight and
+queued blocks are stopped, the cancelled worker errors are suppressed, and C<pmap( )> rethrows the first recorded error
+once the pool has drained. Like the rest of the scheduler functions, C<pmap( )> croaks when called outside of a running
+scheduler.
+
 =head1 Cancellation
 
 Cooperative cancellation is built on three pieces: a deadline helper (C<with_timeout>), a token you can hand out
@@ -234,9 +283,9 @@ token fires.
 
 =back
 
-Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reason, file, line, backtrace ]>
-describing the wait that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is
-awaiting it no longer kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
+Both expose C<message()> and C<wait_reason()>; C<wait_reason()> returns C<[ reason, file, line, backtrace ]> describing
+the wait that was interrupted (see the C<wait_reason> section). A fiber that dies while another fiber is awaiting it no
+longer kills the whole run: the error is delivered to the awaiting fiber's C<await> call instead.
 
 =head2 Bare C<nursery( sub ($n) { ... } )>
 
@@ -257,9 +306,9 @@ On failure the aggregate croaks with L<C<Acme::Parataxis::Error::Nursery>|Acme::
 C<->failures> lists every child's error (the real one plus the C<Cancelled> unwinds of the siblings it cancelled) and
 C<->primary> is the first real failure. A block error is rethrown unchanged after the children are drained; a
 user-fibre token can cancel the whole group (call C<->token->cancel>), and cancellation propagates into nested waits
-and tokens (L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout> included) via the C<_join>
-parent-interrupt branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery
-they were spawned into and the inner nursery's C<_join> awaits them as long as they stay registered.
+and tokens (L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout> included) via the C<_join> parent-interrupt
+branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery they were
+spawned into and the inner nursery's C<_join> awaits them as long as they stay registered.
 
 =head1 Scheduler Functions
 
@@ -431,11 +480,10 @@ L<Acme::Parataxis::RateLimiter> for how to choose it.
 
 =head2 Software Transactional Memory
 
-L<Acme::Parataxis::TVar> is a versioned, mutable cell you transact on through
-C<< Acme::Parataxis->atomically( sub { ... } ) >> (also available as a plain C<atomically { ... }> after importing
-it). Readers and writers are never locked and never ordered; instead, each transaction journals its reads and writes,
-and when it commits it checks that every TVar it read still holds its committed value before flushing its writes all
-at once:
+L<Acme::Parataxis::TVar> is a versioned, mutable cell you transact on through C<< Acme::Parataxis->atomically( sub {
+... } ) >> (also available as a plain C<atomically { ... }> after importing it). Readers and writers are never locked
+and never ordered; instead, each transaction journals its reads and writes, and when it commits it checks that every
+TVar it read still holds its committed value before flushing its writes all at once:
 
     use Acme::Parataxis qw[async fiber await atomically retry];
     use Acme::Parataxis::TVar;
@@ -459,12 +507,12 @@ at once:
         say 'a = ', $a->value, ', b = ', $b->value;
     };
 
-Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling
-back and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes
-another's partial state. C<retry()> aborts the transaction and parks the fiber until any TVar it read changes, then
-re-runs it from the top, and nested C<atomically> blocks join the enclosing transaction so their writes commit
-together. The block may run many times, so it must not have irreversible side effects - no printing, file I/O, or
-channel C<put> inside a transaction (see L<Acme::Parataxis::TVar> for the full SIDE EFFECTS warning).
+Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling back
+and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes another's
+partial state. C<retry()> aborts the transaction and parks the fiber until any TVar it read changes, then re-runs it
+from the top, and nested C<atomically> blocks join the enclosing transaction so their writes commit together. The block
+may run many times, so it must not have irreversible side effects - no printing, file I/O, or channel C<put> inside a
+transaction (see L<Acme::Parataxis::TVar> for the full SIDE EFFECTS warning).
 
 =head1 Thread Pool Configuration
 
@@ -575,11 +623,11 @@ is released and it can no longer be called.
 =head2 C<< $fiber->wait_reason() >>
 
 While a fiber is suspended inside a blocking wait (C<await_sleep>, C<await>, C<await_read>, a semaphore C<down>, a
-C<Signal-E<gt>wait>, a Channel C<get>/C<put>, or a busy C<wait> for a child), returns the record of how it parked:
-C<[ $reason, $file, $line, $backtrace ]> where C<$reason> is a short label, C<$file>/C<$line> are the caller's
-location that entered the wait, and C<$backtrace> is an arrayref of C<< [ pkg, file, line, sub ] >> user-side frames
-from just below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is
-disabled). Returns C<undef> for a fiber that is running, finished, or merely cooperatively yielded.
+C<Signal-E<gt>wait>, a Channel C<get>/C<put>, or a busy C<wait> for a child), returns the record of how it parked: C<[
+$reason, $file, $line, $backtrace ]> where C<$reason> is a short label, C<$file>/C<$line> are the caller's location
+that entered the wait, and C<$backtrace> is an arrayref of C<< [ pkg, file, line, sub ] >> user-side frames from just
+below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is disabled).
+Returns C<undef> for a fiber that is running, finished, or merely cooperatively yielded.
 
     my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42, [...] ]
 
@@ -758,9 +806,8 @@ use size C<2>, and so on.
 =head2 Streams
 
 An L<Acme::Parataxis::Stream> is a chainable pipeline over bounded channels. Every stage is a factory: C<map>,
-C<filter>, C<batch>, C<batch_time>, and C<throttle> each allocate a fresh bounded output channel, spawn one
-background fiber that loops the stage's input applying the operation, and hand back a new C<Stream> wrapping the
-output:
+C<filter>, C<batch>, C<batch_time>, and C<throttle> each allocate a fresh bounded output channel, spawn one background
+fiber that loops the stage's input applying the operation, and hand back a new C<Stream> wrapping the output:
 
     use Acme::Parataxis qw[fiber await_sleep];
     use Acme::Parataxis::Channel;
@@ -778,23 +825,22 @@ output:
             ->consume( sub (@batch) { db_bulk_insert(@batch) } );
     };
 
-Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that
-park propagates all the way upstream, so a slow C<consume> throttles the raw producer instead of queueing unbounded
-memory. A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as C<undef> from
-C<get>, flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the
-source, so no stage can park forever on a source that quit and no orphan fibers are left behind. C<batch_time> groups
-by deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
-C<batch>/C<batch_time> both emit a partial final batch on shutdown. Every stage parks through the ordinary channel
-wait machinery, so C<with_timeout> and cancellation tokens interrupt a stage mid-loop cleanly. See
+Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that park
+propagates all the way upstream, so a slow C<consume> throttles the raw producer instead of queueing unbounded memory.
+A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as C<undef> from C<get>,
+flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the source,
+so no stage can park forever on a source that quit and no orphan fibers are left behind. C<batch_time> groups by
+deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
+C<batch>/C<batch_time> both emit a partial final batch on shutdown. Every stage parks through the ordinary channel wait
+machinery, so C<with_timeout> and cancellation tokens interrupt a stage mid-loop cleanly. See
 L<Acme::Parataxis::Stream> for the full method list.
 
 =head2 Transparent Unblocking
 
-L<Acme::Parataxis::Compat> is the gevent-style escape hatch for legacy, synchronous
-code: it overrides the blocking builtins so existing loops and modules become
-cooperative without rewrites. It is opt-in dark magic - nothing is overridden unless
-you ask for it, and even then only code I<compiled after> the call is affected; the
-overrides delegate to the raw C<CORE::> builtin everywhere outside the scheduler.
+L<Acme::Parataxis::Compat> is the gevent-style escape hatch for legacy, synchronous code: it overrides the blocking
+builtins so existing loops and modules become cooperative without rewrites. It is opt-in dark magic - nothing is
+overridden unless you ask for it, and even then only code I<compiled after> the call is affected; the overrides
+delegate to the raw C<CORE::> builtin everywhere outside the scheduler.
 
     use v5.40;
     use blib;
@@ -810,12 +856,11 @@ overrides delegate to the raw C<CORE::> builtin everywhere outside the scheduler
         $f2->await;
     };
 
-C<sleep> maps to C<await_sleep> (millisecond-accurate, fractional seconds included);
-C<read> and C<sysread> park on C<await_read> until the handle is readable, then
-perform one real read, falling back to the raw builtin for handles the readiness
-probe cannot watch (regular files answer instantly). C<disable_transparent_unblocking>
-and C<transparent_unblocking()> manage and report the install. Not covered:
-C<select>, C<alarm>, C<time>, and C<DBI> - see L<Acme::Parataxis::Compat>.
+C<sleep> maps to C<await_sleep> (millisecond-accurate, fractional seconds included); C<read> and C<sysread> park on
+C<await_read> until the handle is readable, then perform one real read, falling back to the raw builtin for handles the
+readiness probe cannot watch (regular files answer instantly). C<disable_transparent_unblocking> and
+C<transparent_unblocking()> manage and report the install. Not covered: C<select>, C<alarm>, C<time>, and C<DBI> - see
+L<Acme::Parataxis::Compat>.
 
 =head2 Signals
 
@@ -905,21 +950,21 @@ L<Acme::Parataxis::Supervisor>.
 
 =head2 Diagnostics
 
-Every fiber that parks in a wait records where and why (wait_reason), and C<dump_fibers> exposes it: each live
-fiber with its state (C<WAITING> / C<READY> / C<RUNNING> / C<RUNNABLE>) and, when parked, the wait reason together with
-the source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
+Every fiber that parks in a wait records where and why (wait_reason), and C<dump_fibers> exposes it: each live fiber
+with its state (C<WAITING> / C<READY> / C<RUNNING> / C<RUNNABLE>) and, when parked, the wait reason together with the
+source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
 
     my $fibers = Acme::Parataxis->dump_fibers;       # data only
     Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable report
 
 C<dump_fibers()> returns an arrayref of C<< { fid, state, reason => [ reason, file, line, backtrace ] } >> records
 (C<backtrace> is the arrayref of C<< [ pkg, file, line, sub ] >> frames described under C<wait_reason>; C<[]> when the
-capture is off or there is no user frame below the site). It is safe to call at any time, including top level;
-outside a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no
-runnable work and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its
-reason, site, and chain back to user code. C<backtrace_depth> (class method, also exported) sets and reports the
-capture cap: default 6 frames, C<backtrace_depth(0)> disables the capture entirely for a zero-cost diag path; the
-capture itself is roughly a microsecond per park (measured against the spawn/await micro-benchmarks).
+capture is off or there is no user frame below the site). It is safe to call at any time, including top level; outside
+a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no runnable work
+and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its reason, site,
+and chain back to user code. C<backtrace_depth> (class method, also exported) sets and reports the capture cap: default
+6 frames, C<backtrace_depth(0)> disables the capture entirely for a zero-cost diag path; the capture itself is roughly
+a microsecond per park (measured against the spawn/await micro-benchmarks).
 
 =head1 Best Practices & Gotchas
 

@@ -18,7 +18,7 @@ package Acme::Parataxis v0.1.1 {
                 = qw[
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
-                current_fid tid root maybe_yield on_wake with_timeout nursery
+                current_fid tid root maybe_yield on_wake with_timeout nursery pmap wait_all wait_any
                 set_max_threads max_threads set_max_fibers max_fibers dump_fibers
                 backtrace_depth
                 atomically retry
@@ -31,10 +31,10 @@ package Acme::Parataxis v0.1.1 {
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
     my $IS_RUNNING = 0;
-    my $DRIVER;           # the attached Acme::Parataxis::Driver (undef = the worker-pool fallback path), see attach_loop
-    my %PARKED;           # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
-    my %PARK_REGS;        # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
-    our %FIBER_LOCALS;    # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
+    my $DRIVER;                 # the attached Acme::Parataxis::Driver (undef = the worker-pool fallback path), see attach_loop
+    my %PARKED;                 # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
+    my %PARK_REGS;              # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
+    our %FIBER_LOCALS;          # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
@@ -209,6 +209,71 @@ package Acme::Parataxis v0.1.1 {
     sub _arg_offset {
         my $self = $_[0];
         return ( defined $self && ( ( ref $self || $self ) eq __PACKAGE__ || ( builtin::blessed($self) && $self->isa(__PACKAGE__) ) ) ) ? 1 : 0;
+    }
+
+    # Aggregate a list of futures into one that resolves when every input has: the result is an arrayref of each
+    # input's result, in input order, or the stored error of the first input to fail (reject-fast, Promise.all style).
+    # Inputs are not cancelled on a rejection; they are independent and keep running, and their later results are
+    # discarded. Zero futures resolve immediately with [] (matching Promise.all([])). An already-resolved input
+    # fires its on_ready callback inline, so a wait_all of ready inputs resolves inline (no fiber needed) and any
+    # mixed ready/pending input resolves the moment the last straggler lands. Inputs must be Acme::Parataxis::Future
+    # objects else croaks. Also callable as Acme::Parataxis->wait_all(...).
+    sub wait_all {
+        my $o       = _arg_offset( $_[0] );
+        my @futures = @_[ $o .. $#_ ];
+        @_ = ();
+        croak 'wait_all() requires Acme::Parataxis::Future inputs'
+            if grep { !( defined $_ && ref $_ && $_->isa('Acme::Parataxis::Future') ) } @futures;
+        require Acme::Parataxis::Future;
+        my $all = Acme::Parataxis::Future->new;
+        if ( @futures == 0 ) {
+            $all->set_result( [] );
+            return $all;
+        }
+        my @results;
+        my $pending = scalar @futures;
+        for my $i ( 0 .. $#futures ) {
+            my $idx = $i;
+            my $fut = $futures[$i];
+            $fut->on_ready(
+                sub ($f) {
+                    return if $all->is_ready;
+                    if ( defined $f->error ) {
+                        $all->set_error( $f->error );    # reject-fast: the first failure wins, copied wholesale
+                        return;
+                    }
+                    $results[$idx] = $f->result;
+                    $all->set_result( \@results ) if --$pending == 0;
+                }
+            );
+        }
+        return $all;
+    }
+
+    # Aggregate a list of futures into one that settles with a wholesale copy of the first input to settle - success
+    # or failure (Promise.race). The losers are untouched and keep running; their eventual results are dropped by the
+    # is_ready guard. An already-ready input settles the aggregate inline. At least one input is required (an empty
+    # race would never settle) and each input must be an Acme::Parataxis::Future else croaks. Also callable as
+    # Acme::Parataxis->wait_any(...).
+    sub wait_any {
+        my $o       = _arg_offset( $_[0] );
+        my @futures = @_[ $o .. $#_ ];
+        @_ = ();
+        croak 'wait_any() requires at least one Acme::Parataxis::Future input' unless @futures;
+        croak 'wait_any() requires Acme::Parataxis::Future inputs'
+            if grep { !( defined $_ && ref $_ && $_->isa('Acme::Parataxis::Future') ) } @futures;
+        require Acme::Parataxis::Future;
+        my $any = Acme::Parataxis::Future->new;
+        for my $f (@futures) {
+            $f->on_ready(
+                sub ($f) {
+                    return if $any->is_ready;
+                    if   ( defined $f->error ) { $any->set_error( $f->error ) }     # wholesale copy of the failure
+                    else                       { $any->set_result( $f->result ) }
+                }
+            );
+        }
+        return $any;
     }
 
     sub yield {
@@ -515,6 +580,90 @@ package Acme::Parataxis v0.1.1 {
             die Acme::Parataxis::Error::Nursery->new( failures => \@failures );
         }
         return $rv;
+    }
+
+    # Parallel map over a bounded fiber pool. $code runs once per item, each call in its own worker fiber (so a
+    # mapper may await, park, or use any primitive), with at most $opts{concurrency} workers in flight at once
+    # (default: one fiber per item). The caller parks while the pool works and the results come back in input order
+    # even when items finish out of order. A mapper that dies cancels the pool (the sibling workers stop at their
+    # next item boundary) and its error is rethrown once every worker has drained; later results are discarded.
+    # Must be called from inside a scheduled fiber, like nursery; an empty item list returns immediately; the
+    # concurrency option must be a positive integer.
+    sub pmap {
+        my $origin = _arg_offset( $_[0] );
+        my %opts;
+        my $i = $origin;
+        if ( ref $_[$i] eq 'HASH' ) {
+            %opts = %{ $_[ $i++ ] };
+        }
+        my $code  = $_[ $i++ ];
+        my @items = @_[ $i .. $#_ ];
+        @_ = ();
+        croak 'pmap() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'pmap() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        return unless @items;
+        my $concurrency = $opts{concurrency} // scalar @items;
+        croak 'pmap() concurrency must be a positive integer' unless defined $concurrency && $concurrency =~ /\A[1-9]\d*\z/;
+        $concurrency = @items if $concurrency > @items;
+        require Acme::Parataxis::Channel;
+        require Acme::Parataxis::Sync::WaitGroup;
+        require Acme::Parataxis::CancellationToken;
+        my $jobs = Acme::Parataxis::Channel->new( capacity => $concurrency );
+        my $wg   = Acme::Parataxis::Sync::WaitGroup->new;
+        my $tok  = Acme::Parataxis::CancellationToken->new;
+        my ( @results, $first_error );
+
+        # One unit for the feeder plus one per worker; the call parks below until they all land.
+        $wg->add( $concurrency + 1 );
+
+        # Workers pull one job envelope per iteration. A job carries its input index so the results land back in
+        # input order; a job whose index is negative is the worker's STOP marker (one per worker, so every worker
+        # terminates even when mappers fail). A cancelled pool skips further work instead of mapping it but keeps
+        # draining to its STOP, so no worker is ever left parked on an empty channel by a sibling's failure.
+        for ( 1 .. $concurrency ) {
+            fiber {
+                while (1) {
+                    my $job = $jobs->get;
+                    my ( $i, $val ) = @$job;
+                    last if $i < 0;
+                    next if $tok->cancelled;
+                    my $rv = eval { $code->($val) };
+                    if ( my $err = $@ ) {
+                        $first_error //= $err;    # the first mapper error wins
+                        $tok->cancel;             # fail fast: siblings stop at their next item boundary
+                        last;
+                    }
+                    $results[$i] = $rv;
+                }
+                $wg->done;
+            };
+        }
+
+        # The feeder delivers every envelope (the items, then the STOP markers) without ever parking on the
+        # channel: a full channel is drained by the workers, so try_put + yield makes progress and finishes.
+        fiber {
+            my $idx       = 0;
+            my @envelopes = map { [ $idx++, $_ ] } @items;
+            push @envelopes, ( [-1] ) x $concurrency;
+            for my $env (@envelopes) {
+                while ( !$jobs->try_put($env) ) {
+                    yield;
+                }
+            }
+            $wg->done;
+        };
+        my $ok  = eval { $wg->wait; 1 };
+        my $err = $@;
+        unless ($ok) {
+
+            # The caller was interrupted while parked (an enclosing nursery/with_timeout): cancel the pool and
+            # drain it so no worker outlives the caller, then rethrow the caller's own error.
+            $tok->cancel;
+            eval { $wg->wait; 1 };
+            die $err;
+        }
+        die $first_error if defined $first_error;
+        return wantarray ? @results : \@results;
     }
 
     sub spawn {

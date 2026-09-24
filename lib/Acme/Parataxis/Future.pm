@@ -14,6 +14,7 @@ class Acme::Parataxis::Future v0.1.1 {
         croak $error if defined $error;
         return $result;
     }
+    method error () {$error}    # The stored error, raw: undef until the future fails, the error value after set_error.
 
     method set_result ($val) {
         die 'Future already ready' if $is_ready;

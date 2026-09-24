@@ -69,6 +69,13 @@ ready.
 
 Resolve the future with an error. Fires any registered C<on_ready> callbacks. Dies if the future is already ready.
 
+=head2 C<error()>
+
+    my $err = $future->error;
+
+The stored error, raw: C<undef> until the future fails, the error value after C<set_error>. Read it from an C<on_ready>
+callback to distinguish a failure from a result without dying (unlike C<result>, which croaks with the stored error).
+
 =head2 C<clear_result()>
 
     $future->clear_result();
