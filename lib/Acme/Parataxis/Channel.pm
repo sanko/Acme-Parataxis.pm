@@ -97,7 +97,7 @@ class Acme::Parataxis::Channel v0.1.1 {
 
 # CSP select: wait on the first ready case and return its (channel, value). A plain package sub (perlclass only
 # allows instance invocations), called as Acme::Parataxis::Channel->select(...). Two probe/register phases as
-# designed in TODO/Milestone 5 -- probe without yielding first, fall back to registering on every involved
+# Two probe/register phases -- probe without yielding first, fall back to registering on every in
 # channel's private @select_waiters, arming the shared deadline *after* registration, then parking.
 sub Acme::Parataxis::Channel::select ( $class, @args ) {
     my ( $timeout, $default );

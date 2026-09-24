@@ -14,9 +14,9 @@ package Acme::Parataxis::Actor v0.1.1 {
     # Thin actors: a dedicated fiber owns a Channel mailbox and runs one user handler per message.
     # `ask` tags a message with a Future so the handler's return value (or die) travels back to the
     # caller; `send` is fire-and-forget. The mailbox is a plain bounded channel, so a slow handler
-    # gives the *sender* backpressure instead of growing a queue without bound (M7). Spawned with
+    # gives the *sender* backpressure instead of growing a queue without bound. Spawned with
     # supervised => 1, a handler die kills the actor instead of only failing that one ask, which is
-    # what Acme::Parataxis::Supervisor supervises (Card 3).
+    # what Acme::Parataxis::Supervisor supervises.
     my $STOP = \do { my $x = 1 };    # envelope value that tells the loop to shut down gracefully
 
     sub spawn ( $class, $code, $capacity = 16, %opts ) {

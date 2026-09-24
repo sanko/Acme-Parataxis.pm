@@ -4,7 +4,7 @@ use Acme::Parataxis qw[run fiber yield await_sleep];
 use Test2::V1 -ipP;
 $|++;
 
-# M0 regression: destroying a fiber while it is parked mid-yield. destroy_coro used to walk the parked fiber's live
+# Regression: destroying a fiber while it is parked mid-yield. destroy_coro used to walk the parked fiber's live
 # context stack and free its activation slots in the shared PadLists / global CvDEPTH counters of the subroutines it
 # was inside (yield, the wait helpers, run). Those slots belong to every fiber activating the same sub at the same
 # depth, so the *next* fiber to enter one -- usually the very next round, once the freed id is reused -- died with a

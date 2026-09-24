@@ -257,7 +257,7 @@ On failure the aggregate croaks with L<C<Acme::Parataxis::Error::Nursery>|Acme::
 C<->failures> lists every child's error (the real one plus the C<Cancelled> unwinds of the siblings it cancelled) and
 C<->primary> is the first real failure. A block error is rethrown unchanged after the children are drained; a
 user-fibre token can cancel the whole group (call C<->token->cancel>), and cancellation propagates into nested waits
-and tokens (M4 subtest 6, L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout>) via the C<_join>
+and tokens (L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout> included) via the C<_join>
 parent-interrupt branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery
 they were spawned into and the inner nursery's C<_join> awaits them as long as they stay registered.
 
@@ -905,9 +905,9 @@ L<Acme::Parataxis::Supervisor>.
 
 =head2 Diagnostics
 
-Every fiber that parks in a wait records where and why (M0's wait_reason), and C<dump_fibers> exposes it: each live
+Every fiber that parks in a wait records where and why (wait_reason), and C<dump_fibers> exposes it: each live
 fiber with its state (C<WAITING> / C<READY> / C<RUNNING> / C<RUNNABLE>) and, when parked, the wait reason together with
-the source site where it yielded and a short callchain back to the fiber body (Card 9's park-site backtraces).
+the source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
 
     my $fibers = Acme::Parataxis->dump_fibers;       # data only
     Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable report
@@ -919,7 +919,7 @@ outside a run it reports fibers leaked by an earlier deadlocked run. The schedul
 runnable work and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its
 reason, site, and chain back to user code. C<backtrace_depth> (class method, also exported) sets and reports the
 capture cap: default 6 frames, C<backtrace_depth(0)> disables the capture entirely for a zero-cost diag path; the
-capture itself is roughly a microsecond per park (bounded against the M5-era spawn/await micro-benchmarks).
+capture itself is roughly a microsecond per park (measured against the spawn/await micro-benchmarks).
 
 =head1 Best Practices & Gotchas
 

@@ -35,7 +35,7 @@ package Acme::Parataxis v0.1.1 {
     my %PARKED;           # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
     my %PARK_REGS;        # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;    # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
-    my $BACKTRACE_DEPTH = 6;    # Card 9: max user-side caller frames captured at each park (0 disables the capture)
+    my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -78,12 +78,12 @@ package Acme::Parataxis v0.1.1 {
         return @ids;
     }
 
-    # M8 diagnostics. A snapshot of every live fiber, riding entirely on M0's wait_reason: _park records
+    # Diagnostics: a snapshot of every live fiber, riding entirely on wait_reason: _park records
     # [reason, file, line] on the fiber before it yields and _resume_hooks clears it on a natural wake, so a
     # live fiber that still carries a reason (or is in %PARKED) is blocked, not merely preempted. WAITING =
     # parked on a wait; READY = in the scheduler run queue; RUNNING = the fiber calling the snapshot (only
     # when taken from inside a run); RUNNABLE = live but neither parked nor queued (e.g. a generator's body
-    # or a fiber surrendered mid-quantum). Since Card 9 each record also carries the bounded user-side caller
+    # or a fiber surrendered mid-quantum). Each record also carries the bounded user-side caller
     # chain (its fourth element) captured at the park; the top site is still the wait_reason site (the user's
     # call for direct waits like await_sleep, the wait's own method for Sync/Channel waits whose level
     # targeting is tuned for their error messages).
@@ -105,7 +105,7 @@ package Acme::Parataxis v0.1.1 {
     }
 
     # Dumps every live fiber. Returns the arrayref of { fid, state, reason (wait_reason site; its fourth element is
-    # the Card-9 backtrace arrayref of [pkg, file, line, sub] user-side frames, [] when the capture is off or empty) }
+    # the backtrace arrayref of [pkg, file, line, sub] user-side frames, [] when the capture is off or empty) }
     # records and, when called with a filehandle, also prints a human-readable report there (dump_fibers() with no
     # argument only returns the data). Safe to call from anywhere: top-level (outside a run) reports fibers leaked by
     # an earlier deadlocked run, inside a run it classifies each live fiber exactly.
@@ -228,7 +228,7 @@ package Acme::Parataxis v0.1.1 {
     # $level is the caller stack depth (relative to _park) of the *user* frame whose location should be attributed:
     # 1 for direct wait sites, 2 for a Semaphore down(), 3 for a Channel get()/put().
     #
-    # Card 9: the wait-reason record is [reason, file, line] plus a fourth element, a bounded backtrace of the
+    # The wait-reason record is [reason, file, line] plus a fourth element, a bounded backtrace of the
     # user-side callchain (caller frames from just below the recorded site back to the fiber body). Capturing it
     # is a short caller() loop (~100ns per frame), so it runs unconditionally; backtrace_depth(0) disables it.
     # On the *re-entry* after the yield returns, a pending interrupt (set by _interrupt) is consumed and thrown, so a
@@ -447,7 +447,7 @@ package Acme::Parataxis v0.1.1 {
             # We were cancelled out of the await while the child is still parked. It is interrupted and will die on its
             # next resume. Re-park here, registered for the child's death, so the scheduler lets the child run its own
             # unwind (unregistering from its tokens and running destructors) and reaps it before this frame unwinds and
-            # frees $child. The M0 fix in the C layer means freeing the child mid-park would no longer crash, so this
+            # frees $child. Freeing the child mid-park no longer crashes (a C-level coroutine-lifecycle fix), so this
             # branch is no longer load-bearing for safety - it is kept so an abandoned child dies by unwinding rather
             # than being yanked. The interrupt marker on this fiber was consumed by the throwing await, so returning
             # from this park (rather than throwing again) is certain.
@@ -460,7 +460,7 @@ package Acme::Parataxis v0.1.1 {
         return $rv;
     }
 
-    # Card 4 STM. atomically() runs $code as one transaction on the calling fiber: reads are
+    # STM (software transactional memory). atomically() runs $code as one transaction on the calling fiber: reads are
     # journaled, writes stay in a write set until the outermost atomically commits (validating
     # every read first, re-running on conflict), and retry() parks the fiber until a TVar it
     # read changes. The block may run many times - no irreversible side effects inside it.
@@ -475,7 +475,7 @@ package Acme::Parataxis v0.1.1 {
         return Acme::Parataxis::TVar::_atomically($code);
     }
 
-    # Card 4 STM. Aborts the enclosing atomically block and re-runs it once a TVar the
+    # STM. Aborts the enclosing atomically block and re-runs it once a TVar the
     # transaction has read changes; croaks anywhere else.
     sub retry {
         my $o = _arg_offset( $_[0] );
@@ -485,7 +485,7 @@ package Acme::Parataxis v0.1.1 {
         Acme::Parataxis::TVar::_retry();
     }
 
-    # Structured concurrency (M4). $code runs in the calling fiber with an Acme::Parataxis::Nursery
+    # Structured concurrency. $code runs in the calling fiber with an Acme::Parataxis::Nursery
     # as its argument; every child spawned through $n->spawn is guaranteed to finish before nursery()
     # returns, and the first child that dies cancels all of its siblings. Children never run inline
     # into the block (Nursery::spawn parks each at birth), so a child failure always surfaces through
@@ -560,7 +560,7 @@ package Acme::Parataxis v0.1.1 {
         return 0;
     }
 
-    # -- event-loop driver (Card 2). When an event loop is attached (attach_loop), await_read / await_write /
+    # -- event-loop driver. When an event loop is attached (attach_loop), await_read / await_write /
     # -- await_sleep stop submitting blocking OS-thread-pool jobs per filehandle/sleep and instead register watches
     # -- and timers on the loop; run() hands control to the loop whenever every fiber is parked. The public contract
     # -- is unchanged (readiness with the pool path's result values; timeout resumes -1; an enclosing with_timeout /
@@ -597,7 +597,7 @@ package Acme::Parataxis v0.1.1 {
         return $DRIVER;
     }
 
-    # -- Card 8 transparent unblocking (CORE::GLOBAL overrides). Opt-in only: never
+    # -- transparent unblocking (CORE::GLOBAL overrides). Opt-in only: never
     # -- installed by default. enable_transparent_unblocking() makes sleep/read/sysread
     # -- cooperative inside scheduled fibers (sleep -> await_sleep, read/sysread framed
     # -- on await_read) and delegates to the raw builtin outside one, so synchronous
@@ -768,7 +768,7 @@ package Acme::Parataxis v0.1.1 {
 
             # A scheduled fiber that dies unwinds the whole run *unless* it has an observer (an awaiting parent, an
             # on_ready callback). With an observer the error is deliberately left for the observer to rethrow at the
-            # await/call site, which lets a cancelled wait surface to its own awaiter without killing the block (M1).
+            # await/call site, which lets a cancelled wait surface to its own awaiter without killing the block.
             die $err if defined $err && !@{ $fiber->[F_CALLBACKS] || [] };
             $fiber->[F_CALLBACKS] = [];    # one-shot, already fired by set_result/set_error; dropping the refs lets
             return 1;                      # a callback that captured the fiber (e.g. a nursery observer) cycle out
@@ -972,8 +972,8 @@ package Acme::Parataxis v0.1.1 {
 
             # Observer-gated rethrow, like _handle_run: a fiber that died while watched (an awaiting parent or an
             # on_ready callback) keeps its error for the observer to rethrow at its await/call site instead of
-            # killing the run loop. This is the wake-by-job-completion path (@ready), whose deaths were the one
-            # observer-gated hole left open (M4: a child that dies right after its own sleep job must not kill run()).
+            # killing the run loop. This is the wake-by-job-completion path (@ready), whose deaths are the one
+            # observer-gated hole left open: a child that dies right after its own sleep job must not kill run().
             die $err if defined $err && !@{ $self->[F_CALLBACKS] || [] };
         }
         return unless defined $rv;

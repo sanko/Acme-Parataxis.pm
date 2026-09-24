@@ -6,8 +6,8 @@ use Acme::Parataxis::Channel;
 use Test2::V1 -ipP;
 $|++;
 
-# M8: diagnostics & deadlock tracing. dump_fibers() snapshots every live fiber with the state (RUNNING/WAITING/
-# READY/RUNNABLE) and the wait_reason [reason, file, line] M0 already records at every park; the scheduler's
+# Diagnostics & deadlock tracing. dump_fibers() snapshots every live fiber with the state (RUNNING/WAITING/
+# READY/RUNNABLE) and the wait_reason [reason, file, line] recorded at every park; the scheduler's
 # FATAL deadlock report now lists each parked fiber of the deadlocked run instead of a bare string.
 subtest 'run-time dump classifies a fiber blocked on a semaphore and one on a sleep' => sub {
     my $snap;

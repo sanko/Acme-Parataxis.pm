@@ -5,7 +5,7 @@ use Acme::Parataxis::Error;          # for the internal STM_Retry control-flow e
 use Acme::Parataxis::Sync::Mutex;    # the global commit lock
 use Scalar::Util qw[refaddr];
 #
-# Card 4 STM: Software Transactional Memory. A TVar is a versioned mutable cell whose
+# STM (software transactional memory). A TVar is a versioned mutable cell whose
 # reads and writes only take effect through Acme::Parataxis->atomically. The transaction
 # log lives on the calling fiber's Locals-stash (the same slot Acme::Parataxis::Local
 # uses), keyed so it can never collide with a Local id:

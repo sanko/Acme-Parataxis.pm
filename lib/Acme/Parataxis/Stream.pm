@@ -3,7 +3,7 @@ use feature 'class';
 no warnings 'experimental::class', 'recursion';
 use Time::HiRes qw[time];
 
-# A chainable FRP pipeline over bounded Channels, in the "#9 - Async Streams" spirit (TODO Card 5). Every stage is a
+# A chainable FRP pipeline over bounded Channels: async stream stages. Every stage is a
 # factory: it allocates its own bounded output Channel, spawns a background fiber that loops the input applying a
 # callback, and returns a new Stream wrapping the output. Backpressure is free - a full bounded channel parks the
 # stage's producer all the way upstream, which is exactly what t/057's parked_puts() counts.
@@ -11,7 +11,7 @@ use Time::HiRes qw[time];
 # Teardown is the same everywhere: each stage's fiber ends its `while (my $x = $src->get)` loop when the upstream
 # Channel shuts down, then shuts its own output down in turn, so a consume()'d chain unwinds fiber-by-fiber back to
 # the source. `shutdown` releases the parked get()ers (Channel.pm's shutdown adjusts the get semaphore by 1e9), so no
-# stage can park forever on a source that quit - the "zero leaked fibers" (M4-closing) guarantee holds from the very
+# stage can park forever on a source that quit - the "zero leaked fibers" guarantee holds from the very
 # first from_channel.
 class Acme::Parataxis::Stream v0.1.1 {
     use Carp qw[croak];

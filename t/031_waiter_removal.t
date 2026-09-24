@@ -10,7 +10,7 @@ $|++;
 
 # remove_waiter unregisters a parked fiber so the primitive will never wake it.
 # A removed waiter stays parked forever, and its Perl object must live until the
-# process ends (destroying a mid-park fiber became safe with the M0 C fix in t/046,
+# process ends (destroying a mid-park fiber is safe since the C-level coroutine fix in t/046,
 # but a removed waiter is never resumed, so its object is stashed in @parked and
 # reclaimed by the runtime's own cleanup() during global destruction, as before).
 # The block's run is ended with stop() so the deadlock detector is never reached.

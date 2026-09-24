@@ -271,7 +271,7 @@ On failure the aggregate croaks with [`Acme::Parataxis::Error::Nursery`](https:/
 `-`failures> lists every child's error (the real one plus the `Cancelled` unwinds of the siblings it cancelled) and
 `-`primary> is the first real failure. A block error is rethrown unchanged after the children are drained; a
 user-fibre token can cancel the whole group (call `-`token->cancel>), and cancellation propagates into nested waits
-and tokens (M4 subtest 6, [Acme::Parataxis::with\_timeout](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3Awith_timeout)) via the `_join`
+and tokens ([Acme::Parataxis::with\_timeout](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3Awith_timeout) included) via the `_join`
 parent-interrupt branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery
 they were spawned into and the inner nursery's `_join` awaits them as long as they stay registered.
 
@@ -854,7 +854,7 @@ resumed. Supervisors supervise supervisors: `supervise` accepts an actor, a nest
 
 ## Diagnostics
 
-Every fiber that parks in a wait records where and why (M0's wait\_reason), and `dump_fibers` exposes it: each live
+Every fiber that parks in a wait records where and why (wait_reason), and `dump_fibers` exposes it: each live
 fiber with its state (`WAITING` / `READY` / `RUNNING` / `RUNNABLE`) and, when parked, the wait reason together with
 the source site where it yielded.
 

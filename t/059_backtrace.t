@@ -6,7 +6,7 @@ use Acme::Parataxis::Channel;
 use Test2::V1 -ipP;
 $|++;
 
-# Card 9: full park-site backtraces. Every _park now hangs a bounded, user-side caller chain off the wait-reason
+# Full park-site backtraces. Every _park now hangs a bounded, user-side caller chain off the wait-reason
 # record as its fourth element: wait_reason returns [reason, file, line, backtrace] where backtrace is an arrayref
 # of [pkg, file, line, sub] frames running from just below the recorded site back to the fiber body (no library
 # frames; [] when the park is reached directly from the body or capture is off). backtrace_depth() sets the cap.

@@ -102,7 +102,7 @@ subtest 'an enclosing with_timeout still interrupts a driver read' => sub {
     is $after,     'ran-on',  'the fiber continued after catching it';
 };
 
-# -- Card 2 acceptance: high-volume readiness on the loop, and proof that the worker pool does none of it. ------
+# -- event-loop acceptance: high-volume readiness on the loop, and proof that the worker pool does none of it. ------
 # Count every pool submission. _submit_job is the only gate onto submit_c_job (await_sleep, await_core_id,
 # await_read and await_write all route through it) and run() never submits on its own, so a zero count while a
 # loop is attached means no worker thread was ever asked to provide readiness or a sleep.

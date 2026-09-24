@@ -5,7 +5,7 @@ use Acme::Parataxis::Actor;
 use Test2::V1 -ipP;
 $|++;
 
-# M7: thin actors. `Actor->spawn(sub ($self, $msg) { ... })` runs the handler in a dedicated fiber that owns a
+# Thin actors. `Actor->spawn(sub ($self, $msg) { ... })` runs the handler in a dedicated fiber that owns a
 # bounded Channel mailbox; `ask` tags a message with a Future (the handler's return value travels back through it),
 # `send` is fire-and-forget, and `stop` shuts down gracefully (draining what was already queued). Supervision is out
 # of scope -- a handler die fails its own ask (or warns for a fire-and-forget) and the actor keeps running.

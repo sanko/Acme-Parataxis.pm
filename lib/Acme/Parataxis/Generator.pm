@@ -15,7 +15,7 @@ package Acme::Parataxis::Generator v0.1.1 {
     # unreliable (the body's die escapes every anchored JMPENV -> "uncaught die" or
     # 0xC0000005). Keeping one permanently parked reserved fiber means generators always
     # land on fid >= 1, where the resume-die path is exercised by the whole test suite from
-    # the first M1 scheduler tests on and has always been stable.
+    # the first scheduler tests on and has always been stable.
     sub _ensure_reserved_fiber {
         return if $RESERVED;
         my $fiber = Acme::Parataxis->new(
@@ -74,7 +74,7 @@ package Acme::Parataxis::Generator v0.1.1 {
     # down in mid-shot: resuming it with the drain marker makes the yield closure die, the
     # fiber-local eval absorbs it, and the fiber finishes normally (perl unwinds its own
     # scopes), after which coro_call reaps it. (destroy_coro mid-eval became safe with the
-    # M0 fix, t/046, but draining is retained so the body can run its own finalization.)
+    # the C-level fix that made destroying a parked fiber safe, but draining is retained so the body can run its own finalization.)
     sub DESTROY ($self) {
         my $fiber = $self->{fiber};
         return if !defined $fiber;

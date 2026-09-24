@@ -11,7 +11,7 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
 
     # A token bucket. The bucket is an ordinary Semaphore holding `burst` permits: acquire() is a `down`, so a fiber
     # with nothing left to spend parks through the usual _park path and inherits cancellation, with_timeout and
-    # unregister-on-interrupt for free. A Card-6 Ticker wakes the refill fiber `rate` times a second, and each wake
+    # unregister-on-interrupt for free. The Ticker wakes the refill fiber `rate` times a second, and each wake
     # credits every whole token accrued since the previous one on the wall clock (the fraction carries over), so the
     # delivered rate tracks real time however coarsely the platform wakes the ticker: a late wake credits the tokens
     # missed since the last one instead of falling behind. Tokens are credited only while the bucket sits below its
@@ -24,7 +24,7 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
     field $rate  : reader : param;
     field $burst : reader : param;
     field $bucket;    # Semaphore: count is the tokens currently available, always 0 .. $burst
-    field $ticker;    # Card-6 Ticker firing `rate` times a second
+    field $ticker;    # Ticker firing `rate` times a second
     field $running = false;
     ADJUST {
         croak 'RateLimiter->new( rate => $per_second ) requires a positive rate' unless defined $rate  && $rate > 0;

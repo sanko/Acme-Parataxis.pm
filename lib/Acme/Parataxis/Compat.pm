@@ -4,7 +4,7 @@ use Carp     qw[croak];
 
 package Acme::Parataxis::Compat v0.1.1 {
 #
-# Card 8 transparent unblocking (CORE::GLOBAL overrides). This module is an opt-in
+# Transparent unblocking (CORE::GLOBAL overrides). This module is an opt-in
 # convenience: Acme::Parataxis->enable_transparent_unblocking() installs overrides
 # that make the blocking builtins `sleep`, `read` and `sysread` cooperative inside
 # scheduled fibers, and delegate to the raw CORE:: builtin everywhere else (top

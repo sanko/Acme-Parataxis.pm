@@ -89,7 +89,7 @@ package Acme::Parataxis::Error v0.1.1 {
         sub child    ($self) { $self->{child} }                  # name of that child
     }
 
-    # Control flow for Card 4 STM, not a user-facing error: thrown by retry() inside an
+    # Control flow for STM, not a user-facing error: thrown by retry() inside an
     # atomically block and caught by atomically itself, which discards the transaction's
     # writes, parks on the read set, and re-runs the block. It never escapes atomically -
     # retry() outside a transaction croaks before this is constructed.

@@ -5,7 +5,7 @@ use feature 'class';
 # OTP-style supervisor trees: children are supervised actors (or nested supervisors) that are
 # restarted whenever they die, according to a restart strategy, until a restart budget runs out -
 # at which point the tree is torn down and run() fails with an aggregate
-# Acme::Parataxis::Error::Supervisor. This is the "heal-fast" half of M7's "supervision is
+# Acme::Parataxis::Error::Supervisor. This is the "heal-fast" half of supervision's "supervision is
 # deliberately out of scope" guardrail, and it is pure Perl on top of the existing park/wake
 # machinery: one supervision fiber owns the tree and learns a child died through that child's own
 # teardown (an actor's on_death hook, or a wrapper fiber around a nested supervisor's run).

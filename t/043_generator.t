@@ -5,7 +5,7 @@ use Acme::Parataxis::Generator;
 use Test2::V1 -ipP;
 $|++;
 
-# M6: stackful lazy generator. `Generator->new(code)` runs the code in a private fiber that
+# Stackful lazy generator. `Generator->new(code)` runs the code in a private fiber that
 # never enters the scheduler run queue; each ->next resumes it with coro_call (asymmetric,
 # fully synchronous code only), and exhaustion/error finish the fiber through the normal
 # scheduler teardown. A rare Windows quirk makes resume-dies in the very first fiber a

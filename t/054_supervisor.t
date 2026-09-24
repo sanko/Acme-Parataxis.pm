@@ -7,7 +7,7 @@ use Acme::Parataxis::Error;
 use Test2::V1 -ipP;
 $|++;
 
-# Card 3: OTP-style supervisor trees. Children are supervised actors (or nested supervisors) that
+# OTP-style supervisor trees. Children are supervised actors (or nested supervisors) that
 # are restarted when they die, per restart strategy, until a restart budget runs out - at which
 # point the tree stops and run() fails with an aggregate Acme::Parataxis::Error::Supervisor.
 #

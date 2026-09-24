@@ -29,6 +29,7 @@ This file is the next chapter before I rename the project. Every complete task g
 | Token-bucket `RateLimiter` (#10)                          | [x] done      | Card 7 - `RateLimiter`, t/051 |
 | Transparent unblocking - `CORE::GLOBAL` overrides (#10)   | [x] done      | Card 8 - `Compat`, t/058 |
 | Full park-site backtrace - `dump_fibers` depth (#7)       | [x] done      | Card 9 - t/059 |
+| Strip roadmap labels (Card N / M#) from shipped files     | [x] done      | Card 10 - grep-clean lib/ eg/ t/ + README/Changes |
 
 ## Carried over from the previous roadmap
 
@@ -469,13 +470,15 @@ Acceptance (now t/059):
   and human report expose the same chain (subtest 4).
 
 
-### 10 Strip the roadmap labels (Card N / M#) from shipped files - deferred until the roadmap is done
+### 10 Strip the roadmap labels (Card N / M#) from shipped files - shipped this session, no test changes
 
-Source: housekeeping, not a discussion. The codebase is organized around milestones (M1-M8) and roadmap cards;
-comments in `lib/*.pm` and prose in `lib/**/*.pod` still say "M5's Channel", "Card 4 STM", "see Card 2" and the
-like. Those pointers mean nothing to someone who installs the dist without this repo, where TODO.md is not
-shipped. Stripping them is the last thing we do, after cards 4-9, because the labels are load-bearing while the
-roadmap is live (they tell a reviewer where each feature came from).
+Every `Card \d` / `M\d+` / Milestone pointer is gone from the shipped `lib/` sources (`.pm`, `.pod`, `.c`), the
+test headers, `eg/`, `README.md`, and `Changes.md`; the comments were rewritten as standalone architecture notes
+and the pod prose names cross-features directly, exactly as the acceptance below described. Acceptance verified
+with a case-sensitive grep over the whole shipped tree: zero matches (the only pattern-shaped survivors are test
+payload values like `'m1'` in t/041, which are data, not labels). TODO.md itself stays label-flagged - it is the
+roadmap this whole table ships alongside, and the labels are the map. Public API and behavior untouched; full
+suite Files=59 Tests=909 PASS.
 
 Acceptance (a grep, no new tests):
 

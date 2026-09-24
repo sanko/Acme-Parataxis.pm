@@ -6,7 +6,7 @@ use File::Temp ();
 use IO::Socket::INET ();
 use Acme::Parataxis  qw[async fiber await_sleep with_timeout];
 #
-# Card 8: transparent unblocking is opt-in, per-process, compile-time. The overrides
+# Transparent unblocking is opt-in, per-process, compile-time. The overrides
 # affect only code compiled AFTER enable_transparent_unblocking ran, so they are
 # installed here in BEGIN, before the test bodies below are compiled. Everything at
 # the top level (current_fid < 0) must delegate to the raw CORE:: builtins, and every

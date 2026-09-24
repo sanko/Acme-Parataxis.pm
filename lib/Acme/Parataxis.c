@@ -1162,7 +1162,7 @@ DLLEXPORT SV * maybe_yield() {
  * A fiber that parks while a shared subroutine's @_ slot is AvREAL leaves that state in the CV's shared PadList.
  * When a different fiber later enters the same CV at the same depth, pp_entersub's assert(!AvREAL(av)) panics in
  * DEBUGGING builds. Printing the offending CV name + depth + where, at the moment the state is created or cleaned,
- * localizes the R4/M0-class corruption beyond pp_hot.c's bare "(on line N")" message.
+ * localizes the parked-AvREAL-@_ corruption beyond pp_hot.c's bare "(on line N")" message.
  */
 static void para_report_avreal_pad(pTHX_ CV * cv, I32 depth, const char * where) {
     if (!cv || SvTYPE((SV *)cv) != SVt_PVCV)
@@ -2846,7 +2846,7 @@ DLLEXPORT void destroy_coro(int fiber_id) {
      * still parked keeps live activation slots in the shared PadLists and the global CvDEPTH counters of every
      * subroutine it is currently inside (yield, the wait helpers, run, ...); _clear_pads_in_stack frees those slots
      * and adjusts CvDEPTH for the *running* fiber's bookkeeping, corrupting any other fiber that activates the same
-     * sub at the same depth (M0). The parked fiber's own closures release their pads when user_cv is decref'd below,
+     * sub at the same depth. The parked fiber's own closures release their pads when user_cv is decref'd below,
      * and its shared-sub slots are simply overwritten by normal later use, so skipping the unwalk is safe. */
     if (c->si && c->si->si_cxix < 0)
         _clear_pads_in_stack(aTHX_ c->si);
