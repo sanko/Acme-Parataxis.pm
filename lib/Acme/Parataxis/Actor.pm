@@ -16,7 +16,11 @@ package Acme::Parataxis::Actor v0.1.1 {
     # caller; `send` is fire-and-forget. The mailbox is a plain bounded channel, so a slow handler
     # gives the *sender* backpressure instead of growing a queue without bound. Spawned with
     # supervised => 1, a handler die kills the actor instead of only failing that one ask, which is
-    # what Acme::Parataxis::Supervisor supervises.
+    # what Acme::Parataxis::Supervisor supervises. A `name` registers the actor process-wide:
+    # Acme::Parataxis->actor($name) / ->whereis($name) returns the handle, and the name is released
+    # when the actor stops, dies, or is destroyed, so a dead actor never answers a lookup. The
+    # registration holds a strong reference, so a *named* actor lives as long as it is registered
+    # even if every caller drops its handle - the name is the handle (Erlang's register table).
     my $STOP = \do { my $x = 1 };    # envelope value that tells the loop to shut down gracefully
 
     sub spawn ( $class, $code, $capacity = 16, %opts ) {
@@ -24,12 +28,19 @@ package Acme::Parataxis::Actor v0.1.1 {
         croak 'Actor->spawn() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
         croak "Actor->spawn() mailbox capacity must be >= 1 (got $capacity)" unless $capacity >= 1;
         my %unknown = %opts;
-        delete @unknown{qw[supervised]};
+        delete @unknown{qw[supervised name]};
         croak 'Actor->spawn(): unknown options: ' . join ', ', sort keys %unknown if %unknown;
+        my $name = $opts{name};
+        if ( defined $name ) {
+            croak 'Actor->spawn(): the name must be a non-empty string' unless !ref $name && length $name;
+            my $existing = $Acme::Parataxis::ACTOR_REGISTRY{$name};
+            croak "Actor->spawn(): an actor named '$name' is already registered" if $existing && $existing->is_alive;
+        }
         my $self = bless {
             code       => $code,
             cap        => $capacity,
             opts       => {%opts},
+            name       => $name,
             supervised => $opts{supervised} ? 1 : 0,
             mailbox    => Acme::Parataxis::Channel->new( capacity => $capacity ),
             stopping   => 0,
@@ -63,6 +74,7 @@ package Acme::Parataxis::Actor v0.1.1 {
             $crash = $@ unless $ok;
             if ( my $actor = $weak ) { $actor->_finish($crash) }
         };
+        $Acme::Parataxis::ACTOR_REGISTRY{$name} = $self if defined $name;    # only a spawned actor is registered
         return $self;
     }
 
@@ -73,6 +85,12 @@ package Acme::Parataxis::Actor v0.1.1 {
         return if $self->{done};
         $self->{done}  = 1;
         $self->{error} = $crash if defined $crash;
+
+        # Release any registered name so a dead actor never answers a lookup. The guard (entry still == $self)
+        # keeps an older actor's teardown from clobbering a same-named replacement that registered since.
+        if ( defined $self->{name} ) {
+            delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } if ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self;
+        }
 
         # The drain is best effort: a watcher must learn about this death even if an interrupt lands
         # on this fiber mid-teardown, or whoever is waiting for the report waits forever.
@@ -168,6 +186,19 @@ package Acme::Parataxis::Actor v0.1.1 {
     }
     sub is_alive ($self) { return !$self->{done} }
     sub fid      ($self) { return $self->{fiber}->fid }
+    sub name     ($self) { return $self->{name} }         # the registered name, or undef for an unnamed actor
+
+    # Hot code swap: atomically replace the handler for *subsequent* messages. A message already
+    # being handled finishes with the old code (the running call reads what it captured when it
+    # started); every message dispatched after swap returns runs the new code, because the loop
+    # reads $self->{code} afresh at each dispatch. This is a plain field swap, so it is atomic at
+    # the message boundary with no drain, stop, or restart of the actor. Croaks on a dead actor.
+    sub swap ( $self, $code ) {
+        croak 'swap() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'swap(): this actor is no longer running' if $self->{done};
+        $self->{code} = $code;
+        return $self;
+    }
 
     sub _check_alive ($self) {
         croak 'send()/ask(): this actor is no longer running' if $self->{done};
@@ -177,6 +208,9 @@ package Acme::Parataxis::Actor v0.1.1 {
 
     sub DESTROY ($self) {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        if ( defined $self->{name} && ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self ) {
+            delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} };
+        }
         $self->stop unless $self->{done};
     }
 }

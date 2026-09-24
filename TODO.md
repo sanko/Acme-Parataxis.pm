@@ -11,7 +11,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 13** - cancellation scopes (`with_cancel`)
 - [ ] **Card 14** - `defer` (run cleanup on every fiber exit)
 - [x] **Card 15** - monitor & linked death
-- [ ] **Card 16** - actor hot-code swap + named registry
+- [x] **Card 16** - actor hot-code swap + named registry
 - [ ] **Card 17** - `with_timeout` re-entrancy polish
 - [ ] **Card 18** - `Channel->new( timeout => $ms )`
 - [ ] **Card 19** - deterministic mock time
@@ -173,7 +173,7 @@ Acme::Parataxis->link( $f };                         # linked pair die together,
 
 ### Card 16 - actor hot-code swap + named registry
 
-**Source**: #9's "Erlang/OTP" note + Backlog. **Status**: API designed; needs an `Actor` slot + a name table.
+**Source**: #9's "Erlang/OTP" note + Backlog. **Status**: SHIPPED - `spawn( ..., name => $name )`, `Acme::Parataxis->actor($name)` / `->whereis`, and `$actor->swap($code)` all shipped; t/065.
 
 ```perl
 my $actor = Acme::Parataxis::Actor->spawn( sub ($self, $msg) { ... }, name => 'worker-1' );
@@ -313,7 +313,7 @@ Acme::Parataxis->run( on_shutdown => sub ($tok) { ... } );   # top-level run wir
 
 - **`Channel` combinators `map`/`filter`/`merge`**: the shipped `Stream` covers `map`/`filter`/`batch`; `merge` (fan-in of several channels) is the remaining CSP-style join and is still described only in `Stream`'s terms in the Backlog note.
 - **`integer under STM`**: the STM validaition/retry story is shipped; making `retry()` useful outside a pure TVar read/write block (e.g., blocking on a derived value) is a possible follow-up.
-- **Erlang-style fully-synchronized code swap** (validate the swap against in-flight messages before committing) is deliberately out of scope for Card 15's v1; revisit only if a real workload needs it.
+- **Erlang-style fully-synchronized code swap** (validate the swap against in-flight messages before committing) is deliberately out of scope for Card 16's v1; revisit only if a real workload needs it.
 
 ## Room notes from the articles
 

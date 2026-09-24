@@ -958,6 +958,14 @@ C<with_timeout> and cancellation just like any other block. A handler die fails 
 and the actor keeps going; spawn it with C<supervised =E<gt> 1> and the die kills the actor instead, which is what the
 supervisor below restarts.
 
+Actors can be named and hot-swapped. C<spawn( ..., name => $name )> registers the actor process-wide (Erlang's
+C<register> table): C<Acme::Parataxis-E<gt>actor($name)> / C<-E<gt>whereis($name)> returns the handle, or C<undef> for
+a name nobody holds, and a second live registration croaks. The name is released when the actor stops or dies, and it
+is a strong reference, so a named actor lives until it is stopped even if every caller drops its handle - the name is
+the handle. C<$actor-E<gt>swap( sub ($self, $msg) { ... } )> swaps the handler for the messages that arrive after it,
+atomically at the next message boundary, with no drain or restart: an in-flight message finishes with the old code. See
+L<Acme::Parataxis::Actor>.
+
 =head2 Supervisors
 
 An L<Acme::Parataxis::Supervisor> runs a set of actors (or nested supervisors) and restarts whichever ones die, OTP

@@ -35,6 +35,7 @@ package Acme::Parataxis v0.1.1 {
     my %PARKED;                 # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
     my %PARK_REGS;              # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;          # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
+    our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
@@ -1286,6 +1287,25 @@ package Acme::Parataxis v0.1.1 {
         }
     }
     sub by_id ( $class, $fid ) { Acme::Parataxis::get_fiber_by_id($fid) }
+
+    # Registered-actor lookup (the whereis table). Returns the handle of the actor spawned with that name, or undef
+    # when nothing (or nobody alive) answers to it. Registration is removed when an actor stops, dies, or is
+    # destroyed, so a dead actor never answers a lookup. Works as a plain function (Acme::Parataxis::actor('x')) or
+    # a class method (Acme::Parataxis->actor('x')); whereis is an alias.
+    sub actor {
+        my $o    = _arg_offset( $_[0] );
+        my $name = $_[$o];
+        @_ = ();
+        return undef unless defined $name;
+        return $ACTOR_REGISTRY{$name};
+    }
+
+    sub whereis {
+        my $o    = _arg_offset( $_[0] );
+        my $name = $_[$o];
+        @_ = ();
+        return actor($name);
+    }
 
     sub _dispatch_callbacks ($self) {
         $_->($self) for @{ $self->[F_CALLBACKS] };
