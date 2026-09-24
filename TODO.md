@@ -15,7 +15,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [ ] **Card 17** - `with_timeout` re-entrancy polish
 - [x] **Card 18** - `Channel->new( timeout => $ms )`
 - [x] **Card 19** - deterministic mock time
-- [ ] **Card 20** - `spawn_blocking`
+- [x] **Card 20** - `spawn_blocking` (relocated to the separate Acme-Parataxis-Blocking distribution)
 - [x] **Card 21** - trace propagation
 - [x] **Card 22** - graceful shutdown
 - [ ] **Card 23** - strip card and milestone references from documentation and comments (the TODO.md file will not be bundled with the dist so readers of the docs will have no idea what cards we're talking about)
@@ -254,7 +254,7 @@ run( virtual => 1, code => sub {
 
 ### Card 20 - execution contexts: `spawn_blocking`
 
-**Source**: chapter plan + #9's "heavy Perl math". **Status**: shipped after Card 22 (order 19 -> 22 -> 20); per-call `threads->create` with a Semaphore-bounded interpreter pool; t/067_spawn_blocking.t green (8 subtests, threaded perl only).
+**Source**: chapter plan + #9's "heavy Perl math". **Status**: shipped, then **relocated** - the machinery is the project's only `threads.pm`-using code, so it was extracted into a separate distribution (`dist/Acme-Parataxis-Blocking/`, module `Acme::Parataxis::Blocking`) to keep `Acme::Parataxis` free of any threads association. The core library no longer loads `threads`/`Thread::Queue` or exports `spawn_blocking`/`set_max_blocking_threads`/`max_blocking_threads`; the implementation, pod, and acceptance test (now t/001 in that dist) live there unchanged in behavior.
 
 **Goal**: a closure that does CPU-bound Perl work runs on a **dedicated background Perl interpreter**, its result arriving as a `Future`, so the cooperative fibers are not stalled by a second of `JSON::XS`/image code.
 
@@ -272,7 +272,7 @@ my $parsed = $f->await;    # main fibers kept running while $blob was parsed
 - *Platform caveat discovered*: threads' `perl_clone` access-violates on some 5.42.x builds (notably Strawberry MSWin32) in two **independent, content-independent** ways, both crashing at the first `threads->create`. (1) A `feature 'class'` file defining a `method DESTROY` on a **second class block** (repro: load `Acme::Parataxis::Semaphore` then `threads->create`; the `Semaphore::Guard`/`Mutex::Guard`/`RwLock::Guard` destructor classes were the in-tree instances - all three are now classic blessed packages with the same API, which fixes this trigger; the pool's loaded state at clone time is then Semaphore+Future+Local, all safe). (2) The mere **presence of certain namespaces** - established by loading the real module under a dummy name (safe) vs its real name (crash): the whole `Acme::Parataxis::Sync` family, `Acme::Parataxis::TVar` (which internally loads `Sync::Mutex`), and `Acme::Parataxis::Driver` all crash clone here no matter their contents or guard classes. No in-library workaround; documented in the pod as an affected-perl limitation (load none of those before the first `spawn_blocking`, or use a short-lived process).
 - *Also verified on the wire*: fractional `sleep 0.35` is a near-no-op inside cloned threads on Strawberry MSWin32 (the "heavy" test closures burn CPU against `Time::HiRes` instead); detached threads must be `join`ed before process exit or `threads.pm`'s global-destruction teardown exits non-zero.
 
-**Acceptance** (new `t/067_spawn_blocking.t`, skipped on non-threaded perl): the heavy closure finishes; the caller fiber kept running meanwhile; result arrives through a normal `Future`; die inside the closure becomes `Future` error; pool bounded; croaks on non-threaded perl. *All green (9 top-level subtests, ~2s wall):* also covers args marshalling, structured (nested) results, unshareable-result errors, misuse croaks (outside a fiber / non-CODE / under `run( virtual => 1 )` / cap change after first use), composition with `with_timeout`, an attached event-loop driver, and a shared-counter concurrency-cap probe.
+**Acceptance** (relocated `t/067_spawn_blocking.t` -> the Blocking dist's `t/001_spawn_blocking.t`, skipped on non-threaded perl): the heavy closure finishes; the caller fiber kept running meanwhile; result arrives through a normal `Future`; die inside the closure becomes `Future` error; pool bounded; croaks on non-threaded perl. *All green (9 top-level subtests, ~2s wall):* also covers args marshalling, structured (nested) results, unshareable-result errors, misuse croaks (outside a fiber / non-CODE / under `run( virtual => 1 )` / cap change after first use), composition with `with_timeout`, an attached event-loop driver, and a shared-counter concurrency-cap probe.
 
 ### Card 21 - trace propagation (`Local` inheritance on spawn)
 

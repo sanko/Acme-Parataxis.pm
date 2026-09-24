@@ -659,53 +659,23 @@ grow when several fibers are sleeping at once, up to a hard limit of 64.
 
 Returns the currently configured maximum thread pool size.
 
-=head2 C<spawn_blocking( $code, @args )>
+=head2 Background interpreters (spawn_blocking)
 
-Runs CPU-bound Perl work on a dedicated background Perl interpreter (a real OS thread cloned with
-C<threads-E<gt>create>) and returns an C<Acme::Parataxis::Future> carrying its result, so a second of
-C<JSON::XS>/image-code work never stalls your cooperative fibers:
+CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with
+C<threads-E<gt>create>) through C<spawn_blocking()>, which returns an C<Acme::Parataxis::Future> carrying the result.
+Because that machinery is the only part of this project that uses C<threads.pm>, it ships in its own distribution so
+this library never loads C<threads>, C<threads::shared>, or C<Thread::Queue>:
 
-    my $f = Acme::Parataxis->spawn_blocking( sub { heavy_parse($blob) } );
+    use Acme::Parataxis::Blocking qw[spawn_blocking];    # separate distribution
+
+    my $f = spawn_blocking( sub { heavy_parse($blob) } );
     my $parsed = $f->await;    # fibers kept running while $blob was parsed
 
-Also callable as a plain function: C<spawn_blocking( sub { ... }, @args )>. The args arrive in the closure's C<@_>, and
-the result (or C<die>), is marshalled back through C<threads::shared>; unshareable results (a CODE ref, a resource)
-become the Future's error instead of crashing the caller. The future composes with C<await>, C<with_timeout>,
-C<with_cancel>, and C<wait_all> exactly like any other.
-
-C<spawn_blocking> requires a Perl built with ithreads (C<useithreads>); on a non-threaded perl it croaks with a clear
-message, and loading the library never touches C<threads> (they are only C<require>d on the first call), so
-non-threaded perls keep using everything else unchanged. It must be called from inside a scheduled fiber and from a
-real-time run: it croaks under C<run( virtual E<gt>=E<gt> 1 )>, because real OS work cannot be fast-forwarded by the
-mock clock.
-
-Hard limits, like the C pool's: each call clones a fresh interpreter, so the closure sees only a copy-in copy-out
-snapshot - plain/structured values cross intact, in-place mutations never leak back, and the closure must not call back
-into C<Acme::Parataxis> scheduler objects or blocking APIs while it runs. At most C<set_max_blocking_threads()>
-interpreters run at once (default 4); a call past the cap parks the calling fiber until a slot frees. Cancelling the
-C<await> does not stop the closure (a real OS thread cannot be yanked); it withdraws the waiter, and the slot releases
-when the closure actually finishes. Platform warning: threads' interpreter clone (C<perl_clone>) access-violates on
-some 5.42.x builds (notably Strawberry MSWin32) once certain things are loaded, crashing the whole process at the first
-C<threads-E<gt>create>. Two separate triggers are known. (1) A C<feature 'class'> file that declares a C<method
-DESTROY> on a second class block in the same file - the in-tree guard classes (C<Semaphore::Guard>, and originally the
-L<Acme::Parataxis::Sync> mutex/rwlock guards) are therefore classic blessed packages, not perlclasses. (2)
-Independently and content-independently, merely loading particular namespaces has the same crash - observed here for
-the whole C<Acme::Parataxis::Sync> family (C<Sync>, C<Sync<I>::Mutex> etc.), C<Acme::Parataxis::TVar>, and
-C<Acme::Parataxis::Driver>. On an affected perl there is no in-library workaround (the module's contents and even the
-guard classes are irrelevant to trigger (2)); if you load any of those namespaces and then intend to use
-C<spawn_blocking>, test on a short-lived process first, or arrange for the closures to run before such modules load.
-
-=head2 C<set_max_blocking_threads( $count )>
-
-Sets the concurrency cap for C<spawn_blocking> background interpreters (like C<set_max_threads> for the C pool). The
-default is 4, or whatever the C<PARATAXIS_SB_THREADS> environment variable holds, and this call must happen before the
-first C<spawn_blocking> - once the pool is in use its capacity is live and changing it croaks. Returns the new cap.
-
-    set_max_blocking_threads(8);    # up to 8 background interpreters at once
-
-=head2 C<max_blocking_threads()>
-
-Returns the configured C<spawn_blocking> capacity.
+See L<Acme::Parataxis::Blocking> for the full contract: the copy-in copy-out snapshot rules, the
+C<set_max_blocking_threads()> concurrency cap (default 4, C<PARATAXIS_SB_THREADS> overrides), the ithreads requirement,
+the mock-clock croak under C<run( virtual E<gt>=E<gt> 1 )>, and the C<perl_clone> platform warning for affected perls
+(the C<feature 'class'> C<method DESTROY> trigger and the content-independent namespace trigger, which is why the
+in-tree guard classes are classic blessed packages).
 
 =head1 Fiber Limits
 
