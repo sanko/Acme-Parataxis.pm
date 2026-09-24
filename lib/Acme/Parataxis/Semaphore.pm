@@ -69,13 +69,20 @@ class Acme::Parataxis::Semaphore v0.1.1 {
     }
 };
 
-class Acme::Parataxis::Semaphore::Guard {    # Util
-    field $semaphore : param;
+# Util. A classic package, not feature::class: a perlclass 'method DESTROY' on a second class
+# block in the same file crashes perl_clone on some perls (threads->create => access violation
+# in Perl_newPADNAMEouter), and keep()/sync primitives must remain loadable pre-thread-create.
+package Acme::Parataxis::Semaphore::Guard {
 
-    method DESTROY {
-        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        $semaphore->up;
+    sub new ( $class, %args ) {
+        return bless { semaphore => $args{semaphore} }, $class;
     }
-};
+
+    sub DESTROY {
+        my $self = shift;
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        $self->{semaphore}->up;
+    }
+}
 #
 1;
