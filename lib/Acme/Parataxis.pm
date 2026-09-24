@@ -18,7 +18,7 @@ package Acme::Parataxis v0.1.1 {
                 = qw[
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
-                current_fid tid root maybe_yield on_wake with_timeout nursery pmap wait_all wait_any
+                current_fid tid root maybe_yield on_wake with_timeout with_cancel nursery pmap wait_all wait_any
                 set_max_threads max_threads set_max_fibers max_fibers dump_fibers
                 backtrace_depth
                 atomically retry
@@ -40,19 +40,20 @@ package Acme::Parataxis v0.1.1 {
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
     use constant {
-        F_CODE        => 0,
-        F_IS_DONE     => 1,
-        F_ERROR       => 2,
-        F_RESULT      => 3,
-        F_FID         => 4,
-        F_IS_READY    => 5,
-        F_CALLBACKS   => 6,
-        F_WAITER      => 7,
-        F_LAST_STATUS => 8,
-        F_PRIORITY    => 9,
-        F_WAIT_REASON => 10,
-        F_WAKE_HOOKS  => 11,
-        F_INTERRUPT   => 12
+        F_CODE          => 0,
+        F_IS_DONE       => 1,
+        F_ERROR         => 2,
+        F_RESULT        => 3,
+        F_FID           => 4,
+        F_IS_READY      => 5,
+        F_CALLBACKS     => 6,
+        F_WAITER        => 7,
+        F_LAST_STATUS   => 8,
+        F_PRIORITY      => 9,
+        F_WAIT_REASON   => 10,
+        F_WAKE_HOOKS    => 11,
+        F_INTERRUPT     => 12,
+        F_CANCEL_SCOPES => 13
     };
 
     # Scheduler run queue. Kept sorted by descending priority (stable for equal priorities, so a group of same-priority fibers stays FIFO).
@@ -340,6 +341,21 @@ package Acme::Parataxis v0.1.1 {
                 Acme::Parataxis::Error::Cancelled->new( wait_reason => $pre_site );
             die $err;
         }
+
+        # A cancellation scope whose token already fired makes every further wait fail fast too: once the fiber's
+        # pending marker has been consumed (a park threw Error::Cancelled and the user caught it), a re-park inside
+        # the still-active scope must not wait in vain. Same shape as the entry fail-fast above, but keyed off the
+        # innermost scope token's own cancelled flag instead of the fiber's interrupt slot.
+        if ( my $scopes = $fiber->[F_CANCEL_SCOPES] ) {
+            my $scope = $scopes->[-1];
+            if ( $scope && $scope->cancelled ) {
+                my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
+                delete $PARKED{$fid};
+                if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
+                $dereg->() if $dereg;    # this park's waiter entry (pushed before _park) is stale: remove it too
+                die Acme::Parataxis::Error::Cancelled->new( wait_reason => [ 'cancel', $pfile, $pline ] );
+            }
+        }
         my ( $file, $line ) = ( caller($level) )[ 1, 2 ];
         my $bt = [];
         if ($BACKTRACE_DEPTH) {
@@ -523,6 +539,59 @@ package Acme::Parataxis v0.1.1 {
         }
         die $err unless $ok;
         return $rv;
+    }
+
+    # Runs $code as a cancellation *scope* on the current fiber: while the block is active, every wait it enters is
+    # interruptible by one token - the scope token returned here - without the caller having to thread that token
+    # into each primitive. Unlike with_timeout, no child fiber is spawned; the block runs on this fiber, so interior
+    # awaits and parks suspend only the normal way. The token registers this fiber for the block's whole duration
+    # (a register/unregister pair, not a per-park one), so an outer cancel() both interrupts a wait parked now and
+    # stamps the fiber so the *next* wait entered inside the scope fails fast. Scopes stack LIFO in a per-fiber slot
+    # (_park reads the innermost one); nesting with_timeout or nursery tokens shares the park, and whichever token
+    # fires first ends the wait while teardown drops the others' registrations.
+    #
+    # Return convention (context aware): the scope token alone in scalar/void context, the token prepended to the
+    # block's value(s) in list context (my ($tok, @vals) = with_cancel sub { ... }). On failure the block's own
+    # error propagates unchanged (the real error wins over a concurrently arriving cancel); if the scope itself was
+    # cancelled by an outer token while the block ran to completion, Error::Cancelled (or Timeout for a deadline)
+    # is thrown at the scope boundary instead of swallowing the interrupt.
+    sub with_cancel {
+        my $o    = _arg_offset( $_[0] );
+        my $code = $_[$o];
+        @_ = ();
+        croak 'with_cancel() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'with_cancel() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
+        state $have_token = do { require Acme::Parataxis::CancellationToken; 1 };
+        my $tok   = Acme::Parataxis::CancellationToken->new( kind => 'cancel' );
+        my $fiber = Acme::Parataxis->by_id( Acme::Parataxis->current_fid );
+        push @{ $fiber->[F_CANCEL_SCOPES] }, $tok;
+        $tok->register;    # block-wide: this fiber stays registered while the scope is open
+        my @val;
+
+        if (wantarray) {
+            @val = eval { $code->($tok) }
+        }
+        else {
+            $val[0] = eval { $code->($tok) }
+        }
+        my $err = $@;
+        $tok->unregister;
+        pop @{ $fiber->[F_CANCEL_SCOPES] };
+        if ($err) {
+
+            # The block's own error wins: drop any interrupt still pending so it cannot resurface at an outer scope
+            # after this one has already reported the real failure.
+            $fiber->[F_INTERRUPT] = undef;
+            die $err;
+        }
+        if ( my $kind = $fiber->[F_INTERRUPT] ) {
+
+            # The block returned normally but an outer token/deadline fired while it ran: consume the marker and
+            # convert it to the matching error so the cancellation is never silently swallowed at this boundary.
+            $fiber->[F_INTERRUPT] = undef;
+            die $kind eq 'timeout' ? Acme::Parataxis::Error::Timeout->new : Acme::Parataxis::Error::Cancelled->new;
+        }
+        return wantarray ? ( $tok, @val ) : $tok;
     }
 
     # STM (software transactional memory). atomically() runs $code as one transaction on the calling fiber: reads are
@@ -1045,7 +1114,7 @@ package Acme::Parataxis v0.1.1 {
     sub stop () { $IS_RUNNING = 0 }
 
     sub new ( $class, %args ) {
-        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef ], $class;
+        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef, [] ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
         croak $fid == -3 ?
             'could not allocate a fiber: this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'

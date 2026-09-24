@@ -1,0 +1,94 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+Acme::Parataxis::Monitor - Observe another fiber's death without owning it
+
+=head1 SYNOPSIS
+
+    use v5.40;
+    use Acme::Parataxis qw[async fiber await_sleep];
+    use Acme::Parataxis::Monitor;
+
+    async {
+        my $worker = fiber { await_sleep(100); die "boom\n" };
+        my $mon    = Acme::Parataxis::Monitor->new($worker);
+
+        my $err = $mon->await;    # undef for a clean end, the death error for a crash
+        say $err ? "worker died: $err" : 'worker finished cleanly';
+    };
+
+=head1 DESCRIPTION
+
+A monitor is pure observation, like an Erlang monitor: it resolves exactly once, when the target exits, to C<undef> for
+a clean end or to the target's death error for a crash. It rides the target's existing C<on_ready>/C<on_death> slot, so
+it needs no scheduler change and never owns the target - there is no C<stop>, and the monitor cannot delay the target's
+own reaping.
+
+The target may be a fiber, a L<Future|Acme::Parataxis::Future>, or an L<Actor|Acme::Parataxis::Actor>; anything with an
+C<on_ready> or C<on_death> method. Watching an already-dead target fires immediately, because the underlying future
+resolves inline during C<new>. Because the completion callback captures the monitor weakly, dropping a monitor lets it
+dissolve instead of lingering in the target's callback list.
+
+=head1 METHODS
+
+=head2 C<new( $target )>
+
+=head2 C<new( target =E<gt> $target )>
+
+=head2 C<new( fid =E<gt> $id )>
+
+Creates a monitor for C<$target>. Pass a blessed target positionally, or as C<target =E<gt> ...>, or watch a fiber by
+its numeric id with C<fid =E<gt> $id>. Croaks if no target is given, if the target is not blessed, if an id cannot be
+resolved to a live fiber, if both C<target> and C<fid> are supplied, or if the target exposes neither C<on_ready> nor
+C<on_death>.
+
+=head2 C<await( )>
+
+Parks the current fiber until the target exits and returns the resolution value: C<undef> for a clean end, or the death
+error for a crash. Calling C<await> again after the monitor is ready returns the same value immediately.
+
+=head2 C<result( )>
+
+Returns the resolution value without parking. Croaks if the monitor is not yet ready.
+
+=head2 C<error( )>
+
+Returns the death error for a crashed target, or C<undef> for a clean end or a monitor that has not yet resolved; never
+croaks.
+
+=head2 C<is_ready( )>
+
+Returns true once the target has exited and the monitor has resolved.
+
+=head2 C<is_done( )>
+
+Alias for C<is_ready>, mirroring the fiber-side naming: resolved means done.
+
+=head2 C<target( )>
+
+Returns the watched fiber, future, or actor object.
+
+=head2 C<fid( )>
+
+Returns the target's fiber id at watch time, or C<undef> for non-fiber targets.
+
+=head2 C<on_ready( $cb )>
+
+Registers a callback fired once, when the monitor resolves; it receives the monitor. Croaks unless C<$cb> is a code
+ref.
+
+=head1 AUTHOR
+
+Sanko Robinson L<https://github.com/sanko>
+
+=head1 LICENSE
+
+Copyright (C) Sanko Robinson.
+
+This library is free software; you can redistribute it and/or modify it under the terms found in the Artistic License
+2.
+
+=cut

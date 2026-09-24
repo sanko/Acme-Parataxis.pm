@@ -264,6 +264,32 @@ deadline.
             or die 'worker cancelled';
     };
 
+=head2 C<with_cancel( $code )>
+
+Runs C<$code> as a cancellation I<scope> on the current fiber. While the block is active, every blocking wait it enters
+is interruptible by a single token - the scope token C<with_cancel> returns - without threading that token into each
+primitive. Unlike C<with_timeout>, no child fiber is spawned: the block runs on the calling fiber, so interior waits
+suspend only the normal way.
+
+    async {
+        my $tok = with_cancel( sub ($t) {
+            $ch->get;      # parks interruptibly
+            $sem->down;    # so does this one
+        } );
+        # normal exit: every interior wait was deregistered and $tok is now inert
+    };
+
+The scope registers the fiber for the block's whole duration, so cancelling C<$tok> interrupts a wait parked right now
+and stamps the fiber so the I<next> wait entered inside the scope fails fast. Scopes nest LIFO and share the park with
+a C<with_timeout> deadline or a C<nursery> token; whichever fires first ends the wait and teardown drops the others'
+registrations.
+
+The return convention is context aware: the token alone in scalar or void context, or the token prepended to the
+block's value(s) in list context (C<my ($tok, @vals) = with_cancel sub { ... }>). On failure the block's own error
+propagates unchanged (a real error wins over a concurrently arriving cancel); if the scope itself was cancelled by an
+outer token while the block still ran to completion, C<Error::Cancelled> (or C<Error::Timeout> for a deadline) is
+thrown at the scope boundary instead of the interrupt being swallowed.
+
 =head2 C<Acme::Parataxis::CancellationToken>
 
 See L<Acme::Parataxis::CancellationToken>: C<register>, C<unregister>, C<cancel>, C<cancelled>, C<kind>, C<waiters>.
@@ -309,6 +335,21 @@ user-fibre token can cancel the whole group (call C<->token->cancel>), and cance
 and tokens (L<Acme::Parataxis::with_timeout|Acme::Parataxis::with_timeout> included) via the C<_join> parent-interrupt
 branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery they were
 spawned into and the inner nursery's C<_join> awaits them as long as they stay registered.
+
+=head1 Monitoring
+
+=head2 C<Acme::Parataxis::Monitor>
+
+L<C<Acme::Parataxis::Monitor>|Acme::Parataxis::Monitor> observes another fiber's death without owning it, like an
+Erlang monitor. C<Monitor-E<gt>new( $fiber )> (or C<fid =E<gt> $id>) returns a C<Future>-like handle that resolves
+exactly once when the target exits - C<undef> for a clean end, the death error for a crash. Watching an already-dead
+target fires immediately, and the monitor never delays the target's own reaping.
+
+    my $mon = Acme::Parataxis::Monitor->new($worker);
+    my $err = $mon->await;    # undef, or the error the worker died with
+
+See L<Acme::Parataxis::Monitor> for C<await>, C<result>, C<error>, C<is_ready>, C<is_done>, C<target>, C<fid>, and
+C<on_ready>.
 
 =head1 Scheduler Functions
 

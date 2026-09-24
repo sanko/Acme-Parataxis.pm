@@ -2119,7 +2119,6 @@ void para_entry_point(para_fiber_t * c) {
                 coro_yield(&PL_sv_undef);
         }
         count = call_sv(c->user_cv, G_SCALAR | G_EVAL);
-        JMPENV_POP;
     }
 
     SPAGAIN;
@@ -2149,7 +2148,12 @@ void para_entry_point(para_fiber_t * c) {
         AV * obj = (AV *)SvRV(c->self_ref);
         SV ** ready = av_fetch(obj, 5, 0);
         if (!(ready && *ready && SvTRUE(*ready))) {
-            if (SvTRUE(ERRSV)) {
+            int died;
+            if (SvROK(ERRSV) && SvOBJECT(SvRV(ERRSV)))
+                died = 1;    /* blessed exceptions are always errors; e.g. Error::Timeout with an overloaded "" */
+            else
+                died = SvTRUE(ERRSV);
+            if (died) {
                 av_store(obj, 2, newSVsv(ERRSV));
                 av_store(obj, 5, &PL_sv_yes);
             }

@@ -4,6 +4,21 @@ If you're reading this, [#7](https://github.com/sanko/Acme-Parataxis.pm/discussi
 
 This file holds the running plan for the next chapter. Each entry below was either trailed off in an article ("I have another handful of ideas but I need to turn random phrases into actual explanations") or deliberately left in the Backlog because it was waiting on API design or more thought. Cards are numbered continuing the first chapter (11+); Cards 11-12 shipped in full (see below), everything else in here is not shipped yet.
 
+## Progress
+
+- [x] **Card 11** - Future combinators `wait_all` / `wait_any`
+- [x] **Card 12** - `pmap` (bounded-pool parallel map)
+- [x] **Card 13** - cancellation scopes (`with_cancel`)
+- [ ] **Card 14** - `defer` (run cleanup on every fiber exit)
+- [x] **Card 15** - monitor & linked death
+- [ ] **Card 16** - actor hot-code swap + named registry
+- [ ] **Card 17** - `with_timeout` re-entrancy polish
+- [ ] **Card 18** - `Channel->new( timeout => $ms )`
+- [ ] **Card 19** - deterministic mock time
+- [ ] **Card 20** - `spawn_blocking`
+- [ ] **Card 21** - trace propagation
+- [ ] **Card 22** - graceful shutdown
+
 ## Chapter 2: ergonomics, observability, and scaling out
 
 Future combinators, deterministic testing, CPU-heavy execution contexts, and application lifecycle.
