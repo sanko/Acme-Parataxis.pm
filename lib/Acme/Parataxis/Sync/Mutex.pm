@@ -77,13 +77,21 @@ class Acme::Parataxis::Sync::Mutex v0.1.1 : isa(Acme::Parataxis::Sync) {
     }
 };
 
-class Acme::Parataxis::Sync::Mutex::Guard {    # Util
-    field $mutex : param;
+# Util. A classic package, not feature::class: a perlclass 'method DESTROY' is one trigger of the perl_clone access
+# violation behind threads->create on some 5.42.x builds (spawn_blocking), so guard classes are kept as classic
+# blessed packages. Note: the Sync::* namespaces themselves still hit a separate, name-dependent clone crash on
+# affected perls regardless of this - see spawn_blocking's pod warning.
+package Acme::Parataxis::Sync::Mutex::Guard {
 
-    method DESTROY {
-        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        $mutex->unlock;
+    sub new ( $class, %args ) {
+        return bless { mutex => $args{mutex} }, $class;
     }
-};
+
+    sub DESTROY {
+        my $self = shift;
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        $self->{mutex}->unlock;
+    }
+}
 #
 1;

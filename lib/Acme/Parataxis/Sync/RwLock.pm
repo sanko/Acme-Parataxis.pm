@@ -201,14 +201,21 @@ class Acme::Parataxis::Sync::RwLock v0.1.1 : isa(Acme::Parataxis::Sync) {
     }
 };
 
-class Acme::Parataxis::Sync::RwLock::Guard {    # Util
-    field $lock : param;
-    field $mode : param;
+# Util. A classic package, not feature::class: a perlclass 'method DESTROY' is one trigger of the perl_clone access
+# violation behind threads->create on some 5.42.x builds (spawn_blocking), so guard classes are kept as classic
+# blessed packages. Note: the Sync::* namespaces themselves still hit a separate, name-dependent clone crash on
+# affected perls regardless of this - see spawn_blocking's pod warning.
+package Acme::Parataxis::Sync::RwLock::Guard {
 
-    method DESTROY {
-        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        $mode eq 'write' ? $lock->write_unlock : $lock->read_unlock;
+    sub new ( $class, %args ) {
+        return bless { lock => $args{lock}, mode => $args{mode} }, $class;
     }
-};
+
+    sub DESTROY {
+        my $self = shift;
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        $self->{mode} eq 'write' ? $self->{lock}->write_unlock : $self->{lock}->read_unlock;
+    }
+}
 #
 1;

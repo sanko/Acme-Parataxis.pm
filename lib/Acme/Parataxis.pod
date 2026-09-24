@@ -684,10 +684,16 @@ snapshot - plain/structured values cross intact, in-place mutations never leak b
 into C<Acme::Parataxis> scheduler objects or blocking APIs while it runs. At most C<set_max_blocking_threads()>
 interpreters run at once (default 4); a call past the cap parks the calling fiber until a slot frees. Cancelling the
 C<await> does not stop the closure (a real OS thread cannot be yanked); it withdraws the waiter, and the slot releases
-when the closure actually finishes. Beware that some 5.42.x perls (notably Strawberry MSWin32) can crash
-C<threads-E<gt>create> once a C<feature 'class'> file has loaded a C<method DESTROY> on a second class block; if you
-load such a module before your first C<spawn_blocking> on an affected perl, create a test case or call
-C<spawn_blocking> from a short-lived process.
+when the closure actually finishes. Platform warning: threads' interpreter clone (C<perl_clone>) access-violates on
+some 5.42.x builds (notably Strawberry MSWin32) once certain things are loaded, crashing the whole process at the first
+C<threads-E<gt>create>. Two separate triggers are known. (1) A C<feature 'class'> file that declares a C<method
+DESTROY> on a second class block in the same file - the in-tree guard classes (C<Semaphore::Guard>, and originally the
+L<Acme::Parataxis::Sync> mutex/rwlock guards) are therefore classic blessed packages, not perlclasses. (2)
+Independently and content-independently, merely loading particular namespaces has the same crash - observed here for
+the whole C<Acme::Parataxis::Sync> family (C<Sync>, C<Sync<I>::Mutex> etc.), C<Acme::Parataxis::TVar>, and
+C<Acme::Parataxis::Driver>. On an affected perl there is no in-library workaround (the module's contents and even the
+guard classes are irrelevant to trigger (2)); if you load any of those namespaces and then intend to use
+C<spawn_blocking>, test on a short-lived process first, or arrange for the closures to run before such modules load.
 
 =head2 C<set_max_blocking_threads( $count )>
 
