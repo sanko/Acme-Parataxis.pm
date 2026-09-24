@@ -32,12 +32,15 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
         $bucket  = Acme::Parataxis::Semaphore->new( count => $burst );
         $ticker  = Acme::Parataxis::Ticker->new( interval => 1000 / $rate );
         $running = true;
-        my $last  = time;
+
+        # token credit rides mock_time (the wall clock inside a virtual run's constructor/during it, the virtual
+        # clock otherwise is untouched): RateLimiter refills on the *same clock* the Ticker ticks on.
+        my $last  = Acme::Parataxis::mock_time();
         my $first = true;
         Acme::Parataxis::fiber {
             while ($running) {
                 last unless $ticker->wait_next;
-                my $now = time;
+                my $now = Acme::Parataxis::mock_time();
                 my $due = int( ( $now - $last ) * $rate );
                 $last += $due / $rate;    # advance over exactly the window these whole tokens cover
 

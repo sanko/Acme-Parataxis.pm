@@ -36,7 +36,11 @@ class Acme::Parataxis::Ticker v0.1.1 {
         $stop_token = Acme::Parataxis::CancellationToken->new( kind => 'cancel' );
         $running    = true;
         my $interval_s = $interval / 1000;
-        $next_at = time + $interval_s;
+
+        # The boundary math rides Acme::Parataxis::mock_time, so inside run( virtual => 1 ) a Ticker created during
+        # the run ticks on *virtual* boundaries and can be driven with Parataxis->advance; outside one it is the wall
+        # clock, exactly as before.
+        $next_at = Acme::Parataxis::mock_time() + $interval_s;
         Acme::Parataxis::fiber {
 
             # stop() interrupts the sleep below (which also recalls the armed pool job, so a stopped ticker never
@@ -44,7 +48,7 @@ class Acme::Parataxis::Ticker v0.1.1 {
             my $ok = eval {
                 $stop_token->register;
                 while ($running) {
-                    my $remain = $next_at - time;
+                    my $remain = $next_at - Acme::Parataxis::mock_time();
                     await_sleep( $remain * 1000 ) if $remain > 0;
                     last unless $running;
 
@@ -61,7 +65,7 @@ class Acme::Parataxis::Ticker v0.1.1 {
                     # Wound far behind schedule: leapfrog the boundaries already missed rather than burst-firing
                     # them all at once on the next pass. Never fired, so they cannot count as dropped: the invariant
                     # fired == dropped + pending + consumed (Ticker.pod) stays exact on hosts that wake timers late.
-                    while ( $next_at <= time ) { $next_at += $interval_s; $skipped++ }
+                    while ( $next_at <= Acme::Parataxis::mock_time() ) { $next_at += $interval_s; $skipped++ }
                 }
                 1;
             };

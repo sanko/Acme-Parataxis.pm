@@ -364,6 +364,51 @@ fibers or pending background tasks.
         say 'The scheduler is running!';
     });
 
+C<run()> also accepts a named-argument form: C<run( virtual =E<gt> $bool, code =E<gt> $code )>. The only supported
+option is C<virtual>, which switches every timer-based wait inside the run onto a virtual clock driven by the test --
+see L</Deterministic Mock Time>.
+
+=head2 Deterministic Mock Time
+
+All of the library's timed waits -- C<await_sleep>, C<with_timeout>, C<select> deadlines, C<Channel> wait bounds,
+C<Ticker>, C<RateLimiter>, and C<Stream> timeout metadata -- normally run on the wall clock. For reproducible tests you
+can instead run a block under a virtual clock:
+
+    run( virtual => 1, code => sub {
+        my $start = time;
+        await_sleep(3_600_000);       # returns immediately; no real time passes
+        ok( (time - $start) < 1, 'the 1h sleep was virtual' );
+        is Acme::Parataxis->virtual_now, 3_600_000;   # in milliseconds
+    });
+
+While a virtual run is active:
+
+=over 4
+
+=item * C<await_sleep> and every other timeout arms a virtual timer instead of a kernel timeout. Nothing is scheduled
+on the operating system, so a C<3_600_000> ms sleep returns in microseconds.
+
+=item * The clock does not advance on its own. The run loop only fast-forwards to the earliest pending deadline when the
+scheduler is otherwise idle, so real work (and real I/O, which still blocks on the actual filehandles) always runs first.
+
+=item * The test drives time forward explicitly with C<Acme::Parataxis->advance($ms)>, which fires every virtual timer
+with a deadline up to (and including) the new time. Fibers woken by C<advance()> are resumed on the next scheduler pass,
+so a deterministic test that advances and then wants to observe a wake chain should C<yield> (or await the woken fiber)
+after calling C<advance()>.
+
+=item * Timed waits consult the same clock through C<Acme::Parataxis->virtual_now()> (milliseconds) and C<Acme::Parataxis->
+mock_time()> (seconds), so C<Ticker> ticks and C<RateLimiter> credits all land on exact virtual boundaries.
+
+=item * A C<Ticker> or I/O-driven C<RateLimiter> re-arms its timer forever, so a virtual run with a live Ticker never
+becomes idle. Call C<< $ticker->stop >> (or C<< $limiter->stop >>) before the run body ends or the run will fast-forward
+indefinitely.
+
+=back
+
+Virtual state is scoped to the outermost C<run( virtual =E<gt> 1, ... )>: nested runs are ignored, the clock starts at
+zero for each run and is torn down when it finishes, and ordinary C<run()> calls are completely unaffected. Calling
+C<advance()> outside a virtual run croaks.
+
 =head2 C<spawn( $code )>
 
 Creates a new fiber and runs it. Returns an C<Acme::Parataxis> fiber object that can be awaited with C<await()> or C<<

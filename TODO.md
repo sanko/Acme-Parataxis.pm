@@ -14,7 +14,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 16** - actor hot-code swap + named registry
 - [ ] **Card 17** - `with_timeout` re-entrancy polish
 - [x] **Card 18** - `Channel->new( timeout => $ms )`
-- [ ] **Card 19** - deterministic mock time
+- [x] **Card 19** - deterministic mock time
 - [ ] **Card 20** - `spawn_blocking`
 - [x] **Card 21** - trace propagation
 - [ ] **Card 22** - graceful shutdown
@@ -231,7 +231,7 @@ $ch->put($v);# same bound on the send side
 
 ### Card 19 - deterministic mock time *(chapter plan "Mock Time")*
 
-**Source**: chapter plan + #10's timing theme. **Status**: design in progress - the big one.
+**Source**: chapter plan + #10's timing theme. **Status**: shipped before Card 22 (order 19 -> 22 -> 20); t/066_mock_time.t green.
 
 **Goal**: a scheduler mode where `await_sleep`, `Ticker`, `RateLimiter`, deadlines, and `select` timeouts advance against a **virtual clock the test drives**, so a 1-hour timeout is exercised in microseconds.
 
@@ -245,10 +245,11 @@ run( virtual => 1, code => sub {
 **Semantics / decisions**:
 
 - When **every** live fiber is parked on a timer (nothing runnable, no job-queue work), `run` fast-forwards the virtual clock to the earliest pending deadline and dispatches those timers, instead of sleeping on the wall clock. `Parataxis->advance($ms)` nudges the virtual clock from inside a fiber for the "advance and observe" test choreography; `await_sleep`/Ticker/limiter/select all read the virtual clock while the mode is on.
+- *Shipped as* a pure-Perl virtual-clock table in `Acme::Parataxis` (no C queue changes): a `virtual => 1` run owns the mode (nested runs ignore it), `await_sleep` arms a virtual timer and parks without a `TASK_SLEEP` job, `_interrupt`/`_mark_done` recall a fiber's timer, the run-loop idle branch fast-forwards to the earliest deadline when the scheduler has nothing runnable left, and `Ticker`/`RateLimiter`/`Stream` read the virtual clock through `mock_time()`/`_now_ms()`. Exposed as class methods `advance($ms)`, `virtual_now()`, `mock_time()`.
 - This is the scheduler-level card: the timer queue (`TASK_SLEEP` jobs and the deadline mechanism) must learn "virtual" - likely a `run` flag that makes timer jobs pass through a virtual-time table rather than the thread pool, plus a fast-forward detector watching `get_outstanding_jobs() == 0` while fibers sit on timers. Highest C/blib risk of the chapter; plan a pure-Perl *simulation* harness first (a `::MockClock` the timer path consults), then optionally push it into the C queue.
 - Scope guard: virtual time only inside a `virtual => 1` run; real `run`s are untouched. Time source decoupling is the shared seam (`with_timeout` deadlines, `Ticker->next_at`, `RateLimiter` refill tick, `Channel`/`select` bounds, `time` reads in stream `throttle`).
 
-**Acceptance** (new `t/066_mock_time.t`): `await_sleep(3_600_000)` returns without a real second passing; a 1h `with_timeout` fires under `advance`; `Ticker` ticks on the virtual boundary; a `select` timeout fires on advance; a fiber that does *real* work still runs, only the clock is virtual; a normal `run` is untouched.
+**Acceptance** (new `t/066_mock_time.t`): `await_sleep(3_600_000)` returns without a real second passing; a 1h `with_timeout` fires under `advance`; `Ticker` ticks on the virtual boundary; a `select` timeout fires on advance; a fiber that does *real* work still runs, only the clock is virtual; a normal `run` is untouched. *All green (19 assertions, ~1s wall time):* also covers `RateLimiter` refill on `advance(1)`, `Channel` wait bounds, earliest-deadline-wins ordering, no virtual-state leakage between runs, and `advance()` croaking outside a virtual run.
 
 ### Card 20 - execution contexts: `spawn_blocking`
 

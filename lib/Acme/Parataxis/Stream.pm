@@ -60,11 +60,11 @@ class Acme::Parataxis::Stream v0.1.1 {
                 my $next   = 0;
                 while ( defined( my $x = $src->get ) ) {
                     if ($next) {
-                        my $remaining = $next - time() * 1000;
+                        my $remaining = $next - Acme::Parataxis::_now_ms();
                         await_sleep($remaining) if $remaining > 0;
                     }
                     $out->put($x);
-                    $next = time() * 1000 + $gap_ms;
+                    $next = Acme::Parataxis::_now_ms() + $gap_ms;
                 }
             }
             elsif ( $op eq 'batch_count' ) {
@@ -84,18 +84,18 @@ class Acme::Parataxis::Stream v0.1.1 {
                 my $deadline = 0;    # 0 = no batch open yet
                 while (1) {
                     my ( $ch, $val );
-                    if ( $deadline ) {
-                        my $remaining = $deadline - time() * 1000;
+                    if ($deadline) {
+                        my $remaining = $deadline - Acme::Parataxis::_now_ms();
                         if ( $remaining <= 0 ) {
                             $out->put( [@g] );
-                            @g = ();
+                            @g        = ();
                             $deadline = 0;
                             next;
                         }
                         ( $ch, $val ) = $src->select( [ $src, 'get' ], timeout => $remaining );
                         if ( !defined $ch ) {    # our own deadline fired
                             $out->put( [@g] );
-                            @g = ();
+                            @g        = ();
                             $deadline = 0;
                             next;
                         }
@@ -105,7 +105,7 @@ class Acme::Parataxis::Stream v0.1.1 {
                     }
                     last unless defined $val;    # source shutdown delivers undef; flush the partial below
                     push @g, $val;
-                    $deadline = time() * 1000 + $val unless $deadline;
+                    $deadline = Acme::Parataxis::_now_ms() + $val unless $deadline;
                 }
                 $out->put( [@g] ) if @g;
             }

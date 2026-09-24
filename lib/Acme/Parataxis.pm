@@ -38,6 +38,9 @@ package Acme::Parataxis v0.1.1 {
     our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
+    my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms (Card 19)
+    my %VIRTUAL_DEADLINES;      # fid => absolute virtual-ms deadline of that fiber's one armed virtual timer
+    my @VIRTUAL_TIMERS;         # [deadline_ms, fid] ascending; lazy deletion via %VIRTUAL_DEADLINES
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -398,6 +401,7 @@ package Acme::Parataxis v0.1.1 {
         return                        if $fiber->[F_IS_DONE];
         $fiber->[F_INTERRUPT] = $kind if $kind eq 'cancel' || $kind eq 'timeout';
         recall_sleep_jobs_for_fiber($fid);
+        _recall_virtual_timer($fid);    # a virtual timer has no C job; drop it so a recalled fiber is never re-woken
         _scheduler_enqueue_by_id($fid) if $PARKED{$fid};
         return $fiber;
     }
@@ -411,6 +415,54 @@ package Acme::Parataxis v0.1.1 {
         my $hooks = $fiber->[F_WAKE_HOOKS];
         $fiber->[F_WAKE_HOOKS] = undef;
         if ($hooks) { $_->($fiber) for @$hooks }
+    }
+
+    # -- deterministic mock time (Card 19). Inside run( virtual => 1, ... ) every timer-based wait (await_sleep,
+    # -- with_timeout deadlines, Channel bounds, select, Ticker/RateLimiter) and every wall-clock read consulted
+    # -- through the helpers below rides the virtual clock a test drives with advance(); outside such a run they all
+    # -- fall back to the real wall clock, so real runs are untouched. A virtual run never submits a TASK_SLEEP job:
+    # -- the armed virtual timer parks the fiber in-process and the scheduler idle path fast-forwards the clock to the
+    # -- earliest outstanding deadline instead of sleeping, so an hour-long timeout costs microseconds.
+    sub virtual_now {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        return $VIRTUAL_CLOCK;    # undef when not inside a virtual run, else current virtual ms
+    }
+
+    sub mock_time {
+        my $o = _arg_offset( $_[0] );
+        @_ = ();
+        return defined $VIRTUAL_CLOCK ? $VIRTUAL_CLOCK / 1000 : Time::HiRes::time();
+    }
+    sub _now_ms { return defined $VIRTUAL_CLOCK ? $VIRTUAL_CLOCK : Time::HiRes::time() * 1000 }
+
+    # Arm a virtual-timer deadline for $fid, $ms from the current virtual clock. A fiber only ever parks in one
+    # timer-backed wait at a time (a wait never returns until its wake), so one deadline per fiber suffices.
+    sub _arm_virtual_timer ( $fid, $ms ) {
+        return if $fid < 0;
+        my $dl = $VIRTUAL_CLOCK + $ms;
+        $VIRTUAL_DEADLINES{$fid} = $dl;
+        push @VIRTUAL_TIMERS, [ $dl, $fid ];
+        @VIRTUAL_TIMERS = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @VIRTUAL_TIMERS;
+        return $dl;
+    }
+
+    # Drop a fiber's armed virtual timer (interrupt, completion, or fiber teardown). Lazy: the sorted array entry
+    # stays until the next fire, where the deadline-hash mismatch skips it.
+    sub _recall_virtual_timer ($fid) { delete $VIRTUAL_DEADLINES{$fid} }
+
+    # Wake every fiber whose virtual deadline is at or before $now. Returns how many were actually woken (recalled
+    # timers are popped and skipped, never woken).
+    sub _fire_virtual ($now) {
+        my $fired = 0;
+        while ( @VIRTUAL_TIMERS && $VIRTUAL_TIMERS[0][0] <= $now ) {
+            my ( $dl, $fid ) = @{ shift @VIRTUAL_TIMERS };
+            next unless exists $VIRTUAL_DEADLINES{$fid} && $VIRTUAL_DEADLINES{$fid} == $dl;
+            delete $VIRTUAL_DEADLINES{$fid};
+            Acme::Parataxis::_scheduler_enqueue_by_id($fid);
+            $fired++;
+        }
+        return $fired;
     }
 
     # The per-fiber stash behind Acme::Parataxis::Local, created lazily. Keyed by the fiber OBJECT (not its fid):
@@ -929,11 +981,32 @@ package Acme::Parataxis v0.1.1 {
         return $out;
     }
 
+    # Acme::Parataxis->advance($ms): inside a virtual run, jump the virtual clock forward $ms and wake everything that
+    # fires as of the new time. A nudge, not a wait: the calling fiber keeps running (woken fibers run on the next
+    # scheduler pass), so the "advance, then yield/return, then observe" test choreography in the docs is the idiom.
+    # Returns the new virtual time in ms. Croaks outside a virtual run - the wall clock cannot be wound forward.
+    sub advance {
+        my $o  = _arg_offset( $_[0] );
+        my $ms = $_[$o] // 0;
+        @_ = ();
+        croak 'advance() only makes sense inside run( virtual => 1, ... )' unless defined $VIRTUAL_CLOCK;
+        croak 'advance() requires a non-negative number of milliseconds' if $ms < 0;
+        $VIRTUAL_CLOCK += $ms;
+        _fire_virtual($VIRTUAL_CLOCK);
+        return $VIRTUAL_CLOCK;
+    }
+
     sub await_sleep {
         my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
         my $ms = $_[$o] // 0;
         @_ = ();
+        if ( defined $VIRTUAL_CLOCK && $ms > 0 ) {
+            my $fid = Acme::Parataxis->current_fid;
+            croak 'await_sleep() must be called from inside a scheduled fiber' if $fid < 0;
+            _arm_virtual_timer( $fid, $ms );
+            return _park('await_sleep');
+        }
         if ( $DRIVER && $ms > 0 ) {
             return _driver_sleep( $DRIVER, $ms );
         }
@@ -1031,7 +1104,18 @@ package Acme::Parataxis v0.1.1 {
         return $status;
     }
 
-    sub run ($code) {
+    sub run (@raw) {
+        my $o = _arg_offset( $raw[0] );
+        my @a = @raw[ $o .. $#raw ];
+        my ( $code, $virtual );
+        if ( @a == 1 && ref $a[0] eq 'CODE' ) {
+            $code = $a[0];
+        }
+        elsif ( @a >= 4 && $a[0] eq 'virtual' && $a[2] eq 'code' ) {
+            $virtual = $a[1] ? 1 : 0;
+            $code    = $a[3];
+        }
+        croak 'run() needs a CODE ref: run( $code ), or run( virtual => 1, code => $code )' unless ref $code eq 'CODE';
         if ($IS_RUNNING) {
 
             # Nested run/async inside a shared global scheduler. Queue a fresh fiber for the block and park the current
@@ -1043,6 +1127,17 @@ package Acme::Parataxis v0.1.1 {
         @SCHEDULER_QUEUE  = ();
         %SCHEDULER_QUEUED = ();
         $IS_RUNNING       = 1;
+
+        # Card 19: run( virtual => 1 ) turns on the virtual clock for the whole run. Everything the scheduler waits
+        # on (and every mock_time read) then rides $VIRTUAL_CLOCK, and the idle path fast-forwards it instead of
+        # sleeping, so timeouts can be exercised in microseconds. Saved/restored so a non-virtual run after a virtual
+        # one (or vice versa) is exactly wall-clock behavior again.
+        my $saved_clock = $VIRTUAL_CLOCK;
+        if ($virtual) {
+            $VIRTUAL_CLOCK     = 0;
+            %VIRTUAL_DEADLINES = ();
+            @VIRTUAL_TIMERS    = ();
+        }
 
         # Snapshot the fibers that were already alive before this run. A fiber parked by a *previous* deadlocked run
         # can never be woken again, but the C table still counts it as live; the deadlock detector below must only
@@ -1094,6 +1189,16 @@ package Acme::Parataxis v0.1.1 {
                         $DRIVER->drive();
                     }
                     else {
+                        # Card 19 virtual clock: the scheduler has no runnable work and no real jobs (real I/O never
+                        # reaches here), but fibers are parked on virtual timers. Instead of sleeping on the wall clock
+                        # (or declaring a deadlock), wind the virtual clock up to the earliest outstanding deadline and
+                        # fire anything due, then re-loop to run the woken fibers. The clock never moves while any fiber
+                        # is runnable or any real job is in flight, so only real waiting is accelerated.
+                        if ( defined $VIRTUAL_CLOCK && @VIRTUAL_TIMERS ) {
+                            my $earliest = $VIRTUAL_TIMERS[0][0];
+                            $VIRTUAL_CLOCK = $earliest if $VIRTUAL_CLOCK < $earliest;
+                            if ( _fire_virtual($VIRTUAL_CLOCK) ) {next}
+                        }
                         if ( $active_count > scalar( keys %PRESET_FIBERS ) ) {
 
                             # A live fiber is stuck with nothing to do and no one to wake it and no timer to fire: this
@@ -1140,7 +1245,10 @@ package Acme::Parataxis v0.1.1 {
         };
         my $run_failure = $run_ok ? undef : $@;
         $IS_RUNNING = 0;                             # always leave the scheduler reusable, even when a fiber blew up
-        $DRIVER->reset   if $DRIVER;                 # unwind every watch/timer this run left on the attached loop
+        $DRIVER->reset if $DRIVER;                   # unwind every watch/timer this run left on the attached loop
+        %VIRTUAL_DEADLINES = ();
+        @VIRTUAL_TIMERS    = ();                     # a virtual run's timers die with the run
+        $VIRTUAL_CLOCK     = $saved_clock;           # whatever the next run does, the wall clock is the default
         die $run_failure if defined $run_failure;    # rethrow a fiber's uncaught error only after cleaning up
         return $main_fiber->[F_RESULT];
     }
@@ -1209,6 +1317,7 @@ package Acme::Parataxis v0.1.1 {
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             delete $PARKED{ $self->[F_FID] };
             delete $PARK_REGS{ $self->[F_FID] };
+            _recall_virtual_timer( $self->[F_FID] );    # a finished fiber must not leave a virtual timer behind
             delete $FIBER_LOCALS{ refaddr($self) };
             $self->[F_FID] = -1;
         }
