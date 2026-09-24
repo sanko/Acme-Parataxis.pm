@@ -2,6 +2,8 @@ use v5.40;
 use Test2::V1 -ipP;
 use blib;
 use Acme::Parataxis qw[run fiber yield await_sleep];
+use IO::Select;
+use POSIX ();
 $|++;
 
 # Card 22: run( on_shutdown => ... ) makes the outermost run install SIGINT/SIGTERM handlers, fires a shutdown
