@@ -144,7 +144,7 @@ sub spawn_child {
         open STDOUT, '>&', $w or die "dup: $!";
         open STDERR, '>&', $w or die "dup: $!";
         $w->autoflush(1);
-        my $code = join "\n", 'use v5.40; use blib; use Acme::Parataxis; $|++;', $body, '';
+        my $code = join "\n", 'use v5.40; use blib; use Acme::Parataxis qw[run await_sleep]; $|++;', $body, '';
         exec $^X, '-Mblib', '-e', $code or die "exec: $!";
     }
     close $w;
