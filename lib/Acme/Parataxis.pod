@@ -364,9 +364,46 @@ fibers or pending background tasks.
         say 'The scheduler is running!';
     });
 
-C<run()> also accepts a named-argument form: C<run( virtual =E<gt> $bool, code =E<gt> $code )>. The only supported
-option is C<virtual>, which switches every timer-based wait inside the run onto a virtual clock driven by the test --
-see L</Deterministic Mock Time>.
+C<run()> also accepts a named-argument form: C<run( code =E<gt> $code, virtual =E<gt> $bool, on_shutdown =E<gt> $opt
+)>, in any option order. C<virtual> switches every timer-based wait inside the run onto a virtual clock driven by the
+test - see L</Deterministic Mock Time> - and C<on_shutdown> wires SIGINT/SIGTERM to a graceful drain - see L</Graceful
+Shutdown>.
+
+=head2 Graceful Shutdown
+
+Passing C<on_shutdown> to the outermost C<run()> installs C<SIGINT> and C<SIGTERM> handlers for the run's lifetime (the
+previous handlers are restored when it ends). The first signal fires the run's shutdown token and interrupts every
+fiber the run created - the run's root fiber included - so they throw C<Error::Cancelled>, unwind, and run their own
+cleanup (defers, C<DESTROY> blocks, finally-style eval guards). Once everything has drained, C<run()> returns the
+conventional interrupted status instead of rethrowing those cancellations: C<130> for SIGINT, C<143> for SIGTERM. A
+second signal restores the previous handlers and re-raises the signal, so the default disposition kills the process -
+the handler never blocks a second Ctrl+C.
+
+    my $status = Acme::Parataxis->run(
+        on_shutdown => 1,                 # handle one Ctrl+C / SIGTERM gracefully
+        code        => sub {
+            my $server = Acme::Parataxis->spawn( \&serve );
+            await( $server );
+        },
+    );
+    exit($status);
+
+The option accepts one of three values:
+
+=over 4
+
+=item * a true value (C<1>) - install the handlers, use the signal-derived status;
+
+=item * a code ref - additionally called on shutdown with the (already fired) token, so a process can flush logs or
+stop servers before C<run()> reports the status;
+
+=item * an C<Acme::Parataxis::CancellationToken> - use that token (and install the handlers anyway), so the shutdown
+can begin programmatically - a health port, a parent process, a test cancelling the token - as well as from a signal.
+
+=back
+
+A C<run()> without C<on_shutdown> leaves C<%SIG> completely untouched, and a nested run (inside an already scheduled
+fiber) ignores the option - the global handler table belongs to the top-level process lifecycle.
 
 =head2 Deterministic Mock Time
 

@@ -1107,19 +1107,30 @@ package Acme::Parataxis v0.1.1 {
     sub run (@raw) {
         my $o = _arg_offset( $raw[0] );
         my @a = @raw[ $o .. $#raw ];
-        my ( $code, $virtual );
+        my ( $code, $virtual, $on_shutdown );
         if ( @a == 1 && ref $a[0] eq 'CODE' ) {
             $code = $a[0];
         }
-        elsif ( @a >= 4 && $a[0] eq 'virtual' && $a[2] eq 'code' ) {
-            $virtual = $a[1] ? 1 : 0;
-            $code    = $a[3];
+        elsif ( @a >= 2 && @a % 2 == 0 ) {
+            my %opt = @a;
+            my @bad = grep { $_ ne 'code' && $_ ne 'virtual' && $_ ne 'on_shutdown' } keys %opt;
+            croak 'run() unknown option(s): ' . join( ', ', @bad ) if @bad;
+            croak 'run() needs the code option' unless ref $opt{code} eq 'CODE';
+            $code        = $opt{code};
+            $virtual     = $opt{virtual} ? 1 : 0;
+            $on_shutdown = $opt{on_shutdown};
+            if ( defined $on_shutdown && ref $on_shutdown ) {
+                require Acme::Parataxis::CancellationToken;
+                my $is_tok = ref $on_shutdown eq 'CODE' ? 0 : eval { $on_shutdown->isa('Acme::Parataxis::CancellationToken') }       || 0;
+                croak 'run() on_shutdown must be a true value, a code ref, or a CancellationToken' unless ref $on_shutdown eq 'CODE' || $is_tok;
+            }
         }
-        croak 'run() needs a CODE ref: run( $code ), or run( virtual => 1, code => $code )' unless ref $code eq 'CODE';
+        croak 'run() needs a CODE ref: run( $code ), or run( code => $code, ... )' unless ref $code eq 'CODE';
         if ($IS_RUNNING) {
 
             # Nested run/async inside a shared global scheduler. Queue a fresh fiber for the block and park the current
-            # fiber until it completes.
+            # fiber until it completes. The on_shutdown option is only for the outermost run: an inner run must not
+            # touch %SIG (the global handler table belongs to the top-level process lifecycle).
             my $fiber = __PACKAGE__->new( code => $code );
             _enqueue($fiber);
             return $fiber->await;
@@ -1145,9 +1156,60 @@ package Acme::Parataxis v0.1.1 {
         # another deadlock. (Leaked fibers keep their C slot occupied, so their fids cannot be reused in between.)
         my %PRESET_FIBERS = map { $_ => 1 } _live_fiber_ids();
         my $main_fiber    = __PACKAGE__->new( code => $code );
+
+        # Card 22: on_shutdown => opts the OUTERMOST run into installing SIGINT/SIGTERM handlers for the run's lifetime
+        # (the previous handlers are restored when it ends). The first signal - or, when the option is a pre-made
+        # CancellationToken, its cancel() from anywhere - fires the shutdown token and interrupts every fiber this run
+        # created (the run's root fiber included), so they unwind, run their own cleanup (defers/DESTROYs), and the
+        # loop drains them; run() then returns the conventional interrupted status (130 for INT, 143 for TERM) instead
+        # of rethrowing their Error::Cancelled. A second signal restores the previous handlers and re-raises the signal
+        # so the default disposition kills the process - the handler never blocks a second Ctrl+C. A code ref passed as
+        # the option receives the token (already fired) so a process can flush logs or stop servers before run() reports
+        # the status; passing a CancellationToken means the caller owns the token and can begin the shutdown
+        # programmatically (a health port, a parent process, a test) as well as from a signal.
+        my ( $shutdown_token, $shutdown_status, $shutdown_fired, $shutdown_cb );
+        my ( $old_int, $old_term );
+        my $interrupt_run_fibers = sub {
+            for my $fid ( _live_fiber_ids() ) {
+                next if $PRESET_FIBERS{$fid};
+                my $fiber = __PACKAGE__->by_id($fid);
+                _interrupt( $fid, 'cancel' ) if $fiber && !$fiber->is_done;
+            }
+        };
+        if ($on_shutdown) {
+            require Acme::Parataxis::CancellationToken;
+            my $is_shutdown_token = ref $on_shutdown eq 'CODE' ? 0 : eval { $on_shutdown->isa('Acme::Parataxis::CancellationToken') } || 0;
+            $shutdown_token  = $is_shutdown_token         ? $on_shutdown : Acme::Parataxis::CancellationToken->new;
+            $shutdown_cb     = ref $on_shutdown eq 'CODE' ? $on_shutdown : undef;
+            $shutdown_status = 130;
+            $old_int         = $SIG{INT};
+            $old_term        = $SIG{TERM};
+            my $fire = sub ($sig) {
+                if ($shutdown_fired) {    # second signal: stop catching it; the restored default kills the process
+                    $SIG{INT}  = $old_int;
+                    $SIG{TERM} = $old_term;
+                    kill $sig => $$;
+                    return;
+                }
+                $shutdown_fired  = 1;
+                $shutdown_status = $sig eq 'TERM' ? 143 : 130;
+                $shutdown_token->cancel;
+                $interrupt_run_fibers->();
+            };
+            $SIG{INT}  = sub { $fire->('INT') };
+            $SIG{TERM} = sub { $fire->('TERM') };
+        }
         _enqueue($main_fiber);
         my $run_ok = eval {
             while ($IS_RUNNING) {
+
+                # Card 22: a shutdown token cancelled from inside the run (not just by a signal handler) begins the
+                # graceful drain too. The token's own cancel() already interrupted whatever was registered against it;
+                # this pass interrupts the rest of the run's fibers so every fiber winds down together.
+                if ( $on_shutdown && !$shutdown_fired && $shutdown_token->cancelled ) {
+                    $shutdown_fired = 1;
+                    $interrupt_run_fibers->();
+                }
                 my @ready;
                 if ( get_outstanding_jobs() ) {
                     my $out = [];
@@ -1244,11 +1306,27 @@ package Acme::Parataxis v0.1.1 {
             1;
         };
         my $run_failure = $run_ok ? undef : $@;
-        $IS_RUNNING = 0;                             # always leave the scheduler reusable, even when a fiber blew up
-        $DRIVER->reset if $DRIVER;                   # unwind every watch/timer this run left on the attached loop
+        $IS_RUNNING = 0;              # always leave the scheduler reusable, even when a fiber blew up
+        $DRIVER->reset if $DRIVER;    # unwind every watch/timer this run left on the attached loop
+        if ($on_shutdown) {           # the handler table is global: restore it no matter how the run ended
+            $SIG{INT}  = $old_int;
+            $SIG{TERM} = $old_term;
+        }
         %VIRTUAL_DEADLINES = ();
-        @VIRTUAL_TIMERS    = ();                     # a virtual run's timers die with the run
-        $VIRTUAL_CLOCK     = $saved_clock;           # whatever the next run does, the wall clock is the default
+        @VIRTUAL_TIMERS    = ();              # a virtual run's timers die with the run
+        $VIRTUAL_CLOCK     = $saved_clock;    # whatever the next run does, the wall clock is the default
+        if ( $on_shutdown && $shutdown_fired ) {
+            $shutdown_cb->($shutdown_token) if $shutdown_cb;
+
+            # The shutdown interrupt makes the run's fibers die with Error::Cancelled, which is the expected, drained
+            # outcome of a signal, not a failure: run() reports the conventional interrupted status instead of
+            # rethrowing it. Any other error still propagates.
+            if ( defined $run_failure && ref $run_failure && $run_failure->isa('Acme::Parataxis::Error::Cancelled') ) {
+                $run_failure = undef;
+            }
+            die $run_failure if defined $run_failure;
+            return $shutdown_status;
+        }
         die $run_failure if defined $run_failure;    # rethrow a fiber's uncaught error only after cleaning up
         return $main_fiber->[F_RESULT];
     }

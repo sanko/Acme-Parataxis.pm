@@ -17,7 +17,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 19** - deterministic mock time
 - [ ] **Card 20** - `spawn_blocking`
 - [x] **Card 21** - trace propagation
-- [ ] **Card 22** - graceful shutdown
+- [x] **Card 22** - graceful shutdown
 
 ## Chapter 2: ergonomics, observability, and scaling out
 
@@ -291,7 +291,7 @@ async { my $id = $trace_id->get; ... };    # child sees the parent's value at sp
 
 ### Card 22 - graceful shutdown & application lifecycle
 
-**Source**: chapter plan + #9's lifecycle hint + Backlog. **Status**: API drafted; needs `run()`'s signal seam.
+**Source**: chapter plan + #9's lifecycle hint + Backlog. **Status**: shipped after Card 19 (order 19 -> 22 -> 20); t/069_shutdown.t green.
 
 ```perl
 Acme::Parataxis->run( on_shutdown => sub ($tok) { ... } );   # top-level run wires SIGINT/SIGTERM
@@ -305,8 +305,9 @@ Acme::Parataxis->run( on_shutdown => sub ($tok) { ... } );   # top-level run wir
 - The token cancels the **top-level nursery** (the run's root fiber is wrapped in one), so child fibers throw `Error::Cancelled`, unwind, run their `defer`s (Card 14) and `DESTROY`s, and `run` returns after a clean drain with a conventional interrupted status (130/143). `Supervisor` trees and atomic blocks drain like any other child.
 - The seam is `run()`'s `%SIG` handling + the nursery wrapper. Only touches `Acme::Parataxis.pm` and (since defers ride there too) the fiber-finish path - no C, but it must be tested with real `kill`-style signals on a subprocess, plus a `kill 0`/exit-status claim.
 - Non-interactive guard: only the *top-level* run installs handlers, and only when the caller opts in (a `run( on_shutdown => ... )` option, or a default on the outermost `run` - decide by how the test suite runs). `await`-based normalization on CI must not hang.
+- *Shipped as*: there is no nursery in the root path (a run's root fiber is not wrapped, so the "interrupt every run fiber" step stands in for the nursery cancel); rather than a top-level nursery the shutdown handler - or, when the option is a caller-owned `CancellationToken`, that token's `cancel()` from anywhere - interrupts every fiber this run created (root included; `_interrupt`'s cancel path), so each throws `Error::Cancelled` at its park, unwinds its own cleanup, and the loop drains them; `run()` then suppresses the resulting `Error::Cancelled` and returns the intercept status. The option accepts `1`, a code ref (called with the fired token before the status is reported), or a token. Only the outermost run installs/restores handlers, and `%SIG` is untouched without the option.
 
-**Acceptance** (new `t/069_shutdown.t`, a subprocess harness): SIGINT during a long `await_sleep` returns 130 and prints a drained log; `defer`s ran; `DESTROY` blocks ran; a second signal kills hard; a plain `run` without the option leaves `%SIG` untouched.
+**Acceptance** (new `t/069_shutdown.t`, a subprocess harness): SIGINT during a long `await_sleep` returns 130 and prints a drained log; `defer`s ran; `DESTROY` blocks ran; a second signal kills hard; a plain `run` without the option leaves `%SIG` untouched. *All green:* the plumbing, the token-driven drain (runs on every platform), and the subprocess signal harness (skipped on MSWin32, same as t/003) asserting the SIGINT/SIGTERM statuses and the second-signal hard kill.
 
 ---
 
