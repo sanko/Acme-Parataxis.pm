@@ -35,6 +35,7 @@ package Acme::Parataxis v0.1.1 {
     my %PARKED;                 # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
     my %PARK_REGS;              # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;          # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
+    our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
 
@@ -747,6 +748,37 @@ package Acme::Parataxis v0.1.1 {
             $code = $_[1];
         }
         @_ = ();
+
+        # Trace propagation (Card 21): Local slots created with inherit => 1 have their current value copied
+        # from the spawning fiber (the one resolving the spawn args - our caller, even after a nursery or actor
+        # birth park) into the child before the child's body first reads it. The seed is captured here, before
+        # spawn_fiber eagerly runs the body, and applied by a wrapper that runs in the child's own context, so
+        # the child's stash is seeded before any get in the body. The parent's stash is untouched: the child
+        # owns a shallow copy of each seeded value, so later set()s never cross either direction, exactly
+        # today's per-fiber isolation, only seeded. With no inherit slots (or no values set) nothing is captured
+        # and no wrapper is built, so the common spawn path is unchanged.
+        my @seed;
+        if (@INHERIT_LOCAL_IDS) {
+            my $fid    = current_fid();
+            my $parent = $fid >= 0 ? Acme::Parataxis->by_id($fid) : undef;
+            if ($parent) {
+                my $stash = _fiber_locals($parent);
+                for my $id (@INHERIT_LOCAL_IDS) {
+                    push @seed, [ $id, $stash->{$id} ] if exists $stash->{$id};
+                }
+            }
+        }
+        if (@seed) {
+            my $orig = $code;
+            $code = sub {
+                my $child = Acme::Parataxis->by_id( current_fid() );
+                if ($child) {
+                    my $stash = _fiber_locals($child);
+                    $stash->{ $_->[0] } = $_->[1] for @seed;
+                }
+                return $orig->(@_);
+            };
+        }
         my $fiber = Acme::Parataxis::spawn_fiber( $code, $class );
         if ( !ref $fiber ) {
             croak defined $fiber &&

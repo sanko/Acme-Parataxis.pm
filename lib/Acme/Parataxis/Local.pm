@@ -13,9 +13,16 @@ my $NEXT_ID = 0;
 class Acme::Parataxis::Local v0.1.1 {
     use Acme::Parataxis;
     use Carp qw[croak];
-    field $id;    # process-wide unique slot key
+    field $id;                        # process-wide unique slot key
     field $default : param = undef;
-    ADJUST { $id = ++$NEXT_ID }
+    field $inherit : param = 0;       # opt-in: spawn copies this slot's value from parent fiber to child (trace propagation)
+    ADJUST {
+        $id = ++$NEXT_ID;
+
+        # register with spawn's trace-propagation hook: a fiber that spawns a child with a value in this slot
+        # seeds it into the child's stash before the child body runs (see Acme::Parataxis::spawn)
+        push @Acme::Parataxis::INHERIT_LOCAL_IDS, $id if $inherit;
+    }
 
     method get () {
         my $fid = Acme::Parataxis->current_fid;
@@ -30,6 +37,11 @@ class Acme::Parataxis::Local v0.1.1 {
         croak 'Local->set must be called from inside a scheduled fiber' if $fid < 0;
         Acme::Parataxis::_fiber_locals( Acme::Parataxis->by_id($fid) )->{$id} = $value;
         return $value;
+    }
+
+    method DESTROY {
+        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        @Acme::Parataxis::INHERIT_LOCAL_IDS = grep { $_ != $id } @Acme::Parataxis::INHERIT_LOCAL_IDS;
     }
     }
     #

@@ -16,7 +16,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 18** - `Channel->new( timeout => $ms )`
 - [ ] **Card 19** - deterministic mock time
 - [ ] **Card 20** - `spawn_blocking`
-- [ ] **Card 21** - trace propagation
+- [x] **Card 21** - trace propagation
 - [ ] **Card 22** - graceful shutdown
 
 ## Chapter 2: ergonomics, observability, and scaling out
@@ -271,7 +271,7 @@ my $parsed = $f->await;    # main fibers kept running while $blob was parsed
 
 ### Card 21 - trace propagation (`Local` inheritance on spawn)
 
-**Source**: chapter plan, building on #9's OTel thread and the shipped `Acme::Parataxis::Local`. **Status**: API drafted.
+**Source**: chapter plan, building on #9's OTel thread and the shipped `Acme::Parataxis::Local`. **Status**: done - `inherit => 1` slots seed with the flag winning (no per-spawn list), spawning fibers capture the parent stall at the spawn call, and the t/068 acceptance tests above all pass.
 
 ```perl
 my $trace_id = Acme::Parataxis::Local->new( inherit => 1 );   # opt-in slot

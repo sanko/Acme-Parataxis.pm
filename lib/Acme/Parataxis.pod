@@ -417,6 +417,10 @@ not the dynamic scope.
         say $span->get;             # 'request-121'
     };
 
+A slot created with C<inherit =E<gt> 1> opts into trace propagation instead: the value it holds is copied from the
+spawning fiber into every child at spawn time (C<fiber>, C<async>, nursery children, actor mailbox fibers), as a
+shallow copy the child then owns - the natural home for a trace or span id that must ride along into nested work.
+
 Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
 the fiber. If the fiber is never actually parked, the hook is silently dropped.
 

@@ -13,10 +13,13 @@ Acme::Parataxis::Local - A per-fiber storage slot
     use Acme::Parataxis::Local;
 
     my $request_id = Acme::Parataxis::Local->new;
+    my $trace_id   = Acme::Parataxis::Local->new( inherit => 1 );   # flows into spawned children
 
     async {
         $request_id->set(42);
-        fiber { $request_id->set(99); say $request_id->get };   # 99
+        $trace_id->set('span-1');
+        fiber { $request_id->set(99); say $request_id->get };   # 99  (request_id is walled off)
+        fiber { say $trace_id->get };                           # span-1  (trace_id was inherited)
         say $request_id->get;                                   # 42
     };
 
@@ -30,13 +33,23 @@ It is designed for ambient, fiber-scoped state that must not leak sideways - tra
 handle chosen per fiber - with no changes to the scheduler or C code. Each C<Local> object is one logical variable;
 create as many as you need.
 
+=head1 INHERITANCE (TRACE PROPAGATION)
+
+A slot created with C<inherit =E<gt> 1> opts into upward propagation: the value it holds is copied from the spawning
+fiber into each child the moment the child is spawned (via C<fiber>, C<async>, a C<nursery> child, or an actor's
+mailbox fiber). A fiber spawns a child with the value it holds at that instant - a shallow copy the child then owns
+exclusively, so later C<set>s on either side never cross. Write C<inherit =E<gt> 1> on a trace-id or span-context slot
+and it rides along without threading it through every constructor. Plain slots (the default) keep strict per-fiber
+isolation.
+
 =head1 METHODS
 
-=head2 C<new( [ default =E<gt> $default ] )>
+=head2 C<new( [ default =E<gt> $default, inherit =E<gt> 0|1 ] )>
 
 Creates a slot. A single C<Local> object can be referenced from any number of fibers; each fiber holds its own copy.
 The optional C<default> is what C<get> returns until that fiber writes (explicitly, setting C<undef> counts as
-writing).
+writing). The optional C<inherit> flag (default false) seeds spawned children with this slot's current value, as
+described above.
 
 =head2 C<get()>
 
