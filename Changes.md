@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New exceptions: `Acme::Parataxis::Error`, `Acme::Parataxis::Error::Cancelled`, and `Acme::Parataxis::Error::Timeout`
 - `Acme::Parataxis::CancellationToken` lets any fiber register for cooperative cancellation. `cancel` interrupts every parked, registered fiber by throwing `Acme::Parataxis::Error::Cancelled` at the park site.
 - `Acme::Parataxis::Local` provides a per-fiber storage slot for ambient state that must not leak across fibers (tracing ids, span context, per-fiber handles).
-- `Acme::Parataxis::Generator` is a stackful, lazily-pulled iterator. Here's the synopsis demonstrating a fibonocci sequence:
+- `Acme::Parataxis::Generator` is a stackful, lazily-pulled iterator. Here's the synopsis demonstrating a fibonacci sequence:
 ```perl
 my $fib = Acme::Parataxis::Generator->new( sub ($y) {
     my ( $a, $b ) = ( 0, 1 );
