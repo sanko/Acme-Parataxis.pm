@@ -152,14 +152,18 @@ sub spawn_child {
 }
 
 sub reap {
-    my ( $pid, $buf, $limit ) = @_;
+    my ( $pid, $r, $buf, $limit ) = @_;
+    my $status;
     while ( time < $limit ) {
         my $kid = waitpid( $pid, &POSIX::WNOHANG );
-        last if $kid == $pid;
-        pump( $_[1], $buf );
+        if ( $kid == $pid ) {
+            $status = $?;
+            last;
+        }
+        pump( $r, $buf );
     }
-    waitpid( $pid, 0 ) if waitpid( $pid, &POSIX::WNOHANG ) != $pid;
-    return $$buf;
+    waitpid( $pid, 0 ) unless defined $status;    # the loop gave up; block to clean up
+    return ( $$buf, $status );
 }
 subtest 'shutdown by real signals (subprocess harness)' => sub {
     plan skip_all => 'real OS signal delivery is unreliable on this platform (t/003 skips signals on MSWin32)' unless can_signal();
@@ -188,8 +192,8 @@ CHILD
         ok wait_for( $r, \$buf, qr/DRAINED:130/, $lim ), 'SIGINT drained the run and run() returned 130';
         like $buf,   qr/READY.*DEFER_RAN.*DESTROY_RAN.*DRAINED:130/s, 'the drain log shows the defer and the DESTROY running before the status';
         unlike $buf, qr/UNREACHABLE/,                                 'the sleep did not complete';
-        my $out = reap( $pid, \$buf, $lim );
-        is( $? >> 8,         0, 'the child exited cleanly (0) after reporting the drained shutdown' );
+        my ( $out, $status ) = reap( $pid, $r, \$buf, $lim );
+        is( $status,          0, 'the child exited cleanly (0) after reporting the drained shutdown' );
         is( $out =~ tr/\n//, 4, 'the drain log is exactly the four expected lines' );
     }
 
@@ -209,8 +213,8 @@ CHILD
         ok wait_for( $r, \$buf, qr/READY/, $lim ), 'child reported READY';
         kill 'TERM' => $pid;
         ok wait_for( $r, \$buf, qr/DRAINED:143/, $lim ), 'SIGTERM drained the run and run() returned 143';
-        my $out = reap( $pid, \$buf, $lim );
-        is( $? >> 8, 0, 'the child exited cleanly (0) after the TERM shutdown' );
+        my ( $out, $status ) = reap( $pid, $r, \$buf, $lim );
+        is( $status, 0, 'the child exited cleanly (0) after the TERM shutdown' );
     }
 
     # Child 3: a second SIGINT while the drain is still open (the fiber's cleanup sleeps) must deliver the default
@@ -230,7 +234,7 @@ CHILD
         kill 'INT' => $pid;
         ok wait_for( $r, \$buf, qr/DEFER_RAN/, $lim ), 'first SIGINT was caught and the drain began';
         kill 'INT' => $pid;
-        my $out = reap( $pid, \$buf, $lim );
+        my $out = reap( $pid, $r, \$buf, $lim );
         unlike $out, qr/DRAINED/, 'the second SIGINT killed the process before the drain finished (no DRAINED)';
         unlike $out, qr/CLEANED/, 'the second SIGINT killed the process mid-cleanup';
     }
