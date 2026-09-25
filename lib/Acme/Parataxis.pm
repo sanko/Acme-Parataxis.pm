@@ -79,7 +79,8 @@ package Acme::Parataxis v0.1.1 {
     # parked forever and would otherwise poison every later run).
     sub _live_fiber_ids () {
         my @ids;
-        for ( my $fid = 0; $fid < 1024; $fid++ ) {
+        my $cap = Acme::Parataxis::get_fiber_capacity();
+        for ( my $fid = 0; $fid < $cap; $fid++ ) {
             my $obj = Acme::Parataxis::get_fiber_by_id($fid);
             push @ids, $fid if defined $obj && ( ref $obj || '' ) ne '';
         }
@@ -150,6 +151,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'is_finished',                       [Int],                          Int;
         affix $l, 'get_fiber_by_id',                   [Int],                          Pointer [SV];
         affix $l, 'get_live_fiber_count',              [],                             Int;
+affix $l, 'get_fiber_capacity',                [],                             Int;
         affix $l, 'destroy_coro',                      [Int],                          Void;
         affix $l, 'force_depth_zero',                  [ Pointer [SV] ],               Void;
         affix $l, 'cleanup',                           [],                             Void;

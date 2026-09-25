@@ -86,7 +86,7 @@ while ( defined( my $n = $fib->next ) ) { $total += $n }   # 0 1 1 2 3 5 ...
 
 ### Changed
 
-- The fiber ceiling is no longer a hard 1024: `max_fibers()` now reports 65536 by default, so a program that assumed spawning past 1024 would croak will instead keep going until it hits the new limit. Code that depends on the old number can pin it back with `set_max_fibers(1024)`.
+- The default fiber limit is now 65536 rather than 1024, so a program that assumed spawning past 1024 would croak keeps going until it hits the new limit. The old behaviour is still available by pinning `set_max_fibers(1024)`.
 
 ## [v0.1.0] - 2026-09-21
 

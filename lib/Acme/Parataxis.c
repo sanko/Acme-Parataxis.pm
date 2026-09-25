@@ -2787,6 +2787,15 @@ DLLEXPORT int get_live_fiber_count(void) {
     return count;
 }
 
+/** @brief Returns the number of allocated slots in the fiber table, i.e. the exclusive upper bound on a fiber id.
+ *
+ * The table starts at DEFAULT_FIBER_TABLE and doubles when it fills, so this is the value a caller must scan to
+ * enumerate every id. Anything that walks ids (the Perl-side _live_fiber_ids, and so dump_fibers, the deadlock
+ * report, and run()'s pre-run snapshot) has to read it rather than assume the old compile-time 1024. */
+DLLEXPORT int get_fiber_capacity(void) {
+    return fiber_capacity;
+}
+
 /** @brief Internal helper to reset subroutine depth for cleanup. */
 static void recursive_depth_reset(pTHX_ CV * cv) {
     if (!cv || SvTYPE((SV *)cv) != SVt_PVCV)
