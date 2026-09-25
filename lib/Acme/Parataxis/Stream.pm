@@ -83,7 +83,7 @@ class Acme::Parataxis::Stream v0.1.1 {
                 my @g;
                 my $deadline = 0;    # 0 = no batch open yet
                 while (1) {
-                    my ( $ch, $val );
+                    my ( $ch, $item );
                     if ($deadline) {
                         my $remaining = $deadline - Acme::Parataxis::_now_ms();
                         if ( $remaining <= 0 ) {
@@ -92,7 +92,7 @@ class Acme::Parataxis::Stream v0.1.1 {
                             $deadline = 0;
                             next;
                         }
-                        ( $ch, $val ) = $src->select( [ $src, 'get' ], timeout => $remaining );
+                        ( $ch, $item ) = $src->select( [ $src, 'get' ], timeout => $remaining );
                         if ( !defined $ch ) {    # our own deadline fired
                             $out->put( [@g] );
                             @g        = ();
@@ -101,10 +101,10 @@ class Acme::Parataxis::Stream v0.1.1 {
                         }
                     }
                     else {
-                        ( $ch, $val ) = ( $src, $src->get );
+                        ( $ch, $item ) = ( $src, $src->get );
                     }
-                    last unless defined $val;    # source shutdown delivers undef; flush the partial below
-                    push @g, $val;
+                    last unless defined $item;    # source shutdown delivers undef; flush the partial below
+                    push @g, $item;
                     $deadline = Acme::Parataxis::_now_ms() + $val unless $deadline;
                 }
                 $out->put( [@g] ) if @g;
