@@ -5,14 +5,12 @@ use Time::HiRes      qw[time];
 use File::Temp       ();
 use IO::Socket::INET ();
 use Acme::Parataxis  qw[async fiber await_sleep with_timeout];
-#
-# Transparent unblocking is opt-in, per-process, compile-time. The overrides
-# affect only code compiled AFTER enable_transparent_unblocking ran, so they are
-# installed here in BEGIN, before the test bodies below are compiled. Everything at
-# the top level (current_fid < 0) must delegate to the raw CORE:: builtins, and every
-# call from inside a scheduled fiber frames on the scheduler's await_sleep/await_read
-# so no OS thread is parked. Nothing is monkey-patched on other threads: a fresh
-# interpreter starts with unmodified builtins.
+
+# Transparent unblocking is opt-in, per-process, compile-time. The overrides affect only code compiled AFTER
+# enable_transparent_unblocking ran, so they are installed here in BEGIN, before the test bodies below are compiled.
+# Everything at the top level (current_fid < 0) must delegate to the raw CORE:: builtins, and every call from inside a
+# scheduled fiber frames on the scheduler's await_sleep/await_read so no OS thread is parked. Nothing is monkey-patched
+# on other threads: a fresh interpreter starts with unmodified builtins.
 BEGIN { Acme::Parataxis->enable_transparent_unblocking }
 $|++;
 #
@@ -33,8 +31,8 @@ subtest 'top-level sleep keeps raw CORE::sleep semantics' => sub {
     my $t0 = time;
     my $rc = sleep 0.05;
     my $ms = ( time - $t0 ) * 1000;
-    ok( $rc == int $rc, 'fractional seconds truncate to whole seconds, exactly like CORE::sleep' );
-    ok( $ms < 5000,     "it returned promptly ($ms ms), never parking an OS thread" );
+    ok $rc == int $rc, 'fractional seconds truncate to whole seconds, exactly like CORE::sleep';
+    ok $ms < 5000,     "it returned promptly ($ms ms), never parking an OS thread";
 };
 subtest 'sleep inside a fiber is cooperative and yields' => sub {
     my ( @slow, $prog );
@@ -45,9 +43,9 @@ subtest 'sleep inside a fiber is cooperative and yields' => sub {
         $slow->await;
         $ticks->await;
     };
-    ok( $slow[0][0] > 0.04 && $slow[0][0] < 0.5, 'the sleep returned the requested seconds, not a truncated zero' );
-    ok( $slow[0][1] >= 0.045,                    'the fiber actually waited ~50ms' );
-    ok $prog > 0, 'a sibling fiber made progress while the sleeper was parked';
+    ok $slow[0][0] > 0.04 && $slow[0][0] < 0.5, 'the sleep returned the requested seconds, not a truncated zero';
+    ok $slow[0][1] >= 0.045,                    'the fiber actually waited ~50ms';
+    ok $prog > 0,                               'a sibling fiber made progress while the sleeper was parked';
 };
 subtest 'the $_ default and fractional precision reach the scheduler' => sub {
     my ( $rc, $el );
@@ -57,8 +55,8 @@ subtest 'the $_ default and fractional precision reach the scheduler' => sub {
         $rc = sleep;        # implicit $_
         $el = time - $t0;
     };
-    ok( $rc > 0.03 && $rc < 0.5, 'sleep() with no argument used $_ (returned the requested duration)' );
-    ok( $el >= 0.03,             "it actually waited ($el s)" );
+    ok $rc > 0.03 && $rc < 0.5, 'sleep() with no argument used $_ (returned the requested duration)';
+    ok $el >= 0.03,             "it actually waited ($el s)";
 };
 subtest 'top-level read/sysread still fill the caller buffer' => sub {
     for my $builtin (qw[read sysread]) {
@@ -89,11 +87,11 @@ subtest 'read/sysread inside a fiber frame until the peer writes' => sub {
         my $ms = ( time - $t0 ) * 1000;
         is $rc,  7,         "$builtin framed the payload written after the read parked";
         is $buf, 'framed!', "$builtin wrote the result back into the caller buffer";
-        ok( $ms < 4000, "the $builtin returned promptly ($ms ms) once the peer wrote" );
+        ok $ms < 4000, "the $builtin returned promptly ($ms ms) once the peer wrote";
     }
 };
 subtest 'a regular file read inside a fiber falls back to the raw builtin' => sub {
-    my $dir  = File::Temp->newdir();
+    my $dir  = File::Temp->newdir( CLEANUP => 0 );
     my $path = File::Spec->catfile( $dir->dirname, 'x.txt' );
     open my $wr, '>', $path or die "write $path: $!";
     print $wr 'file read works';    # length 15
@@ -119,10 +117,11 @@ subtest 'disable restores the raw globals for freshly compiled code' => sub {
     is Acme::Parataxis->disable_transparent_unblocking(), 1, 'disabling reports success';
     is Acme::Parataxis->transparent_unblocking(),         0, 'no longer installed';
     my $first = eval 'package X1; use Time::HiRes qw[time]; my $t0 = time; my $rc = sleep(0.05); [ $rc, (time - $t0) * 1000 ]';
-    ok( ref $first eq 'ARRAY',             'freshly compiled sleep(0.05) ran' );
-    ok( $first->[0] == int( $first->[0] ), '...and returned the truncated-to-integer CORE::sleep result, not the requested duration' );
-    ok( $first->[1] < 5000,                "...returned via the raw builtin ($first->[1] ms), not the scheduler" );
+    is ref $first,  'ARRAY',            'freshly compiled sleep(0.05) ran';
+    is $first->[0], int( $first->[0] ), '...and returned the truncated-to-integer CORE::sleep result, not the requested duration';
+    ok $first->[1] < 5000, sprintf '...returned via the raw builtin (%f ms), not the scheduler', $first->[1];
     is Acme::Parataxis->enable_transparent_unblocking(), 1, 're-enabling works';
     is Acme::Parataxis->transparent_unblocking(),        1, 'and is reported installed again';
 };
+#
 done_testing();
