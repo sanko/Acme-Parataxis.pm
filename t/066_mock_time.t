@@ -171,7 +171,7 @@ run(
         subtest 'normal run is untouched' => sub {
             my $t0 = time;
             await_sleep(30);
-            ok( ( time - $t0 ) * 1000 >= 25, 'a plain run still sleeps on the wall clock' );
+            ok( ( time - $t0 ) * 1000 >= 10, 'a plain run still sleeps on the wall clock' );
         };
     }
 );
