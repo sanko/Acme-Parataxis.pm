@@ -369,7 +369,10 @@ package Acme::Parataxis v0.1.1 {
         # effective bound and the outermost is the backstop. Three consequences, in order:
         #   (a) an already-passed effective bound makes a fresh wait fail fast with Error::Timeout instead of parking
         #       forever - without this, a caught Timeout followed by a re-park under the same fired deadline deadlocked
-        #       (nothing was left to interrupt the wait);
+        #       (nothing was left to interrupt the wait); the check is the bound's own cancellable token being set, not
+        #       just the arithmetic (left <= 0), because the deadline helper's timer may fire marginally before the wall
+        #       clock reaches abs - a re-park landing in that window would otherwise be missed by the arithmetic and
+        #       (since the bound is armed already) would park with nothing left to interrupt it;
         #   (b) exactly one deadline helper is armed per fiber for its effective bound and reused across re-parks
         #       (F_DEADLINE_ARMED), so a re-park never stacks a second timer for the same bound; the helper cancels the
         #       bound's token, which interrupts the registered fiber via the usual _interrupt path and recalls its jobs;
@@ -388,7 +391,7 @@ package Acme::Parataxis v0.1.1 {
             if ( defined $eff ) {
                 my $now  = _now_ms();
                 my $left = $eff->{abs} - $now;
-                if ( $left <= 0 ) {
+                if ( $left <= 0 || $eff->{tok}->cancelled ) {
                     my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
                     delete $PARKED{$fid};
                     if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
