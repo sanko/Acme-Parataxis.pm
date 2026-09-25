@@ -38,7 +38,7 @@ package Acme::Parataxis v0.1.1 {
     our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
-    my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms (Card 19)
+    my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms
     my %VIRTUAL_DEADLINES;      # fid => absolute virtual-ms deadline of that fiber's one armed virtual timer
     my @VIRTUAL_TIMERS;         # [deadline_ms, fid] ascending; lazy deletion via %VIRTUAL_DEADLINES
 
@@ -364,7 +364,7 @@ package Acme::Parataxis v0.1.1 {
             }
         }
 
-        # Card 17: enclosing with_timeout deadlines bound this park. Every with_timeout whose execution this fiber is
+        # Enclosing with_timeout deadlines bound this park. Every with_timeout whose execution this fiber is
         # inside pushed an absolute deadline (in ms) onto F_DEADLINE_SCOPES; the innermost/soonest one wins as the
         # effective bound and the outermost is the backstop. Three consequences, in order:
         #   (a) an already-passed effective bound makes a fresh wait fail fast with Error::Timeout instead of parking
@@ -475,7 +475,7 @@ package Acme::Parataxis v0.1.1 {
         if ($hooks) { $_->($fiber) for @$hooks }
     }
 
-    # -- deterministic mock time (Card 19). Inside run( virtual => 1, ... ) every timer-based wait (await_sleep,
+    # -- deterministic mock time. Inside run( virtual => 1, ... ) every timer-based wait (await_sleep,
     # -- with_timeout deadlines, Channel bounds, select, Ticker/RateLimiter) and every wall-clock read consulted
     # -- through the helpers below rides the virtual clock a test drives with advance(); outside such a run they all
     # -- fall back to the real wall clock, so real runs are untouched. A virtual run never submits a TASK_SLEEP job:
@@ -554,7 +554,7 @@ package Acme::Parataxis v0.1.1 {
     # with_timeout rethrows the resulting error (::Timeout or ::Cancelled) in this fiber, so it can be caught with
     # eval/try.
     #
-    # Card 17: the deadline is enforced per-park by _park from a per-fiber scope stack (F_DEADLINE_SCOPES). This
+    # The deadline is enforced per-park by _park from a per-fiber scope stack (F_DEADLINE_SCOPES). This
     # child pushes its bound onto that stack (inheriting the enclosing with_timeouts of the spawning fiber, so a
     # nested block's parks are bounded by the whole chain, innermost/soonest first and the outermost as the backstop)
     # and _park derives the effective bound, fails fast when it has already passed (a caught Timeout followed by a
@@ -872,7 +872,7 @@ package Acme::Parataxis v0.1.1 {
         }
         @_ = ();
 
-        # Trace propagation (Card 21): Local slots created with inherit => 1 have their current value copied
+        # Trace propagation: Local slots created with inherit => 1 have their current value copied
         # from the spawning fiber (the one resolving the spawn args - our caller, even after a nursery or actor
         # birth park) into the child before the child's body first reads it. The seed is captured here, before
         # spawn_fiber eagerly runs the body, and applied by a wrapper that runs in the child's own context, so
@@ -1210,7 +1210,7 @@ package Acme::Parataxis v0.1.1 {
         %SCHEDULER_QUEUED = ();
         $IS_RUNNING       = 1;
 
-        # Card 19: run( virtual => 1 ) turns on the virtual clock for the whole run. Everything the scheduler waits
+        # run( virtual => 1 ) turns on the virtual clock for the whole run. Everything the scheduler waits
         # on (and every mock_time read) then rides $VIRTUAL_CLOCK, and the idle path fast-forwards it instead of
         # sleeping, so timeouts can be exercised in microseconds. Saved/restored so a non-virtual run after a virtual
         # one (or vice versa) is exactly wall-clock behavior again.
@@ -1228,7 +1228,7 @@ package Acme::Parataxis v0.1.1 {
         my %PRESET_FIBERS = map { $_ => 1 } _live_fiber_ids();
         my $main_fiber    = __PACKAGE__->new( code => $code );
 
-        # Card 22: on_shutdown => opts the OUTERMOST run into installing SIGINT/SIGTERM handlers for the run's lifetime
+        # on_shutdown => opts the OUTERMOST run into installing SIGINT/SIGTERM handlers for the run's lifetime
         # (the previous handlers are restored when it ends). The first signal - or, when the option is a pre-made
         # CancellationToken, its cancel() from anywhere - fires the shutdown token and interrupts every fiber this run
         # created (the run's root fiber included), so they unwind, run their own cleanup (defers/DESTROYs), and the
@@ -1282,7 +1282,7 @@ package Acme::Parataxis v0.1.1 {
         my $run_ok = eval {
             while ($IS_RUNNING) {
 
-                # Card 22: process a deferred signal at (and only at) this checkpoint - the one place in the loop
+                # Process a deferred signal at (and only at) this checkpoint - the one place in the loop
                 # where no drain/@ready/@SCHEDULER_QUEUE manipulation is in flight, so the shutdown sweep below
                 # cannot race the fibers it interrupts. See the comment at the $SIG{...} installs above.
                 if ($sig_pending) {
@@ -1290,7 +1290,7 @@ package Acme::Parataxis v0.1.1 {
                     $fire->($sig);
                 }
 
-                # Card 22: a shutdown token cancelled from inside the run (not just by a signal handler) begins the
+                # A shutdown token cancelled from inside the run (not just by a signal handler) begins the
                 # graceful drain too. The token's own cancel() already interrupted whatever was registered against it;
                 # this pass interrupts the rest of the run's fibers so every fiber winds down together.
                 if ( $on_shutdown && !$shutdown_fired && $shutdown_token->cancelled ) {
@@ -1338,7 +1338,7 @@ package Acme::Parataxis v0.1.1 {
                         $DRIVER->drive();
                     }
                     else {
-                        # Card 19 virtual clock: the scheduler has no runnable work and no real jobs (real I/O never
+                        # Virtual clock: the scheduler has no runnable work and no real jobs (real I/O never
                         # reaches here), but fibers are parked on virtual timers. Instead of sleeping on the wall clock
                         # (or declaring a deadlock), wind the virtual clock up to the earliest outstanding deadline and
                         # fire anything due, then re-loop to run the woken fibers. The clock never moves while any fiber

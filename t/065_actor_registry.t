@@ -6,7 +6,7 @@ use Scalar::Util qw[weaken];
 use Test2::V1 -ipP;
 $|++;
 
-# Card 16: actor named registry + hot code swap. `Actor->spawn(..., name => $name)` registers the
+# actor named registry + hot code swap. `Actor->spawn(..., name => $name)` registers the
 # actor process-wide; Acme::Parataxis->actor($name) (or ->whereis) returns the handle, or undef when
 # the actor is gone. `$actor->swap($code)` replaces the handler atomically at the next message
 # boundary: a message already in flight finishes with the old code, and every message dispatched

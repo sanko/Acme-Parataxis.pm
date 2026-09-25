@@ -18,7 +18,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 20** - `spawn_blocking` (relocated to the separate Acme-Parataxis-Blocking distribution)
 - [x] **Card 21** - trace propagation
 - [x] **Card 22** - graceful shutdown
-- [ ] **Card 23** - strip card and milestone references from documentation and comments (the TODO.md file will not be bundled with the dist so readers of the docs will have no idea what cards we're talking about)
+- [x] **Card 23** - strip card and milestone references from documentation and comments (the TODO.md file will not be bundled with the dist so readers of the docs will have no idea what cards we're talking about)
 
 ## Chapter 2: ergonomics, observability, and scaling out
 

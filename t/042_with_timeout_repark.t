@@ -92,7 +92,7 @@ subtest 'the scheduler is clean afterwards: a later with_timeout runs normally' 
     };
     is $second, 'still-works', 'with_timeout works after a re-park teardown';
 };
-subtest 'Card 17 (A): innermost deadline wins, the outermost acts as backstop' => sub {
+subtest 'innermost deadline wins, the outermost acts as backstop' => sub {
     my ( $err, $elapsed );
     my $ch = Acme::Parataxis::Channel->new;
     async {
@@ -104,7 +104,7 @@ subtest 'Card 17 (A): innermost deadline wins, the outermost acts as backstop' =
     ok ref($err) && $err->isa('Acme::Parataxis::Error::Timeout'), 'the outer 20ms bound aborts the inner 2000ms bound';
     ok $elapsed < 1000, "aborted by the outer bound at ${elapsed}ms, not left to the inner bound";
 };
-subtest 'Card 17 (B): the outer deadline still kills a re-park after the inner fires' => sub {
+subtest 'the outer deadline still kills a re-park after the inner fires' => sub {
     my ( $inner_at, $inner_err, $repark_at, $repark_err );
     my $ch = Acme::Parataxis::Channel->new;
     async {
@@ -126,7 +126,7 @@ subtest 'Card 17 (B): the outer deadline still kills a re-park after the inner f
     ok ref($repark_err) && $repark_err->isa('Acme::Parataxis::Error::Timeout'), 'the outer deadline kills the re-park too';
     ok $repark_at < 2000, "re-park lost at ${repark_at}ms under the 300ms backstop, it did not hang";
 };
-subtest 'Card 17 (D): re-parking after the deadline fired fails fast instead of deadlocking' => sub {
+subtest 're-parking after the deadline fired fails fast instead of deadlocking' => sub {
     my ( $e1, $e2, $elapsed );
     my $ch = Acme::Parataxis::Channel->new;
     async {
@@ -146,7 +146,7 @@ subtest 'Card 17 (D): re-parking after the deadline fired fails fast instead of 
     ok( $e2 && ref($e2) && $e2->isa('Acme::Parataxis::Error::Timeout'), 'the re-park under the fired deadline failed fast with ::Timeout (no deadlock)' );
     ok $elapsed < 500, "re-park failed fast at ${elapsed}ms, it did not wait";
 };
-subtest 'Card 17 (C): a re-park reuses the armed timer instead of arming a second one' => sub {
+subtest 'a re-park reuses the armed timer instead of arming a second one' => sub {
     my ( $first_err, $repark_err, $repark_at, $jobs );
     my $ch  = Acme::Parataxis::Channel->new;
     my $sig = Acme::Parataxis::Channel->new;
@@ -176,7 +176,7 @@ subtest 'Card 17 (C): a re-park reuses the armed timer instead of arming a secon
     ok( $repark_err && ref($repark_err) && $repark_err->isa('Acme::Parataxis::Error::Timeout'), 'the re-park was served by the reused helper (::Timeout), so it did not deadlock' );
     ok $repark_at < 5000 && $repark_at > 400, "re-park resolved at ${repark_at}ms - by the ~700ms deadline helper, not instantly";
 };
-subtest 'Card 17 (E): a cancel scope and a with_timeout deadline coexist on one park' => sub {
+subtest 'a cancel scope and a with_timeout deadline coexist on one park' => sub {
     my ( $err, $done );
     async {
         my $ch  = Acme::Parataxis::Channel->new;

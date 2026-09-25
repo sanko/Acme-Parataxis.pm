@@ -9,7 +9,7 @@ use Test2::V1 -ipP;
 no warnings 'experimental::defer';    # Test2::V1 re-enables it
 $|++;
 
-# Card 14: defer (run cleanup on every fiber exit), delivered by perl's native 'defer' keyword (v5.36+, experimental).
+# defer (run cleanup on every fiber exit), delivered by perl's native 'defer' keyword (v5.36+, experimental).
 # A defer written lexically in the fiber body fires on the return path, the throw path, and the cancel path,
 # exactly when the fiber's scope exits - before the coroutine is reaped.
 #

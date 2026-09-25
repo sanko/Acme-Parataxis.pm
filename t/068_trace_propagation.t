@@ -6,7 +6,7 @@ use Acme::Parataxis::Actor;
 use Test2::V1 -ipP;
 $|++;
 
-# Card 21: trace propagation. A Acme::Parataxis::Local created with inherit => 1 has its current
+# Trace propagation. A Acme::Parataxis::Local created with inherit => 1 has its current
 # value copied from the spawning fiber into the child the moment the child is spawned (a shallow
 # copy; the child then owns it exclusively). Plain Locals keep strict per-fiber isolation.
 subtest 'an inherit Local seeds the child before its first read' => sub {

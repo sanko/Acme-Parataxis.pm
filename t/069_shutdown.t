@@ -6,7 +6,7 @@ use IO::Select;
 use POSIX ();
 $|++;
 
-# Card 22: run( on_shutdown => ... ) makes the outermost run install SIGINT/SIGTERM handlers, fires a shutdown
+# run( on_shutdown => ... ) makes the outermost run install SIGINT/SIGTERM handlers, fires a shutdown
 # CancellationToken on the first signal, drains every fiber it created (their Error::Cancelled unwinds run their own
 # cleanup - defers/DESTROYs), and returns the conventional interrupted status (130/143) instead of rethrowing.
 #

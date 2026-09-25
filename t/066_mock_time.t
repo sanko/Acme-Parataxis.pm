@@ -8,7 +8,7 @@ use Acme::Parataxis::RateLimiter;
 use Test2::V1 -ipP;
 $|++;
 
-# Card 19: deterministic mock time. run( virtual => 1, ... ) runs the whole scheduler on a virtual clock a test
+# deterministic mock time. run( virtual => 1, ... ) runs the whole scheduler on a virtual clock a test
 # drives with Parataxis->advance, and the idle path fast-forwards the clock to the earliest pending deadline instead
 # of sleeping, so hour-long timeouts exercise in microseconds. Real runs are untouched.
 # A) an hour-long await_sleep returns without a real second passing (the idle fast-forward does the work)
@@ -109,7 +109,7 @@ run(
     }
 );
 
-# F) a Channel->new( timeout => $ms ) bound (Card 18) fires under advance too
+# F) a Channel->new( timeout => $ms ) bound fires under advance too
 run(
     virtual => 1,
     code    => sub {
