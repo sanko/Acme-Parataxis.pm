@@ -90,6 +90,24 @@ subtest 'throttle caps the emission rate' => sub {
     ok $span >= 0.030, 'five throttled emissions did not all land in the same millisecond (rate capped)';
     is Acme::Parataxis::get_live_fiber_count(), $baseline, 'throttle released its fiber on shutdown; zero leaked';
 };
+subtest 'batch_time takes its deadline from the ms argument, not from the first item' => sub {
+    my $baseline = Acme::Parataxis::get_live_fiber_count();
+    my ( @groups, $early );
+    async {
+        my $raw   = Acme::Parataxis::Channel->new( capacity => 32 );
+        my $chain = Acme::Parataxis::Stream->from_channel($raw)->batch_time(200)    # a window a short sleep cannot cross
+            ->consume( sub (@g) { push @groups, [@g] } );
+        $raw->put('alpha');    # a NON-numeric item: the old code did `$deadline = now_ms() + $item`
+        await_sleep 10;        # well inside the 200ms window
+        $early = scalar @groups;
+        $raw->shutdown;
+        while ( @groups < 1 ) { await_sleep 1 }
+        drain_chain($baseline);
+    };
+    is $early,   0,                                        'the batch was still pending 10ms in, so the deadline came from 200ms, not from the item';
+    is \@groups, [ ['alpha'] ],                            'and the deadline flushed exactly the one item, undamaged';
+    is Acme::Parataxis::get_live_fiber_count(), $baseline, 'batch_time released its fiber on shutdown; zero leaked';
+};
 subtest 'batch_time groups on the deadline' => sub {
     my $baseline = Acme::Parataxis::get_live_fiber_count();
     my @groups;
