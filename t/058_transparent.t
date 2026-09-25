@@ -101,14 +101,24 @@ subtest 'a regular file read inside a fiber falls back to the raw builtin' => su
         open my $fh, '<', $path or die "open $path: $!";
         async {
             with_timeout(
-                5000,
+                15000,
                 sub {
-                    if ( $builtin eq 'read' ) { $rc = read( $fh, $buf, 15 ) }
-                    else                      { $rc = sysread( $fh, $buf, 15 ) }
+
+                    # Many reads, not one. The override times its readiness probe against the wall clock to tell
+                    # "select() cannot watch this handle" (fall back to a raw read) from "a real wait timed out"
+                    # (keep waiting), and a probe landing across a clock-second boundary used to be misread as the
+                    # latter, after which the read spun until the deadline below killed it. A single read misses
+                    # that most of the time, so it took a loaded machine and a full test run to notice; 150 reads
+                    # inside one deadline hit it reliably. Rewind each time, since 15 bytes then hits EOF.
+                    for ( 1 .. 150 ) {
+                        seek( $fh, 0, 0 );
+                        if ( $builtin eq 'read' ) { $rc = read( $fh, $buf, 15 ) }
+                        else                      { $rc = sysread( $fh, $buf, 15 ) }
+                    }
                 }
             );
         };
-        is $rc,  15,                "$builtin on a regular file inside a fiber returned the byte count";
+        is $rc,  15,                "$builtin on a regular file inside a fiber returned the byte count, every time";
         is $buf, 'file read works', "$builtin on a regular file read the content (raw fallback, no spin)";
         close $fh;
     }

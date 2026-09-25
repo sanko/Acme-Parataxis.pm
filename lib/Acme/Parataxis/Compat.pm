@@ -1,6 +1,7 @@
 use v5.40;
 use Errno qw[EAGAIN EWOULDBLOCK];
 use Carp  qw[croak];
+use Time::HiRes ();    # loaded only: the overrides call Time::HiRes::time() fully qualified, never bare time()
 
 package Acme::Parataxis::Compat v0.1.1 {
     #
@@ -17,6 +18,12 @@ package Acme::Parataxis::Compat v0.1.1 {
     #
     my $INSTALLED = 0;
     my @SAVED;    # [ name, saved-glob ] per installed override, for disable()
+
+    # The readiness budget, in ms, that the read/sysread overrides give each await_read probe, plus the fraction of
+    # that budget a probe must return short of to count as "select() cannot watch this handle" rather than "a real
+    # wait timed out". See the read override for why that has to be timed on a high-resolution clock.
+    my $PROBE_MS  = 5000;
+    my $UNWATCHED = 0.9;
 
     # Write the framed read's result back into the caller's scalar (a reference to its
     # @_ slot), mimicking the builtin: undef (error) and 0 (EOF) leave the caller's
@@ -70,24 +77,32 @@ package Acme::Parataxis::Compat v0.1.1 {
                     my $rc  = CORE::read( $_[0], $buf, $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf );
                 }
-                my ( $t0, $first ) = ( time, 1 );
                 while (1) {
-                    my $ready = 'Acme::Parataxis'->await_read( $_[0], 5000 );
+                    my $t0    = Time::HiRes::time();
+                    my $ready = 'Acme::Parataxis'->await_read( $_[0], $PROBE_MS );
                     if ( $ready < 0 ) {
 
-                        # A readiness probe that fails instantly instead of cycling its
-                        # 5s timeout means select() cannot watch this handle at all (a
-                        # regular file, a pipe). Fall back to a raw blocking read there,
-                        # which is instant for files, instead of spinning forever.
-                        if ( $first && time - $t0 < 0.05 ) {
+                        # A probe that came back well short of its own budget means select() cannot watch this handle
+                        # at all (a regular file, a pipe), not that a real wait timed out. Fall back to a raw blocking
+                        # read there, which is instant for files, instead of spinning forever.
+                        #
+                        # Two things this comparison has to get right, both of which used to be wrong and made a
+                        # regular-file read inside a fiber hang until the caller's deadline killed it:
+                        #   - it must be timed on a high-resolution clock. `time` here was plain CORE::time, so the
+                        #     whole-second answer made a sub-50ms probe read as 0 or 1, and any probe that happened to
+                        #     cross a second boundary was misread as a genuine timeout;
+                        #   - it must be per round, not a one-shot on the first. The flag used to be cleared whether or
+                        #     not the fallback was taken, so one slow round cost the fallback permanently and the loop
+                        #     then spun a 5s probe at a time forever.
+                        # A round that really did burn the budget is a real timeout, so keep waiting instead of
+                        # blocking the whole process on a raw read of a socket that has nothing yet.
+                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
                             my $buf = '';
                             my $rc  = CORE::read( $_[0], $buf, $_[2], 0 );
                             return _store( \$_[1], $off, $rc, $buf );
                         }
-                        $first = 0;
                         next;
                     }
-                    $first = 0;
                     my $buf = '';
                     my $rc  = CORE::read( $_[0], $buf, $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
@@ -101,22 +116,21 @@ package Acme::Parataxis::Compat v0.1.1 {
                     my $rc  = CORE::sysread( $_[0], $buf, $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf );
                 }
-                my ( $t0, $first ) = ( time, 1 );
                 while (1) {
-                    my $ready = 'Acme::Parataxis'->await_read( $_[0], 5000 );
+                    my $t0    = Time::HiRes::time();
+                    my $ready = 'Acme::Parataxis'->await_read( $_[0], $PROBE_MS );
                     if ( $ready < 0 ) {
 
-                        # See the read override: a probe that fails instantly means the
-                        # handle cannot be select()ed, so read it raw rather than spin.
-                        if ( $first && time - $t0 < 0.05 ) {
+                        # See the read override: a probe that gave up short of its budget means the handle cannot
+                        # be select()ed, so read it raw rather than spin. Same high-resolution timing, same per-round
+                        # (not one-shot) test, same refusal to raw-block a socket that merely timed out.
+                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
                             my $buf = '';
                             my $rc  = CORE::sysread( $_[0], $buf, $_[2], 0 );
                             return _store( \$_[1], $off, $rc, $buf );
                         }
-                        $first = 0;
                         next;
                     }
-                    $first = 0;
                     my $buf = '';
                     my $rc  = CORE::sysread( $_[0], $buf, $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
