@@ -148,10 +148,11 @@ subtest 'Card 17 (D): re-parking after the deadline fired fails fast instead of 
 };
 subtest 'Card 17 (C): a re-park reuses the armed timer instead of arming a second one' => sub {
     my ( $first_err, $repark_err, $repark_at, $jobs );
-    my $ch = Acme::Parataxis::Channel->new;
+    my $ch  = Acme::Parataxis::Channel->new;
+    my $sig = Acme::Parataxis::Channel->new;
     async {
         my $tok = Acme::Parataxis::CancellationToken->new;
-        fiber { await_sleep( 20 ); $tok->cancel };
+        fiber { await_sleep( 20 ); $tok->cancel; $sig->put(1) };
         fiber {
             with_timeout(
                 700,
@@ -166,7 +167,7 @@ subtest 'Card 17 (C): a re-park reuses the armed timer instead of arming a secon
                 }
             );
         };
-        await_sleep( 40 );
+        $sig->get; # the canceller fiber is done and its sleep job reclaimed: outstanding is exactly the one ~700ms helper
         $jobs = Acme::Parataxis::get_outstanding_jobs();
         await_sleep( 700 );
     };

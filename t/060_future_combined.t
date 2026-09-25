@@ -82,8 +82,8 @@ subtest 'wait_any: copies the first success wholesale' => sub {
     my $any = wait_any(@f);
     my $got;
     async {
-        fiber { yield; $f[0]->set_result('fast') };
-        await_sleep(1);
+        my $child = fiber { $f[0]->set_result('fast') };
+        $child->await;
         $f[1]->set_result('slow');
         $got = $any->await;
     };
@@ -93,8 +93,8 @@ subtest 'wait_any: copies the first failure wholesale' => sub {
     my ( $g, $h ) = map { Acme::Parataxis::Future->new } 1 .. 2;
     my $any = wait_any( $g, $h );
     async {
-        fiber { yield; $g->set_error('boom') };
-        await_sleep(1);
+        my $child = fiber { $g->set_error('boom') };
+        $child->await;
         $h->set_result('irrelevant');
         my $err;
         eval { $any->await; 1 };
@@ -128,8 +128,8 @@ subtest 'wait_any: class-callable form Acme::Parataxis->wait_any' => sub {
     my ( $g, $h ) = map { Acme::Parataxis::Future->new } 1 .. 2;
     my $any = Acme::Parataxis->wait_any( $g, $h );
     async {
-        fiber { yield; $g->set_error('halt') };
-        await_sleep(1);
+        my $child = fiber { $g->set_error('halt') };
+        $child->await;
         $h->set_result('late');
         my $err;
         eval { $any->await; 1 };
