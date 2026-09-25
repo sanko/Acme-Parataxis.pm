@@ -41,7 +41,12 @@ class Acme::Parataxis::RateLimiter v0.1.1 {
             while ($running) {
                 last unless $ticker->wait_next;
                 my $now = Acme::Parataxis::mock_time();
-                my $due = int( ( $now - $last ) * $rate );
+                my $won = ( $now - $last ) * $rate;
+                my $due = int( $won + $won * 1e-9 );    # relative margin for NV noise: int() truncates, so an exactly-due
+                                                        # tick would round to 0 and be skipped when the stored (now-last)
+                                                        # lands just below a whole tick on wide-NV perls (long-double and
+                                                        # quadmath builds); 1e-9 sits far above representational error and
+                                                        # far below any meaningful credit, so it never over-drops a token
                 $last += $due / $rate;    # advance over exactly the window these whole tokens cover
 
                 # (any fraction carries to the next wake; a backwards clock resyncs)
