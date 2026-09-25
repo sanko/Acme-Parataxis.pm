@@ -1240,6 +1240,7 @@ package Acme::Parataxis v0.1.1 {
         # programmatically (a health port, a parent process, a test) as well as from a signal.
         my ( $shutdown_token, $shutdown_status, $shutdown_fired, $shutdown_cb );
         my ( $old_int, $old_term );
+        my ( $fire, $sig_pending );
         my $interrupt_run_fibers = sub {
             for my $fid ( _live_fiber_ids() ) {
                 next if $PRESET_FIBERS{$fid};
@@ -1255,7 +1256,7 @@ package Acme::Parataxis v0.1.1 {
             $shutdown_status = 130;
             $old_int         = $SIG{INT};
             $old_term        = $SIG{TERM};
-            my $fire = sub ($sig) {
+            $fire = sub ($sig) {
                 if ($shutdown_fired) {    # second signal: stop catching it; the restored default kills the process
                     $SIG{INT}  = $old_int;
                     $SIG{TERM} = $old_term;
@@ -1267,12 +1268,27 @@ package Acme::Parataxis v0.1.1 {
                 $shutdown_token->cancel;
                 $interrupt_run_fibers->();
             };
-            $SIG{INT}  = sub { $fire->('INT') };
-            $SIG{TERM} = sub { $fire->('TERM') };
+            # The async handlers only record a pending signal. $fire - the token cancel, the run-fiber interrupt sweep,
+            # the scheduler queueing - runs at run()'s own checkpoint atop the scheduler loop instead: from inside the
+            # handler it would execute at an arbitrary point mid-iteration, possibly while the loop is draining jobs /
+            # resuming @ready fibers / mutating @SCHEDULER_QUEUE, where its effects on those fibers can be lost and the
+            # run stalls until an outstanding C job finishes on its own schedule (a sleeping fiber rides out its full
+            # deadline, so a Ctrl-C or kill can fire tens of seconds late). The checkpoint is the same place the
+            # programmatic token-cancel sweep runs, which is what keeps the two paths deterministic under load.
+            $SIG{INT}  = sub { $sig_pending ||= 'INT' };
+            $SIG{TERM} = sub { $sig_pending ||= 'TERM' };
         }
         _enqueue($main_fiber);
         my $run_ok = eval {
             while ($IS_RUNNING) {
+
+                # Card 22: process a deferred signal at (and only at) this checkpoint - the one place in the loop
+                # where no drain/@ready/@SCHEDULER_QUEUE manipulation is in flight, so the shutdown sweep below
+                # cannot race the fibers it interrupts. See the comment at the $SIG{...} installs above.
+                if ($sig_pending) {
+                    ( my $sig, $sig_pending ) = ( $sig_pending, undef );
+                    $fire->($sig);
+                }
 
                 # Card 22: a shutdown token cancelled from inside the run (not just by a signal handler) begins the
                 # graceful drain too. The token's own cancel() already interrupted whatever was registered against it;

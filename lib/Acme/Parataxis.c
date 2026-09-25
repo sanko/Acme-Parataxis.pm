@@ -772,6 +772,29 @@ void * worker_thread(void * arg) {
     int cpu_count = get_cpu_count();
     pin_to_core(thread_id % cpu_count);
 
+    /* Process-directed signals (SIGINT/SIGTERM/SIGPIPE/SIGCHLD/...) are handed to an arbitrary thread that has them
+     * unblocked. A pool worker is a C-only thread with no perl interpreter on it, so if a worker catches one of these
+     * perl's $SIG{...} handler never runs: the shutdown request is swallowed until the interrupted job finishes on
+     * its own schedule (a sleeping fiber can therefore ride out its full deadline and a Ctrl-C or kill -TERM becomes
+     * ineffective, or fires tens of seconds late). Permanently block them here so the kernel can only deliver them to
+     * the main (interpreting) thread, where perl installs and dispatches its handlers. */
+#ifndef _WIN32
+    sigset_t block_set;
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGINT);
+    sigaddset(&block_set, SIGTERM);
+    sigaddset(&block_set, SIGQUIT);
+    sigaddset(&block_set, SIGHUP);
+    sigaddset(&block_set, SIGPIPE);
+    sigaddset(&block_set, SIGCHLD);
+    sigaddset(&block_set, SIGALRM);
+    sigaddset(&block_set, SIGUSR1);
+    sigaddset(&block_set, SIGUSR2);
+    /* No other thread in this process ever unblocks these, so per POSIX the kernel must deliver any pending occurrence
+     * to the main thread immediately on arrival. */
+    pthread_sigmask(SIG_BLOCK, &block_set, NULL);
+#endif
+
     while (threads_keep_running) {
         int found_idx = -1;
 
