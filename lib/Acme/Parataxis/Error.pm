@@ -12,7 +12,7 @@ package Acme::Parataxis::Error v0.1.1 {
     sub _new ( $class, $label, %args ) {
         my $reason = delete $args{wait_reason};
         my $site   = 'an unknown wait';
-        $site = sprintf '%s (%s line %d)', @{ $reason }[ 0 .. 2 ] if ref $reason eq 'ARRAY' && @$reason >= 3;
+        $site = sprintf '%s (%s line %d)', @{$reason}[ 0 .. 2 ] if ref $reason eq 'ARRAY' && @$reason >= 3;
         bless { label => $label, message => "$label at $site", wait_reason => $reason, %args, }, $class;
     }
 

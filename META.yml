@@ -86,6 +86,9 @@ provides:
   Acme::Parataxis::Local:
     file: lib/Acme/Parataxis/Local.pm
     version: v0.1.1
+  Acme::Parataxis::Monitor:
+    file: lib/Acme/Parataxis/Monitor.pm
+    version: v0.1.1
   Acme::Parataxis::Nursery:
     file: lib/Acme/Parataxis/Nursery.pm
     version: v0.1.1

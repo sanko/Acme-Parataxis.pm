@@ -45,22 +45,22 @@ package Acme::Parataxis v0.1.1 {
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
     use constant {
-        F_CODE          => 0,
-        F_IS_DONE       => 1,
-        F_ERROR         => 2,
-        F_RESULT        => 3,
-        F_FID           => 4,
-        F_IS_READY      => 5,
-        F_CALLBACKS     => 6,
-        F_WAITER        => 7,
-        F_LAST_STATUS   => 8,
-        F_PRIORITY      => 9,
-        F_WAIT_REASON   => 10,
-        F_WAKE_HOOKS        => 11,
-        F_INTERRUPT         => 12,
-        F_CANCEL_SCOPES     => 13,
-        F_DEADLINE_SCOPES   => 14,
-        F_DEADLINE_ARMED    => 15
+        F_CODE            => 0,
+        F_IS_DONE         => 1,
+        F_ERROR           => 2,
+        F_RESULT          => 3,
+        F_FID             => 4,
+        F_IS_READY        => 5,
+        F_CALLBACKS       => 6,
+        F_WAITER          => 7,
+        F_LAST_STATUS     => 8,
+        F_PRIORITY        => 9,
+        F_WAIT_REASON     => 10,
+        F_WAKE_HOOKS      => 11,
+        F_INTERRUPT       => 12,
+        F_CANCEL_SCOPES   => 13,
+        F_DEADLINE_SCOPES => 14,
+        F_DEADLINE_ARMED  => 15
     };
 
     # Scheduler run queue. Kept sorted by descending priority (stable for equal priorities, so a group of same-priority fibers stays FIFO).
@@ -396,20 +396,22 @@ package Acme::Parataxis v0.1.1 {
                     delete $PARKED{$fid};
                     if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
                     $dereg->() if $dereg;    # as above: this park's own waiter entry is stale too
-                    warn "PARATAXIS_TRACE park DEADLINE fail-fast fid=$fid reason=$reason abs=" .
-                        $eff->{abs} . " now=$now\n" if $ENV{PARATAXIS_TRACE};
+                    warn "PARATAXIS_TRACE park DEADLINE fail-fast fid=$fid reason=$reason abs=" . $eff->{abs} . " now=$now\n"
+                        if $ENV{PARATAXIS_TRACE};
                     die Acme::Parataxis::Error::Timeout->new( wait_reason => [ 'timeout', $pfile, $pline ] );
                 }
                 if ( $eff->{own} ) {
                     my $already = $fiber->[F_DEADLINE_ARMED];
                     if ( defined $already && $already == $eff->{abs} ) {
-                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE reuse abs=%.0f (already armed)\n", ( time - $^T ) * 1000,
-                            $fid, $eff->{abs} if $ENV{PARATAXIS_TRACE};
+                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE reuse abs=%.0f (already armed)\n", ( time - $^T ) * 1000, $fid,
+                            $eff->{abs}
+                            if $ENV{PARATAXIS_TRACE};
                     }
                     else {
                         my $tok = $eff->{tok};
-                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE arm abs=%.0f left=%.0f was=%s\n", ( time - $^T ) * 1000,
-                            $fid, $eff->{abs}, $left, defined $already ? $already : 'undef' if $ENV{PARATAXIS_TRACE};
+                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE arm abs=%.0f left=%.0f was=%s\n", ( time - $^T ) * 1000, $fid,
+                            $eff->{abs}, $left, defined $already ? $already : 'undef'
+                            if $ENV{PARATAXIS_TRACE};
                         fiber {
                             $tok->register;
                             eval { await_sleep($left); $tok->cancel; 1 };
@@ -593,22 +595,27 @@ package Acme::Parataxis v0.1.1 {
         my $scope_abs = $ms > 0 ? _now_ms() + $ms : undef;
         my $inherited = do {
             my $pfid = Acme::Parataxis->current_fid;
-            my $pf   = $pfid >= 0 ? Acme::Parataxis->by_id($pfid) : undef;
-            my $stk  = $pf && $pf->[F_DEADLINE_SCOPES] ? $pf->[F_DEADLINE_SCOPES] : undef;
-            $stk ? [ map { { %$_, own => 0 } } @$stk ] : [];
+            my $pf   = $pfid >= 0                      ? Acme::Parataxis->by_id($pfid) : undef;
+            my $stk  = $pf && $pf->[F_DEADLINE_SCOPES] ? $pf->[F_DEADLINE_SCOPES]      : undef;
+            $stk ?
+                [
+                map {
+                    { %$_, own => 0 }
+                } @$stk
+                ] :
+                [];
         };
         my $child = fiber {
             my $cf = Acme::Parataxis->by_id( Acme::Parataxis->current_fid );
-            $cf->[F_DEADLINE_SCOPES] = defined $scope_abs ? [ @$inherited, { abs => $scope_abs, tok => $deadline, own => 1 } ]
-                                                          : $inherited;
+            $cf->[F_DEADLINE_SCOPES] = defined $scope_abs ? [ @$inherited, { abs => $scope_abs, tok => $deadline, own => 1 } ] : $inherited;
             $deadline->register;
             $tok->register if $tok ne $deadline;
             my $val = eval { $code->() };
             my $err = $@;
             $deadline->unregister;
-            $tok->unregister if $tok ne $deadline;
+            $tok->unregister                  if $tok ne $deadline;
             pop @{ $cf->[F_DEADLINE_SCOPES] } if defined $scope_abs;    # leave the stack for any enclosing scope
-            die $err         if $err;                # the ::Timeout/::Cancelled throw (or any real error) unwinds out of the child
+            die $err                          if $err;                  # the ::Timeout/::Cancelled throw (or any real error) unwinds out of the child
             return $val;
         };
 
@@ -1239,8 +1246,8 @@ package Acme::Parataxis v0.1.1 {
         # the status; passing a CancellationToken means the caller owns the token and can begin the shutdown
         # programmatically (a health port, a parent process, a test) as well as from a signal.
         my ( $shutdown_token, $shutdown_status, $shutdown_fired, $shutdown_cb );
-        my ( $old_int, $old_term );
-        my ( $fire, $sig_pending );
+        my ( $old_int,        $old_term );
+        my ( $fire,           $sig_pending );
         my $interrupt_run_fibers = sub {
             for my $fid ( _live_fiber_ids() ) {
                 next if $PRESET_FIBERS{$fid};
@@ -1256,7 +1263,7 @@ package Acme::Parataxis v0.1.1 {
             $shutdown_status = 130;
             $old_int         = $SIG{INT};
             $old_term        = $SIG{TERM};
-            $fire = sub ($sig) {
+            $fire            = sub ($sig) {
                 if ($shutdown_fired) {    # second signal: stop catching it; the restored default kills the process
                     $SIG{INT}  = $old_int;
                     $SIG{TERM} = $old_term;
@@ -1268,6 +1275,7 @@ package Acme::Parataxis v0.1.1 {
                 $shutdown_token->cancel;
                 $interrupt_run_fibers->();
             };
+
             # The async handlers only record a pending signal. $fire - the token cancel, the run-fiber interrupt sweep,
             # the scheduler queueing - runs at run()'s own checkpoint atop the scheduler loop instead: from inside the
             # handler it would execute at an arbitrary point mid-iteration, possibly while the loop is draining jobs /

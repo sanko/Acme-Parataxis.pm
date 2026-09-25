@@ -33,8 +33,8 @@ Acme::Parataxis::TVar - Software Transactional Memory
 
 =head1 DESCRIPTION
 
-TVar is the transactional cell at the heart of the software transactional memory: a versioned, mutable value that
-is only ever observed and changed through L<atomically|/atomically>. Inside a transaction every read and write is
+TVar is the transactional cell at the heart of the software transactional memory: a versioned, mutable value that is
+only ever observed and changed through L<atomically|/atomically>. Inside a transaction every read and write is
 journaled; writes to the real TVars happen only when the transaction commits, and only if nothing the transaction read
 changed in the meantime. That is what makes lock ordering a non-problem: two transactions moving money in opposite
 directions between the same two accounts resolve by one of them rolling back and re-running, never by deadlocking.

@@ -28,9 +28,9 @@ Acme::Parataxis::Stream - Chainable async streams over bounded Channels
 =head1 DESCRIPTION
 
 A Stream is a chainable pipeline over bounded Channels. Every stage is a factory: C<map>, C<filter>, C<batch>,
-C<batch_time> and C<throttle> each allocate a fresh bounded output Channel, spawn one background fiber that loops
-over the stage's input applying the operation, and hand back a new Stream wrapping the output, so stages compose
-left to right exactly as the method calls read.
+C<batch_time> and C<throttle> each allocate a fresh bounded output Channel, spawn one background fiber that loops over
+the stage's input applying the operation, and hand back a new Stream wrapping the output, so stages compose left to
+right exactly as the method calls read.
 
 Everything rides on the scheduler's ordinary Channel parks, which is what makes the pipeline safe by construction:
 
@@ -38,16 +38,15 @@ Everything rides on the scheduler's ordinary Channel parks, which is what makes 
 
 =item *
 
-Backpressure is free. A bounded output Channel that fills up parks the stage's producer, and that park propagates
-all the way upstream, so a slow C<consume> (or a slow stage) throttles the raw producer instead of queueing
-unbounded memory.
+Backpressure is free. A bounded output Channel that fills up parks the stage's producer, and that park propagates all
+the way upstream, so a slow C<consume> (or a slow stage) throttles the raw producer instead of queueing unbounded
+memory.
 
 =item *
 
-A stream ends when its source Channel shuts down. Each stage's fiber sees the shutdown as C<undef> from C<get> and
-then shuts its own output down, so a consumed chain unwinds fiber-by-fiber back to the source and the live fiber
-count returns to its baseline: no stage can park forever on a source that quit, and no orphan fibers are left
-behind.
+A stream ends when its source Channel shuts down. Each stage's fiber sees the shutdown as C<undef> from C<get> and then
+shuts its own output down, so a consumed chain unwinds fiber-by-fiber back to the source and the live fiber count
+returns to its baseline: no stage can park forever on a source that quit, and no orphan fibers are left behind.
 
 =item *
 
@@ -74,8 +73,8 @@ Stepping on a stream returns a new stream; the original is untouched and can be 
 
 =head2 C<map( sub ($item) { ... } )>
 
-Applies the callback to every item and emits the result. The callback result replaces the item, so an arrayref
-produced here is spread as a list by C<consume> just like a C<batch> group.
+Applies the callback to every item and emits the result. The callback result replaces the item, so an arrayref produced
+here is spread as a list by C<consume> just like a C<batch> group.
 
 =head2 C<filter( sub ($item) { ... } )>
 
@@ -83,32 +82,32 @@ Emits an item only when the callback returns true.
 
 =head2 C<batch( $n )>
 
-Groups items into arrayrefs of C<$n>. A source that shuts down mid-batch emits the partial group as the final
-batch, so nothing buffered is ever lost.
+Groups items into arrayrefs of C<$n>. A source that shuts down mid-batch emits the partial group as the final batch, so
+nothing buffered is ever lost.
 
 =head2 C<batch_time( $ms )>
 
-Groups items by deadline instead of by count: the first item of a batch arms a C<$ms> timer, and the batch is
-flushed either when it fills by count alone (no count limit: it stays open) or when the deadline fires. A source
-that shuts down mid-batch emits the partial group, like C<batch>.
+Groups items by deadline instead of by count: the first item of a batch arms a C<$ms> timer, and the batch is flushed
+either when it fills by count alone (no count limit: it stays open) or when the deadline fires. A source that shuts
+down mid-batch emits the partial group, like C<batch>.
 
 =head2 C<throttle( $per_s )>
 
 Paces the stream to at most C<$per_s> items a second. Each emission schedules the next one one period ahead and the
-stage sleeps only the remainder, so the rate is an upper bound reached from below in steady state; a stage held up
-by downstream backpressure emits immediately afterwards and never tries to "catch up".
+stage sleeps only the remainder, so the rate is an upper bound reached from below in steady state; a stage held up by
+downstream backpressure emits immediately afterwards and never tries to "catch up".
 
 =head2 C<consume( sub (@items) { ... } )>
 
 The terminal stage. Runs the callback on every item as it arrives: a batch (arrayref) is spread into the callback's
-argument list, anything else is passed whole. Returns the fiber handle, which you can C<await> if you want the
-sink to have finished. The sink fiber ends when the source shuts down, at which point the whole pipeline is done.
+argument list, anything else is passed whole. Returns the fiber handle, which you can C<await> if you want the sink to
+have finished. The sink fiber ends when the source shuts down, at which point the whole pipeline is done.
 
 =head2 C<shutdown()>
 
-Shuts the head's source Channel down (and, through each stage's link, the whole chain upstream), which ends every
-stage fiber and releases any parked consumer. Mostly a convenience: shutting down the original Channel yourself has
-the same effect.
+Shuts the head's source Channel down (and, through each stage's link, the whole chain upstream), which ends every stage
+fiber and releases any parked consumer. Mostly a convenience: shutting down the original Channel yourself has the same
+effect.
 
 =head2 C<chain()>
 

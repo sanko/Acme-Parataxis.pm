@@ -137,7 +137,8 @@ sub wait_for {
 sub spawn_child {
     my ($body) = @_;
     $ENV{PERL_BADLANG} = 0;    # breaks a broken-locale perl (Haiku's SIGINT leg) no longer spams "Setting locale failed."
-                               # startup warnings into the drained pipe, which would break the exact-4-lines assertion
+
+    # startup warnings into the drained pipe, which would break the exact-4-lines assertion
     pipe my ( $r, $w ) or die "pipe: $!";
     my $pid = fork();
     die "fork: $!" unless defined $pid;
@@ -195,7 +196,7 @@ CHILD
         like $buf,   qr/READY.*DEFER_RAN.*DESTROY_RAN.*DRAINED:130/s, 'the drain log shows the defer and the DESTROY running before the status';
         unlike $buf, qr/UNREACHABLE/,                                 'the sleep did not complete';
         my ( $out, $status ) = reap( $pid, $r, \$buf, $lim );
-        is( $status,          0, 'the child exited cleanly (0) after reporting the drained shutdown' );
+        is( $status,         0, 'the child exited cleanly (0) after reporting the drained shutdown' );
         is( $out =~ tr/\n//, 4, 'the drain log is exactly the four expected lines' );
     }
 

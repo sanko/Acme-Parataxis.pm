@@ -60,12 +60,13 @@ Without it (the default), a handler die fails its own ask (or warns, for a C<sen
 
 =item *
 
-C<name =E<gt> $name>: registers the actor process-wide (Erlang's L<register|https://www.erlang.org/doc/system/design_principles.htm>
-table). C<Acme::Parataxis-E<gt>actor($name)> (or C<-E<gt>whereis($name)>) then returns this handle, or C<undef> for a
-name nobody holds. The name is a process-wide unique key and a second live registration under the same name croaks,
-like Erlang's C<register>; a name whose holder is gone is reusable. Registration is removed when the actor stops, dies,
-or is destroyed, so a dead actor never answers a lookup, and it is a strong reference - a *named* actor outlives every
-caller that drops its handle until it is stopped, because the name itself is the handle. A restart via C<respawn()> inherits the name, so a supervised actor keeps
+C<name =E<gt> $name>: registers the actor process-wide (Erlang's
+L<register|https://www.erlang.org/doc/system/design_principles.htm> table). C<Acme::Parataxis-E<gt>actor($name)> (or
+C<-E<gt>whereis($name)>) then returns this handle, or C<undef> for a name nobody holds. The name is a process-wide
+unique key and a second live registration under the same name croaks, like Erlang's C<register>; a name whose holder is
+gone is reusable. Registration is removed when the actor stops, dies, or is destroyed, so a dead actor never answers a
+lookup, and it is a strong reference - a *named* actor outlives every caller that drops its handle until it is stopped,
+because the name itself is the handle. A restart via C<respawn()> inherits the name, so a supervised actor keeps
 answering its registry key across restarts.
 
 =back
@@ -116,17 +117,17 @@ Why the actor died, or C<undef> while it is running (or if it stopped gracefully
 
 Returns a fresh, already-running actor with the same handler, mailbox capacity, and options (C<supervised> included,
 and C<name>, so the restarted actor keeps answering its registry key). The new actor owns a new mailbox, so asks still
-outstanding against this one are failed here rather than answered there. This is what a supervisor starts in place of
-a dead child; it is not a restart of this object, which is why C<supervisor-E<gt>child($name)> returns a different
-actor after a restart.
+outstanding against this one are failed here rather than answered there. This is what a supervisor starts in place of a
+dead child; it is not a restart of this object, which is why C<supervisor-E<gt>child($name)> returns a different actor
+after a restart.
 
 =head2 C<swap( $code )>
 
 Hot code swap: atomically replaces the handler for I<subsequent> messages. A message already being handled finishes
 with the old code; every message dispatched after C<swap> returns runs the new code, because the mailbox loop reads the
-handler fresh at each dispatch. It is a plain field swap, so it happens at the message boundary with no drain, stop,
-or restart of the actor - unlike C<respawn()>, which rebuilds the whole actor. Returns C<$self> for chaining. Croaks
-if C<$code> is not a code ref or if the actor is already done. This is the fire-at-will v1 from the roadmap: no
+handler fresh at each dispatch. It is a plain field swap, so it happens at the message boundary with no drain, stop, or
+restart of the actor - unlike C<respawn()>, which rebuilds the whole actor. Returns C<$self> for chaining. Croaks if
+C<$code> is not a code ref or if the actor is already done. This is the fire-at-will v1 from the roadmap: no
 Erlang-style validate-in-flight-messages choreography.
 
 =head2 C<name( )>

@@ -230,8 +230,8 @@ Takes any number of futures and returns a future that is ready as soon as **any 
 failure. Call it as `wait_any( $f1, $f2 )` or `Acme::Parataxis->wait_any( $f1, $f2 )`. An already-ready input
 settles it inline, and at least one input is required. The aggregate payload is a wholesale copy of the winner's: its
 result on success or its error on failure. The first input to settle wins; losers are untouched and keep running.
-`error` on the aggregate tells which way it went: `undef` means a winner produced a result, anything defined means the
-winner failed (and `await( $any )` croaks with that error):
+`error` on the aggregate tells which way it went: `undef` means a winner produced a result, anything defined means
+the winner failed (and `await( $any )` croaks with that error):
 
 ```perl
 async {
@@ -275,6 +275,14 @@ cancel the block early, in which case `Acme::Parataxis::Error::Cancelled` is thr
 fails fast without running `$code` at all. With no token, the deadline alone is used; a bound of `0` means no
 deadline.
 
+The deadline is tracked as a per-fiber scope: every `with_timeout` a fiber's execution is inside pushes an absolute
+bound, and each blocking wait enters with the _innermost, soonest_ bound governing while the outermost acts as a
+backstop. So nesting `with_timeout(20, ...)` around a block that itself uses `with_timeout(2000, ...)` aborts at
+~20ms, and an inner deadline that fires (and is caught) leaves the outer one still able to kill a re-park under the
+same outer bound. Two details keep this sound: a wait entered after its own deadline already passed fails fast with
+`Error::Timeout` rather than parking forever, and each fiber arms at most one deadline helper per bound - a re-park
+reuses the armed timer instead of stacking a second one.
+
 ```perl
 async {
     my $value = eval { with_timeout( 250, sub { $client->request } ) }
@@ -286,6 +294,34 @@ async {
         or die 'worker cancelled';
 };
 ```
+
+## `with_cancel( $code )`
+
+Runs `$code` as a cancellation _scope_ on the current fiber. While the block is active, every blocking wait it enters
+is interruptible by a single token - the scope token `with_cancel` returns - without threading that token into each
+primitive. Unlike `with_timeout`, no child fiber is spawned: the block runs on the calling fiber, so interior waits
+suspend only the normal way.
+
+```perl
+async {
+    my $tok = with_cancel( sub ($t) {
+        $ch->get;      # parks interruptibly
+        $sem->down;    # so does this one
+    } );
+    # normal exit: every interior wait was deregistered and $tok is now inert
+};
+```
+
+The scope registers the fiber for the block's whole duration, so cancelling `$tok` interrupts a wait parked right now
+and stamps the fiber so the _next_ wait entered inside the scope fails fast. Scopes nest LIFO and share the park with
+a `with_timeout` deadline or a `nursery` token; whichever fires first ends the wait and teardown drops the others'
+registrations.
+
+The return convention is context aware: the token alone in scalar or void context, or the token prepended to the
+block's value(s) in list context (`my ($tok, @vals) = with_cancel sub { ... }`). On failure the block's own error
+propagates unchanged (a real error wins over a concurrently arriving cancel); if the scope itself was cancelled by an
+outer token while the block still ran to completion, `Error::Cancelled` (or `Error::Timeout` for a deadline) is
+thrown at the scope boundary instead of the interrupt being swallowed.
 
 ## `Acme::Parataxis::CancellationToken`
 
@@ -301,9 +337,9 @@ deadline expires.
 - [`Acme::Parataxis::Error::Cancelled`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AError%3A%3ACancelled) - kind `'cancelled'`, thrown when a
 token fires.
 
-Both expose `message()` and `wait_reason()`; `wait_reason()` returns `[ reason, file, line, backtrace ]`
-describing the wait that was interrupted (see the `wait_reason` section). A fiber that dies while another fiber is
-awaiting it no longer kills the whole run: the error is delivered to the awaiting fiber's `await` call instead.
+Both expose `message()` and `wait_reason()`; `wait_reason()` returns `[ reason, file, line, backtrace ]` describing
+the wait that was interrupted (see the `wait_reason` section). A fiber that dies while another fiber is awaiting it no
+longer kills the whole run: the error is delivered to the awaiting fiber's `await` call instead.
 
 ## Bare `nursery( sub ($n) { ... } )`
 
@@ -326,9 +362,26 @@ On failure the aggregate croaks with [`Acme::Parataxis::Error::Nursery`](https:/
 `-`failures> lists every child's error (the real one plus the `Cancelled` unwinds of the siblings it cancelled) and
 `-`primary> is the first real failure. A block error is rethrown unchanged after the children are drained; a
 user-fibre token can cancel the whole group (call `-`token->cancel>), and cancellation propagates into nested waits
-and tokens ([Acme::Parataxis::with\_timeout](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3Awith_timeout) included) via the `_join`
-parent-interrupt branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery
-they were spawned into and the inner nursery's `_join` awaits them as long as they stay registered.
+and tokens ([Acme::Parataxis::with\_timeout](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3Awith_timeout) included) via the `_join` parent-interrupt
+branch. Children are not adopted by a nested nursery in the same block - they are owned by the nursery they were
+spawned into and the inner nursery's `_join` awaits them as long as they stay registered.
+
+# Monitoring
+
+## `Acme::Parataxis::Monitor`
+
+[`Acme::Parataxis::Monitor`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AMonitor) observes another fiber's death without owning it, like an
+Erlang monitor. `Monitor->new( $fiber )` (or `fid => $id`) returns a `Future`-like handle that resolves
+exactly once when the target exits - `undef` for a clean end, the death error for a crash. Watching an already-dead
+target fires immediately, and the monitor never delays the target's own reaping.
+
+```perl
+my $mon = Acme::Parataxis::Monitor->new($worker);
+my $err = $mon->await;    # undef, or the error the worker died with
+```
+
+See [Acme::Parataxis::Monitor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AMonitor) for `await`, `result`, `error`, `is_ready`, `is_done`, `target`, `fid`, and
+`on_ready`.
 
 # Scheduler Functions
 
@@ -344,6 +397,78 @@ Acme::Parataxis::run(sub {
     say 'The scheduler is running!';
 });
 ```
+
+`run()` also accepts a named-argument form: `run( code => $code, virtual => $bool, on_shutdown => $opt
+)`, in any option order. `virtual` switches every timer-based wait inside the run onto a virtual clock driven by the
+test - see ["Deterministic Mock Time"](#deterministic-mock-time) - and `on_shutdown` wires SIGINT/SIGTERM to a graceful drain - see ["Graceful
+Shutdown"](#graceful-shutdown).
+
+## Graceful Shutdown
+
+Passing `on_shutdown` to the outermost `run()` installs `SIGINT` and `SIGTERM` handlers for the run's lifetime (the
+previous handlers are restored when it ends). The first signal fires the run's shutdown token and interrupts every
+fiber the run created - the run's root fiber included - so they throw `Error::Cancelled`, unwind, and run their own
+cleanup (defers, `DESTROY` blocks, finally-style eval guards). Once everything has drained, `run()` returns the
+conventional interrupted status instead of rethrowing those cancellations: `130` for SIGINT, `143` for SIGTERM. A
+second signal restores the previous handlers and re-raises the signal, so the default disposition kills the process -
+the handler never blocks a second Ctrl+C.
+
+```perl
+my $status = Acme::Parataxis->run(
+    on_shutdown => 1,                 # handle one Ctrl+C / SIGTERM gracefully
+    code        => sub {
+        my $server = Acme::Parataxis->spawn( \&serve );
+        await( $server );
+    },
+);
+exit($status);
+```
+
+The option accepts one of three values:
+
+- a true value (`1`) - install the handlers, use the signal-derived status;
+- a code ref - additionally called on shutdown with the (already fired) token, so a process can flush logs or
+stop servers before `run()` reports the status;
+- an `Acme::Parataxis::CancellationToken` - use that token (and install the handlers anyway), so the shutdown
+can begin programmatically - a health port, a parent process, a test cancelling the token - as well as from a signal.
+
+A `run()` without `on_shutdown` leaves `%SIG` completely untouched, and a nested run (inside an already scheduled
+fiber) ignores the option - the global handler table belongs to the top-level process lifecycle.
+
+## Deterministic Mock Time
+
+All of the library's timed waits -- `await_sleep`, `with_timeout`, `select` deadlines, `Channel` wait bounds,
+`Ticker`, `RateLimiter`, and `Stream` timeout metadata -- normally run on the wall clock. For reproducible tests you
+can instead run a block under a virtual clock:
+
+```perl
+run( virtual => 1, code => sub {
+    my $start = time;
+    await_sleep(3_600_000);       # returns immediately; no real time passes
+    ok( (time - $start) < 1, 'the 1h sleep was virtual' );
+    is Acme::Parataxis->virtual_now, 3_600_000;   # in milliseconds
+});
+```
+
+While a virtual run is active:
+
+- `await_sleep` and every other timeout arms a virtual timer instead of a kernel timeout. Nothing is scheduled
+on the operating system, so a `3_600_000` ms sleep returns in microseconds.
+- The clock does not advance on its own. The run loop only fast-forwards to the earliest pending deadline when the
+scheduler is otherwise idle, so real work (and real I/O, which still blocks on the actual filehandles) always runs first.
+- The test drives time forward explicitly with `Acme::Parataxis-`advance($ms)>, which fires every virtual timer
+with a deadline up to (and including) the new time. Fibers woken by `advance()` are resumed on the next scheduler pass,
+so a deterministic test that advances and then wants to observe a wake chain should `yield` (or await the woken fiber)
+after calling `advance()`.
+- Timed waits consult the same clock through `Acme::Parataxis-`virtual\_now()> (milliseconds) and `Acme::Parataxis-`
+mock\_time()> (seconds), so `Ticker` ticks and `RateLimiter` credits all land on exact virtual boundaries.
+- A `Ticker` or I/O-driven `RateLimiter` re-arms its timer forever, so a virtual run with a live Ticker never
+becomes idle. Call `$ticker->stop` (or `$limiter->stop`) before the run body ends or the run will fast-forward
+indefinitely.
+
+Virtual state is scoped to the outermost `run( virtual => 1, ... )`: nested runs are ignored, the clock starts at
+zero for each run and is torn down when it finishes, and ordinary `run()` calls are completely unaffected. Calling
+`advance()` outside a virtual run croaks.
 
 ## `spawn( $code )`
 
@@ -392,19 +517,36 @@ fiber {
 
 ## Fiber cleanup with `defer`
 
-See the ["Fiber cleanup with `defer`"](https://metacpan.org/pod/Acme%3A%3AParataxis) section of the module docs. Perl's
-native `defer` (experimental, v5.36+) covers it for free: a `defer` written lexically inside a fiber body fires on
-every exit path - normal return, a `die`, or a cancellation interrupt cutting an in-flight wait - because fiber
-teardown *is* perl's scope exit.
+A fiber body that acquires a lock, opens a handle, or registers on a token wants it released on **every** exit path -
+normal return, a `die`, and cancellation alike. Perl's native `defer` (experimental, available since v5.36) provides
+this inside a fiber body for free, because a fiber's scope exit **is** its teardown: the `defer` fires when the fiber
+body's block ends, whether that is reached by `return`, by an exception unwinding through the park, or by a token
+interrupt / deadline cutting an in-flight wait. No library API is needed.
 
 ```perl
 fiber {
-    my $m = Acme::Parataxis::Sync::Mutex->new;
+    my $m  = Acme::Parataxis::Sync::Mutex->new;
     $m->lock;
-    defer { $m->unlock };   # LIFO, runs on every exit path
-    ...
+    defer { $m->unlock };          # LIFO, runs on every exit path
+    ... body ...
 };
 ```
+
+- `defer` blocks run **LIFO** (inner-most first), each exactly once, before the fiber's slot is released.
+- A `defer` that itself dies becomes the fiber's throw: if the body returned, the defer's death is what the
+fiber's `await`-er rethrows; if the body already died, it chains.
+- Cleanup works for run-level children, nursery children, and actors identically - it rides perl's scope exit,
+not any scheduler hook.
+
+Two footguns to keep in mind:
+
+- perl's `defer` is **block-scoped**, not fiber-attached. A `defer` written inside a nested block or a helper
+sub fires at **that** scope's exit (before the fiber ends). Write it lexically inside the fiber body itself, where the
+enclosing block is the body's whole lifetime.
+- It is an experimental feature: `use v5.40` alone is not enough; the code needs `use experimental
+'defer'` (or `use feature 'defer'`), and warnings re-enabled by other pragmata (e.g. `Test2::V1 -ipP`) must be
+suppressed with `no warnings 'experimental::defer'`. On perls older than 5.36 the `defer` keyword refuses to parse,
+so a `defer`-using fiber body is only portable to modern perls.
 
 ## Fiber-local storage
 
@@ -420,6 +562,10 @@ async {
     say $span->get;             # 'request-121'
 };
 ```
+
+A slot created with `inherit => 1` opts into trace propagation instead: the value it holds is copied from the
+spawning fiber into every child at spawn time (`fiber`, `async`, nursery children, actor mailbox fibers), as a
+shallow copy the child then owns - the natural home for a trace or span id that must ride along into nested work.
 
 Hooks fire in registration order, before the fiber itself resumes, from scheduling context. They must not block or park
 the fiber. If the fiber is never actually parked, the hook is silently dropped.
@@ -519,11 +665,10 @@ to exactly `rate` per second. Over any window no more than `rate x window + burs
 
 ## Software Transactional Memory
 
-[Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) is a versioned, mutable cell you transact on through
-`Acme::Parataxis->atomically( sub { ... } )` (also available as a plain `atomically { ... }` after importing
-it). Readers and writers are never locked and never ordered; instead, each transaction journals its reads and writes,
-and when it commits it checks that every TVar it read still holds its committed value before flushing its writes all
-at once:
+[Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) is a versioned, mutable cell you transact on through `Acme::Parataxis->atomically( sub {
+... } )` (also available as a plain `atomically { ... }` after importing it). Readers and writers are never locked
+and never ordered; instead, each transaction journals its reads and writes, and when it commits it checks that every
+TVar it read still holds its committed value before flushing its writes all at once:
 
 ```perl
 use Acme::Parataxis qw[async fiber await atomically retry];
@@ -549,12 +694,12 @@ async {
 };
 ```
 
-Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling
-back and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes
-another's partial state. `retry()` aborts the transaction and parks the fiber until any TVar it read changes, then
-re-runs it from the top, and nested `atomically` blocks join the enclosing transaction so their writes commit
-together. The block may run many times, so it must not have irreversible side effects - no printing, file I/O, or
-channel `put` inside a transaction (see [Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) for the full SIDE EFFECTS warning).
+Two transactions that conflict - say one moving A to B while another moves B to A - resolve by one of them rolling back
+and re-running, never by deadlocking, because commit is all-or-nothing and no transaction ever observes another's
+partial state. `retry()` aborts the transaction and parks the fiber until any TVar it read changes, then re-runs it
+from the top, and nested `atomically` blocks join the enclosing transaction so their writes commit together. The block
+may run many times, so it must not have irreversible side effects - no printing, file I/O, or channel `put` inside a
+transaction (see [Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) for the full SIDE EFFECTS warning).
 
 # Thread Pool Configuration
 
@@ -575,6 +720,26 @@ set_max_threads(4);
 ## `max_threads()`
 
 Returns the currently configured maximum thread pool size.
+
+## Background interpreters (spawn\_blocking)
+
+CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with
+`threads->create`) through `spawn_blocking()`, which returns an `Acme::Parataxis::Future` carrying the result.
+Because that machinery is the only part of this project that uses `threads.pm`, it ships in its own distribution so
+this library never loads `threads`, `threads::shared`, or `Thread::Queue`:
+
+```perl
+use Acme::Parataxis::Blocking qw[spawn_blocking];    # separate distribution
+
+my $f = spawn_blocking( sub { heavy_parse($blob) } );
+my $parsed = $f->await;    # fibers kept running while $blob was parsed
+```
+
+See [Acme::Parataxis::Blocking](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ABlocking) for the full contract: the copy-in copy-out snapshot rules, the
+`set_max_blocking_threads()` concurrency cap (default 4, `PARATAXIS_SB_THREADS` overrides), the ithreads requirement,
+the mock-clock croak under `run( virtual >=> 1 )`, and the `perl_clone` platform warning for affected perls
+(the `feature 'class'` `method DESTROY` trigger and the content-independent namespace trigger, which is why the
+in-tree guard classes are classic blessed packages).
 
 # Fiber Limits
 
@@ -675,11 +840,11 @@ is released and it can no longer be called.
 ## `$fiber->wait_reason()`
 
 While a fiber is suspended inside a blocking wait (`await_sleep`, `await`, `await_read`, a semaphore `down`, a
-`Signal->wait`, a Channel `get`/`put`, or a busy `wait` for a child), returns the record of how it parked:
-`[ $reason, $file, $line, $backtrace ]` where `$reason` is a short label, `$file`/`$line` are the caller's
-location that entered the wait, and `$backtrace` is an arrayref of `[ pkg, file, line, sub ]` user-side frames
-from just below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is
-disabled). Returns `undef` for a fiber that is running, finished, or merely cooperatively yielded.
+`Signal->wait`, a Channel `get`/`put`, or a busy `wait` for a child), returns the record of how it parked: `[
+$reason, $file, $line, $backtrace ]` where `$reason` is a short label, `$file`/`$line` are the caller's location
+that entered the wait, and `$backtrace` is an arrayref of `[ pkg, file, line, sub ]` user-side frames from just
+below the wait back to the fiber body (empty when the wait is reached straight from the body or capture is disabled).
+Returns `undef` for a fiber that is running, finished, or merely cooperatively yielded.
 
 ```perl
 my $r = $fiber->wait_reason;    # e.g. [ 'Semaphore down', 'worker.pl', 42, [...] ]
@@ -855,7 +1020,9 @@ A simple message queue that allows you to send and receive data. If the channel 
 readers block. Both ends can be used by as many fibers as you want concurrently.
 
 A channel of size `1` is a rendezvous point (no buffering: `put` waits for a matching `get`); to buffer one element
-use size `2`, and so on.
+use size `2`, and so on. Pass `timeout => $ms` to `new` for a per-channel default wait bound so a `get` or
+`put` that would park gives up with `Acme::Parataxis::Error::Timeout` instead of blocking forever; `select` honors
+it too when no explicit `timeout` is given.
 
 ```perl
 use Acme::Parataxis;
@@ -872,9 +1039,8 @@ async {
 ## Streams
 
 An [Acme::Parataxis::Stream](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AStream) is a chainable pipeline over bounded channels. Every stage is a factory: `map`,
-`filter`, `batch`, `batch_time`, and `throttle` each allocate a fresh bounded output channel, spawn one
-background fiber that loops the stage's input applying the operation, and hand back a new `Stream` wrapping the
-output:
+`filter`, `batch`, `batch_time`, and `throttle` each allocate a fresh bounded output channel, spawn one background
+fiber that loops the stage's input applying the operation, and hand back a new `Stream` wrapping the output:
 
 ```perl
 use Acme::Parataxis qw[fiber await_sleep];
@@ -894,23 +1060,22 @@ async {
 };
 ```
 
-Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that
-park propagates all the way upstream, so a slow `consume` throttles the raw producer instead of queueing unbounded
-memory. A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as `undef` from
-`get`, flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the
-source, so no stage can park forever on a source that quit and no orphan fibers are left behind. `batch_time` groups
-by deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
-`batch`/`batch_time` both emit a partial final batch on shutdown. Every stage parks through the ordinary channel
-wait machinery, so `with_timeout` and cancellation tokens interrupt a stage mid-loop cleanly. See
+Because the output channels are bounded, backpressure is free: a full channel parks the stage's producer, and that park
+propagates all the way upstream, so a slow `consume` throttles the raw producer instead of queueing unbounded memory.
+A stream ends when its source channel shuts down - each stage's fiber sees the shutdown as `undef` from `get`,
+flushes any partial work, shuts its own output down in turn, and the chain unwinds fiber-by-fiber back to the source,
+so no stage can park forever on a source that quit and no orphan fibers are left behind. `batch_time` groups by
+deadline (a get-with-deadline re-arms it so the batch fires even when no further items arrive) and
+`batch`/`batch_time` both emit a partial final batch on shutdown. Every stage parks through the ordinary channel wait
+machinery, so `with_timeout` and cancellation tokens interrupt a stage mid-loop cleanly. See
 [Acme::Parataxis::Stream](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AStream) for the full method list.
 
 ## Transparent Unblocking
 
-[Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat) is the gevent-style escape hatch for legacy, synchronous
-code: it overrides the blocking builtins so existing loops and modules become
-cooperative without rewrites. It is opt-in dark magic - nothing is overridden unless
-you ask for it, and even then only code _compiled after_ the call is affected; the
-overrides delegate to the raw `CORE::` builtin everywhere outside the scheduler.
+[Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat) is the gevent-style escape hatch for legacy, synchronous code: it overrides the blocking
+builtins so existing loops and modules become cooperative without rewrites. It is opt-in dark magic - nothing is
+overridden unless you ask for it, and even then only code _compiled after_ the call is affected; the overrides
+delegate to the raw `CORE::` builtin everywhere outside the scheduler.
 
 ```perl
 use v5.40;
@@ -928,12 +1093,11 @@ async {
 };
 ```
 
-`sleep` maps to `await_sleep` (millisecond-accurate, fractional seconds included);
-`read` and `sysread` park on `await_read` until the handle is readable, then
-perform one real read, falling back to the raw builtin for handles the readiness
-probe cannot watch (regular files answer instantly). `disable_transparent_unblocking`
-and `transparent_unblocking()` manage and report the install. Not covered:
-`select`, `alarm`, `time`, and `DBI` - see [Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat).
+`sleep` maps to `await_sleep` (millisecond-accurate, fractional seconds included); `read` and `sysread` park on
+`await_read` until the handle is readable, then perform one real read, falling back to the raw builtin for handles the
+readiness probe cannot watch (regular files answer instantly). `disable_transparent_unblocking` and
+`transparent_unblocking()` manage and report the install. Not covered: `select`, `alarm`, `time`, and `DBI` - see
+[Acme::Parataxis::Compat](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ACompat).
 
 ## Signals
 
@@ -996,6 +1160,14 @@ Because the mailbox is a bounded channel, slow handlers provide backpressure to 
 and the actor keeps going; spawn it with `supervised => 1` and the die kills the actor instead, which is what the
 supervisor below restarts.
 
+Actors can be named and hot-swapped. `spawn( ..., name =` $name )> registers the actor process-wide (Erlang's
+`register` table): `Acme::Parataxis->actor($name)` / `->whereis($name)` returns the handle, or `undef` for
+a name nobody holds, and a second live registration croaks. The name is released when the actor stops or dies, and it
+is a strong reference, so a named actor lives until it is stopped even if every caller drops its handle - the name is
+the handle. `$actor->swap( sub ($self, $msg) { ... } )` swaps the handler for the messages that arrive after it,
+atomically at the next message boundary, with no drain or restart: an in-flight message finishes with the old code. See
+[Acme::Parataxis::Actor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AActor).
+
 ## Supervisors
 
 An [Acme::Parataxis::Supervisor](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ASupervisor) runs a set of actors (or nested supervisors) and restarts whichever ones die, OTP
@@ -1031,9 +1203,9 @@ resumed. Supervisors supervise supervisors: `supervise` accepts an actor, a nest
 
 ## Diagnostics
 
-Every fiber that parks in a wait records where and why (wait\_reason), and `dump_fibers` exposes it: each live
-fiber with its state (`WAITING` / `READY` / `RUNNING` / `RUNNABLE`) and, when parked, the wait reason together with
-the source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
+Every fiber that parks in a wait records where and why (wait\_reason), and `dump_fibers` exposes it: each live fiber
+with its state (`WAITING` / `READY` / `RUNNING` / `RUNNABLE`) and, when parked, the wait reason together with the
+source site where it yielded and a short callchain back to the fiber body (park-site backtraces).
 
 ```perl
 my $fibers = Acme::Parataxis->dump_fibers;       # data only
@@ -1042,12 +1214,12 @@ Acme::Parataxis->dump_fibers( \*STDERR );        # also print a human-readable r
 
 `dump_fibers()` returns an arrayref of `{ fid, state, reason => [ reason, file, line, backtrace ] }` records
 (`backtrace` is the arrayref of `[ pkg, file, line, sub ]` frames described under `wait_reason`; `[]` when the
-capture is off or there is no user frame below the site). It is safe to call at any time, including top level;
-outside a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no
-runnable work and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its
-reason, site, and chain back to user code. `backtrace_depth` (class method, also exported) sets and reports the
-capture cap: default 6 frames, `backtrace_depth(0)` disables the capture entirely for a zero-cost diag path; the
-capture itself is roughly a microsecond per park (measured against the spawn/await micro-benchmarks).
+capture is off or there is no user frame below the site). It is safe to call at any time, including top level; outside
+a run it reports fibers leaked by an earlier deadlocked run. The scheduler's fatal deadlock message ("no runnable work
+and no outstanding jobs") is the same report, listing every parked fiber of the deadlocked run with its reason, site,
+and chain back to user code. `backtrace_depth` (class method, also exported) sets and reports the capture cap: default
+6 frames, `backtrace_depth(0)` disables the capture entirely for a zero-cost diag path; the capture itself is roughly
+a microsecond per park (measured against the spawn/await micro-benchmarks).
 
 # Best Practices & Gotchas
 
