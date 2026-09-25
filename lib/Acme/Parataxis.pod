@@ -486,6 +486,48 @@ completes, and is cleared afterwards.
         await_sleep(500);
     };
 
+=head2 Fiber cleanup with C<defer>
+
+A fiber body that acquires a lock, opens a handle, or registers on a token wants it released on B<every> exit path -
+normal return, a C<die>, and cancellation alike. Perl's native C<defer> (experimental, available since v5.36) provides
+this inside a fiber body for free, because a fiber's scope exit B<is> its teardown: the C<defer> fires when the fiber
+body's block ends, whether that is reached by C<return>, by an exception unwinding through the park, or by a token
+interrupt / deadline cutting an in-flight wait. No library API is needed.
+
+    fiber {
+        my $m  = Acme::Parataxis::Sync::Mutex->new;
+        $m->lock;
+        defer { $m->unlock };          # LIFO, runs on every exit path
+        ... body ...
+    };
+
+=over 4
+
+=item * C<defer> blocks run B<LIFO> (inner-most first), each exactly once, before the fiber's slot is released.
+
+=item * A C<defer> that itself dies becomes the fiber's throw: if the body returned, the defer's death is what the
+fiber's C<await>-er rethrows; if the body already died, it chains.
+
+=item * Cleanup works for run-level children, nursery children, and actors identically - it rides perl's scope exit,
+not any scheduler hook.
+
+=back
+
+Two footguns to keep in mind:
+
+=over 4
+
+=item * perl's C<defer> is B<block-scoped>, not fiber-attached. A C<defer> written inside a nested block or a helper
+sub fires at B<that> scope's exit (before the fiber ends). Write it lexically inside the fiber body itself, where the
+enclosing block is the body's whole lifetime.
+
+=item * It is an experimental feature: C<use v5.40> alone is not enough; the code needs C<use experimental
+'defer'> (or C<use feature 'defer'>), and warnings re-enabled by other pragmata (e.g. C<Test2::V1 -ipP>) must be
+suppressed with C<no warnings 'experimental::defer'>. On perls older than 5.36 the C<defer> keyword refuses to parse,
+so a C<defer>-using fiber body is only portable to modern perls.
+
+=back
+
 =head2 Fiber-local storage
 
 See L<Acme::Parataxis::Local>. A C<Local> object is one per-fiber slot: each fiber reads and writes its own copy,

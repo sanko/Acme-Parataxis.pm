@@ -390,6 +390,22 @@ fiber {
 };
 ```
 
+## Fiber cleanup with `defer`
+
+See the ["Fiber cleanup with `defer`"](https://metacpan.org/pod/Acme%3A%3AParataxis) section of the module docs. Perl's
+native `defer` (experimental, v5.36+) covers it for free: a `defer` written lexically inside a fiber body fires on
+every exit path - normal return, a `die`, or a cancellation interrupt cutting an in-flight wait - because fiber
+teardown *is* perl's scope exit.
+
+```perl
+fiber {
+    my $m = Acme::Parataxis::Sync::Mutex->new;
+    $m->lock;
+    defer { $m->unlock };   # LIFO, runs on every exit path
+    ...
+};
+```
+
 ## Fiber-local storage
 
 See [Acme::Parataxis::Local](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ALocal). A `Local` object is one per-fiber slot: each fiber reads and writes its own copy,

@@ -9,7 +9,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 11** - Future combinators `wait_all` / `wait_any`
 - [x] **Card 12** - `pmap` (bounded-pool parallel map)
 - [x] **Card 13** - cancellation scopes (`with_cancel`)
-- [ ] **Card 14** - `defer` (run cleanup on every fiber exit)
+- [x] **Card 14** - `defer` (run cleanup on every fiber exit) - *shipped via perl's native `defer` keyword (v5.36+), no library code; t/063*
 - [x] **Card 15** - monitor & linked death
 - [x] **Card 16** - actor hot-code swap + named registry
 - [ ] **Card 17** - `with_timeout` re-entrancy polish
@@ -128,27 +128,24 @@ my $tok = Acme::Parataxis::with_cancel( sub {
 
 ### Card 14 - `defer` (run cleanup on every fiber exit)
 
-**Source**: Backlog ("like Go's `defer` for fiber exit paths"). **Status**: API designed; needs a teardown slot.
-
-A fiber body that allocates a lock, a token registration, or a file handle needs it released on *every* exit - return or throw, normal or cancelled.
+**Source**: Backlog ("like Go's `defer` for fiber exit paths"). **Status**: SHIPPED - inherits perl's native `defer` keyword (v5.36+); no library code needed. t/063_defer.t locks the behavior.
 
 ```perl
 fiber {
     my $m = Sync->lock;
-    defer { $m->unlock };
-    ... body ...     # unlock runs whether this returns or dies
+    defer { $m->unlock };    # runs whether the body returns, dies, or is cancelled
+    ... body ...
 };
 ```
 
 **Semantics / decisions**:
 
-- `defer { ... }` records a block on the **current fiber**, run when the fiber exits: after the body returns *and* when the body dies (including `Error::Cancelled` from a token). Blocks run **LIFO** (inner-most first), each in the fiber, on the exit path before the coroutine is reaped.
-- A `defer` block that itself dies is folded into the exiting error: if the body already died, the first `defer` death chains; if the body returned, the first `defer` death is what the fiber throws to its `await`-er.
-- Owning the exit path is the tricky part, shared with `cleanup()` at the C level: the fiber must run pending `defer`s from *both* the normal-return path *and* the rethrow path after `eval`/catch inside the body, before the coro is destroyed. This is a fiber-struct field (an arrayref pushed by `defer`), drained in the scheduler's fiber-finish code.
-- `run { defer {...} ... }` and nursery children inherit the guarantee for free because it rides the universal fiber teardown.
-- A `defer` named the same as fiber-exit cleanup must not conflict with Actor `stop`/`on_death` or Supervisor drain - it is strictly per-fiber, LIFO, always-ran.
+- **Needs a library `defer`? No.** A `defer` written *lexically inside the fiber body* fires exactly when the fiber's scope exits - on the normal return path, on a `die`, and on *cancellation* (a token interrupt or `with_timeout` deadline unwinds the parked fiber's scope, running the `defer` on the way out), before the coroutine is reaped. Verified by t/063 on perl 5.40+ / 5.42.
+- LIFO: later `defer`s run first (inner-most first), each exactly once. A `defer` that itself dies becomes the fiber's throw to its `await`-er (or chains onto the body error). Cleanup of run-level children and nursery children is covered for free, since it rides perl's own scope exit.
+- **Footguns to document (not "fiber-attached")**: perl's `defer` is *block-scoped*, not *fiber-scoped*. A `defer` inside a nested block or helper sub fires at *that* scope's exit, well before the fiber ends; it cannot register cleanup against the fiber from code that does not lexically own the body. And it is an experimental feature (`use experimental qw[defer]` required; `Test2::V1 -ipP` re-enables the warning, so the test also `no warnings 'experimental::defer'`).
+- This is strictly per-block cleanup, not Actor `stop`/`on_death` or Supervisor drain, and needs no scheduler or C involvement - the fiber teardown path is perl's own scope exit.
 
-**Acceptance** (new `t/063_defer.t`): LIFO order; runs on normal return; runs on die; runs on cancellation; a dying `defer` folds into the body error / becomes the error after a normal body; a single `defer` registered twice runs twice; `run`-level and nursery-child fibers both run them; zero leaked-fiber reports in `dump_fibers`.
+**Acceptance** (new `t/063_defer.t`, green on MSWin32 + Linux): LIFO order; runs on normal return; runs on die; runs on cancellation (token) and deadline (`with_timeout`); a dying `defer` folds into the body error; a `defer` statement being lexically doubled runs twice; run-level fibers and nursery children both run them; the fiber slot is released (cleanup keeps nothing live).
 
 ### Card 15 - monitor & linked death (observe a fiber's death without owning it)
 
