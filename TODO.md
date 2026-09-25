@@ -12,7 +12,7 @@ This file holds the running plan for the next chapter. Each entry below was eith
 - [x] **Card 14** - `defer` (run cleanup on every fiber exit) - *shipped via perl's native `defer` keyword (v5.36+), no library code; t/063*
 - [x] **Card 15** - monitor & linked death
 - [x] **Card 16** - actor hot-code swap + named registry
-- [ ] **Card 17** - `with_timeout` re-entrancy polish
+- [x] **Card 17** - `with_timeout` re-entrancy polish
 - [x] **Card 18** - `Channel->new( timeout => $ms )`
 - [x] **Card 19** - deterministic mock time
 - [x] **Card 20** - `spawn_blocking` (relocated to the separate Acme-Parataxis-Blocking distribution)
@@ -190,7 +190,7 @@ $actor->swap( sub ($self, $msg) { ...new handler... } );
 
 ### Card 17 - `with_timeout` re-entrancy polish
 
-**Source**: Backlog. **Status**: mostly defined by t/042; refines it.
+**Source**: Backlog. **Status**: done - ships with the per-fiber deadline-stack redesign in `with_timeout`/`_park` and the t/042 acceptance tests below.
 
 Nested `with_timeout` and an inner wait that re-parks after an interrupt must keep one deadline, not stack timers, and the outer bound must keep applying after the inner one fires.
 
@@ -203,9 +203,12 @@ with_timeout( 2000, sub {
 
 **Semantics / decisions**:
 
-- A wait that re-parks after an interrupt (`_resume_hooks` repark) must re-apply the *same* enclosing deadlines - the current path already re-arms the shared deadline token, so the polish is: **derive each new park's effective deadline from the enclosing `with_timeout`s**, honored in order (innermost wins; the outermost is the backstop), with no timer armed twice for the same bound.
+- `with_timeout` now pushes an absolute deadline scope on the running fiber; every `_park` inside its block derives the effective bound as the innermost/soonest scope (the outermost remains the backstop) and enforces it two ways:
+  - a wait entered after its own bound already passed **fails fast** with `Error::Timeout` at the park entry (this closes the deadlock where a caught timeout was followed by a re-park under the same fired deadline - nothing was left to interrupt it);
+  - **exactly one deadline helper** is armed per fiber per bound (tracked against the absolute bound on the fiber), so a re-park reuses the armed timer instead of stacking a second one - observed directly via `get_outstanding_jobs()` staying at 1. The helper is a fiber that sleeps the remaining time and cancels the bound's token, interrupting the parked fiber through the regular `_interrupt` path and recalling its jobs; it works on both the wall clock and the virtual clock (the C job table has one virtual-timer slot per fiber, so the helper-fiber approach was chosen over arming the virtual timer directly). The old standalone `fiber { await_sleep($ms); $deadline->cancel }` timer in `with_timeout` is gone.
+- An inherited bound (an enclosing ancestor's `with_timeout`) never arms a helper here - that ancestor's own await-park enforces it - but its deadline still participates in fail-fast. The reap re-park passed `$nodl` opts out of both, since its only job is to observe a dying child.
 - Interaction with **Card 13** (cancel scopes): the scope token and the deadline coexist on one park; whichever fires first tears the wait down and the other's registration is dropped.
-- Reference: t/042 (`with_timeout_repark`) already locks the repark shape; this card widens it to *nested* timeouts and out-of-order re-arms. Purely a `_park`/`with_timeout` adjustment, no C.
+- Purely a `_park`/`with_timeout` adjustment, no C.
 
 **Acceptance** (extend `t/042`): nested deadlines honored innermost-first; after the inner fires, the outer bound still kills the re-parked wait; a re-park never arms a second timer for the same bound (observe `get_outstanding_jobs()`); interplay with a cancel scope's token.
 

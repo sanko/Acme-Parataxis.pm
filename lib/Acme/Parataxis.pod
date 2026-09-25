@@ -254,6 +254,14 @@ cancel the block early, in which case C<Acme::Parataxis::Error::Cancelled> is th
 fails fast without running C<$code> at all. With no token, the deadline alone is used; a bound of C<0> means no
 deadline.
 
+The deadline is tracked as a per-fiber scope: every C<with_timeout> a fiber's execution is inside pushes an absolute
+bound, and each blocking wait enters with the I<innermost, soonest> bound governing while the outermost acts as a
+backstop. So nesting C<with_timeout(20, ...)> around a block that itself uses C<with_timeout(2000, ...)> aborts at
+~20ms, and an inner deadline that fires (and is caught) leaves the outer one still able to kill a re-park under the
+same outer bound. Two details keep this sound: a wait entered after its own deadline already passed fails fast with
+C<Error::Timeout> rather than parking forever, and each fiber arms at most one deadline helper per bound - a re-park
+reuses the armed timer instead of stacking a second one.
+
     async {
         my $value = eval { with_timeout( 250, sub { $client->request } ) }
             or die 'request timed out';

@@ -56,9 +56,11 @@ package Acme::Parataxis v0.1.1 {
         F_LAST_STATUS   => 8,
         F_PRIORITY      => 9,
         F_WAIT_REASON   => 10,
-        F_WAKE_HOOKS    => 11,
-        F_INTERRUPT     => 12,
-        F_CANCEL_SCOPES => 13
+        F_WAKE_HOOKS        => 11,
+        F_INTERRUPT         => 12,
+        F_CANCEL_SCOPES     => 13,
+        F_DEADLINE_SCOPES   => 14,
+        F_DEADLINE_ARMED    => 15
     };
 
     # Scheduler run queue. Kept sorted by descending priority (stable for equal priorities, so a group of same-priority fibers stays FIFO).
@@ -323,7 +325,7 @@ package Acme::Parataxis v0.1.1 {
         return $BACKTRACE_DEPTH;
     }
 
-    sub _park ( $reason, $level = 1, $dereg = undef ) {
+    sub _park ( $reason, $level = 1, $dereg = undef, $nodl = 0 ) {
         my $fid = Acme::Parataxis->current_fid;
         croak '_park() must be called from inside a scheduled fiber' if $fid < 0;
         my $fiber = Acme::Parataxis->by_id($fid);
@@ -359,6 +361,59 @@ package Acme::Parataxis v0.1.1 {
                 if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
                 $dereg->() if $dereg;    # this park's waiter entry (pushed before _park) is stale: remove it too
                 die Acme::Parataxis::Error::Cancelled->new( wait_reason => [ 'cancel', $pfile, $pline ] );
+            }
+        }
+
+        # Card 17: enclosing with_timeout deadlines bound this park. Every with_timeout whose execution this fiber is
+        # inside pushed an absolute deadline (in ms) onto F_DEADLINE_SCOPES; the innermost/soonest one wins as the
+        # effective bound and the outermost is the backstop. Three consequences, in order:
+        #   (a) an already-passed effective bound makes a fresh wait fail fast with Error::Timeout instead of parking
+        #       forever - without this, a caught Timeout followed by a re-park under the same fired deadline deadlocked
+        #       (nothing was left to interrupt the wait);
+        #   (b) exactly one deadline helper is armed per fiber for its effective bound and reused across re-parks
+        #       (F_DEADLINE_ARMED), so a re-park never stacks a second timer for the same bound; the helper cancels the
+        #       bound's token, which interrupts the registered fiber via the usual _interrupt path and recalls its jobs;
+        #   (c) a helper is only armed for a bound the fiber itself owns (own => 1). An *inherited* bound (an enclosing
+        #       ancestor's with_timeout, whose token this fiber is not registered on) is always enforced by that
+        #       ancestor's own await-park, so arming it here would be redundant - though its absolute deadline still
+        #       participates in (a), so an inherited scope whose time has already come fails fast too.
+        # $nodl (now the reap re-park and other transient non-user waits) opts out: a wait whose only job is to reap a
+        # dying child must not fail fast nor arm, since it must linger until the child's death is observed.
+        if ( !$nodl && $fiber->[F_DEADLINE_SCOPES] ) {
+            my $eff;
+            for my $sc ( @{ $fiber->[F_DEADLINE_SCOPES] } ) {
+                next unless defined $sc->{abs};
+                $eff = $sc if !defined $eff || $sc->{abs} < $eff->{abs};
+            }
+            if ( defined $eff ) {
+                my $now  = _now_ms();
+                my $left = $eff->{abs} - $now;
+                if ( $left <= 0 ) {
+                    my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
+                    delete $PARKED{$fid};
+                    if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
+                    $dereg->() if $dereg;    # as above: this park's own waiter entry is stale too
+                    warn "PARATAXIS_TRACE park DEADLINE fail-fast fid=$fid reason=$reason abs=" .
+                        $eff->{abs} . " now=$now\n" if $ENV{PARATAXIS_TRACE};
+                    die Acme::Parataxis::Error::Timeout->new( wait_reason => [ 'timeout', $pfile, $pline ] );
+                }
+                if ( $eff->{own} ) {
+                    my $already = $fiber->[F_DEADLINE_ARMED];
+                    if ( defined $already && $already == $eff->{abs} ) {
+                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE reuse abs=%.0f (already armed)\n", ( time - $^T ) * 1000,
+                            $fid, $eff->{abs} if $ENV{PARATAXIS_TRACE};
+                    }
+                    else {
+                        my $tok = $eff->{tok};
+                        warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d park DEADLINE arm abs=%.0f left=%.0f was=%s\n", ( time - $^T ) * 1000,
+                            $fid, $eff->{abs}, $left, defined $already ? $already : 'undef' if $ENV{PARATAXIS_TRACE};
+                        fiber {
+                            $tok->register;
+                            eval { await_sleep($left); $tok->cancel; 1 };
+                        };
+                        $fiber->[F_DEADLINE_ARMED] = $eff->{abs};
+                    }
+                }
             }
         }
         my ( $file, $line ) = ( caller($level) )[ 1, 2 ];
@@ -494,9 +549,17 @@ package Acme::Parataxis v0.1.1 {
     # ->wait, semaphore/signal/channel ops) suspend only the block's fiber. When a token fires, the child's parked wait
     # is interrupted at its park re-entry and the child unwinds (unregistering from the tokens as it goes);
     # with_timeout rethrows the resulting error (::Timeout or ::Cancelled) in this fiber, so it can be caught with
-    # eval/try. The deadline timer registers on its own token, so the moment the block finishes (or is itself
-    # interrupted) teardown recalls the timer's armed sleep and the worker is freed instead of staying occupied for
-    # the whole bound; the timer is not armed at all when the block finishes inline (never parks) or when $ms is 0.
+    # eval/try.
+    #
+    # Card 17: the deadline is enforced per-park by _park from a per-fiber scope stack (F_DEADLINE_SCOPES). This
+    # child pushes its bound onto that stack (inheriting the enclosing with_timeouts of the spawning fiber, so a
+    # nested block's parks are bounded by the whole chain, innermost/soonest first and the outermost as the backstop)
+    # and _park derives the effective bound, fails fast when it has already passed (a caught Timeout followed by a
+    # re-park under the same fired deadline throws again instead of deadlocking), and arms exactly one deadline helper
+    # per fiber for its bound - reused across re-parks, so no second timer is ever stacked for the same bound. When
+    # the block finishes (or is itself interrupted) teardown's token cancel recalls the helper's armed sleep and the
+    # worker is freed instead of staying occupied for the whole bound; no helper is armed at all when the block never
+    # parks or when $ms is 0.
     sub with_timeout {
         my $o = _arg_offset( $_[0] );
         $o++ if $o == 0 && !defined $_[0];
@@ -520,13 +583,28 @@ package Acme::Parataxis v0.1.1 {
         state $have_token = do { require Acme::Parataxis::CancellationToken; 1; };
         my $deadline = Acme::Parataxis::CancellationToken->new( kind => 'timeout' );
         $tok = $deadline unless $tok;       # no explicit token: the deadline alone governs the block
+
+        # The absolute (ms-clock) bound this block's parks must respect, and a shallow copy of the spawning fiber's
+        # enclosing scopes to seed the child's stack with (marked as inherited so the child never arms a helper for a
+        # token it is not registered on - the owning ancestor enforces those).
+        my $scope_abs = $ms > 0 ? _now_ms() + $ms : undef;
+        my $inherited = do {
+            my $pfid = Acme::Parataxis->current_fid;
+            my $pf   = $pfid >= 0 ? Acme::Parataxis->by_id($pfid) : undef;
+            my $stk  = $pf && $pf->[F_DEADLINE_SCOPES] ? $pf->[F_DEADLINE_SCOPES] : undef;
+            $stk ? [ map { { %$_, own => 0 } } @$stk ] : [];
+        };
         my $child = fiber {
+            my $cf = Acme::Parataxis->by_id( Acme::Parataxis->current_fid );
+            $cf->[F_DEADLINE_SCOPES] = defined $scope_abs ? [ @$inherited, { abs => $scope_abs, tok => $deadline, own => 1 } ]
+                                                          : $inherited;
             $deadline->register;
             $tok->register if $tok ne $deadline;
             my $val = eval { $code->() };
             my $err = $@;
             $deadline->unregister;
             $tok->unregister if $tok ne $deadline;
+            pop @{ $cf->[F_DEADLINE_SCOPES] } if defined $scope_abs;    # leave the stack for any enclosing scope
             die $err         if $err;                # the ::Timeout/::Cancelled throw (or any real error) unwinds out of the child
             return $val;
         };
@@ -536,17 +614,6 @@ package Acme::Parataxis v0.1.1 {
         if ( $child->is_done ) {
             die $child->error if defined $child->error;
             return $child->result;
-        }
-        if ( $ms > 0 && !$tok->cancelled ) {
-
-            # Deadline timer. Registering this fiber on the deadline token lets teardown's $deadline->cancel interrupt it
-            # and recall its armed sleep job immediately (the C recall broadcasts the queue condvar), so an abandoned
-            # block no longer leaves a worker sleeping out the full bound. The eval swallows the ::Timeout the interrupt
-            # throws at the timer's park re-entry, so the timer completes normally and never unwinds the run.
-            fiber {
-                $deadline->register;
-                eval { await_sleep($ms); $deadline->cancel };
-            };
         }
         my $rv;
         my $ok  = eval { $rv = $child->await; 1 };
@@ -566,10 +633,10 @@ package Acme::Parataxis v0.1.1 {
 
         # The child is final, so nothing else may keep waiting under these tokens. Even if *this* fiber was just
         # cancelled out from under the await (an enclosing nursery/with_timeout interrupted us, or a user token fired):
-        # cancel the deadline now so a still-registered grandchild (a nested block, our own deadline timer) is itself
-        # interrupted instead of outliving its parent and running to completion. The recall now wakes the worker
-        # immediately, so the abandoned sleep jobs abort in sub-millisecond time and no live work continues past its
-        # parent.
+        # cancel the deadline now so a still-registered grandchild (a nested block, or the deadline helper _park armed
+        # for our bound) is itself interrupted instead of outliving its parent and running to completion. The recall
+        # now wakes the helper immediately, so its abandoned sleep job aborts in sub-millisecond time and no live work
+        # continues past its parent.
         # A grandchild woken this way dies observer-gated (its parent's await had registered _wake_waiter on it), so it
         # unwinds silently rather than killing the run.
         $deadline->cancel;
@@ -585,10 +652,11 @@ package Acme::Parataxis v0.1.1 {
             # frees $child. Freeing the child mid-park no longer crashes (a C-level coroutine-lifecycle fix), so this
             # branch is no longer load-bearing for safety - it is kept so an abandoned child dies by unwinding rather
             # than being yanked. The interrupt marker on this fiber was consumed by the throwing await, so returning
-            # from this park (rather than throwing again) is certain.
+            # from this park (rather than throwing again) is certain. $nodl is set: this is a transient reap wait, not
+            # a user wait, so it must neither fail fast on an already-passed deadline nor arm a deadline helper.
             my $fid = Acme::Parataxis->current_fid;
             $child->on_ready( sub { Acme::Parataxis::_scheduler_enqueue_by_id($fid) } );
-            Acme::Parataxis::_park('fiber await');
+            Acme::Parataxis::_park( 'fiber await', 1, undef, 1 );
             $child->is_done;    # reap the coroutine now that its death has been observed
         }
         die $err unless $ok;

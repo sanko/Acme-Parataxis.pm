@@ -1,6 +1,9 @@
 use v5.40;
 use blib;
-use Acme::Parataxis qw[async nursery await_sleep with_timeout];
+use Time::HiRes     qw[time];
+use Acme::Parataxis qw[async fiber nursery await_sleep with_timeout];
+use Acme::Parataxis::Channel;
+use Acme::Parataxis::CancellationToken;
 use Acme::Parataxis::Nursery;
 use Test2::V1 -ipP;
 $|++;
@@ -88,6 +91,107 @@ subtest 'the scheduler is clean afterwards: a later with_timeout runs normally' 
         };
     };
     is $second, 'still-works', 'with_timeout works after a re-park teardown';
+};
+subtest 'Card 17 (A): innermost deadline wins, the outermost acts as backstop' => sub {
+    my ( $err, $elapsed );
+    my $ch = Acme::Parataxis::Channel->new;
+    async {
+        my $t0 = time;
+        eval { with_timeout( 20, sub { with_timeout( 2000, sub { $ch->get } ) } ) };
+        $err     = $@;
+        $elapsed = ( time - $t0 ) * 1000;
+    };
+    ok ref($err) && $err->isa('Acme::Parataxis::Error::Timeout'), 'the outer 20ms bound aborts the inner 2000ms bound';
+    ok $elapsed < 1000, "aborted by the outer bound at ${elapsed}ms, not left to the inner bound";
+};
+subtest 'Card 17 (B): the outer deadline still kills a re-park after the inner fires' => sub {
+    my ( $inner_at, $inner_err, $repark_at, $repark_err );
+    my $ch = Acme::Parataxis::Channel->new;
+    async {
+        with_timeout(
+            300,
+            sub {
+                my $t0 = time;
+                eval { with_timeout( 30, sub { $ch->get } ) };
+                $inner_err = $@;
+                $inner_at  = ( time - $t0 ) * 1000;
+                my $t1 = time;
+                eval { $ch->get };
+                $repark_err = $@;
+                $repark_at  = ( time - $t1 ) * 1000;
+            }
+        );
+    };
+    ok ref($inner_err) && $inner_err->isa('Acme::Parataxis::Error::Timeout'), 'the inner deadline fires first';
+    ok ref($repark_err) && $repark_err->isa('Acme::Parataxis::Error::Timeout'), 'the outer deadline kills the re-park too';
+    ok $repark_at < 2000, "re-park lost at ${repark_at}ms under the 300ms backstop, it did not hang";
+};
+subtest 'Card 17 (D): re-parking after the deadline fired fails fast instead of deadlocking' => sub {
+    my ( $e1, $e2, $elapsed );
+    my $ch = Acme::Parataxis::Channel->new;
+    async {
+        with_timeout(
+            50,
+            sub {
+                eval { $ch->get };
+                $e1 = $@;
+                my $t1 = time;
+                eval { $ch->get };
+                $e2 = $@;
+                $elapsed = ( time - $t1 ) * 1000;
+            }
+        );
+    };
+    ok( $e1 && ref($e1) && $e1->isa('Acme::Parataxis::Error::Timeout'), 'the first park timed out' );
+    ok( $e2 && ref($e2) && $e2->isa('Acme::Parataxis::Error::Timeout'), 'the re-park under the fired deadline failed fast with ::Timeout (no deadlock)' );
+    ok $elapsed < 500, "re-park failed fast at ${elapsed}ms, it did not wait";
+};
+subtest 'Card 17 (C): a re-park reuses the armed timer instead of arming a second one' => sub {
+    my ( $first_err, $repark_err, $repark_at, $jobs );
+    my $ch = Acme::Parataxis::Channel->new;
+    async {
+        my $tok = Acme::Parataxis::CancellationToken->new;
+        fiber { await_sleep( 20 ); $tok->cancel };
+        fiber {
+            with_timeout(
+                700,
+                $tok,
+                sub {
+                    eval { $ch->get };
+                    $first_err  = $@;
+                    my $t0      = time;
+                    eval { $ch->get };
+                    $repark_err = $@;
+                    $repark_at  = ( time - $t0 ) * 1000;
+                }
+            );
+        };
+        await_sleep( 40 );
+        $jobs = Acme::Parataxis::get_outstanding_jobs();
+        await_sleep( 700 );
+    };
+    ok( $first_err && ref($first_err) && $first_err->isa('Acme::Parataxis::Error::Cancelled'), 'the cancel token tore the first park' );
+    is $jobs, 1, 'only the original deadline helper is armed: the re-park did not stack a second timer for the same bound';
+    ok( $repark_err && ref($repark_err) && $repark_err->isa('Acme::Parataxis::Error::Timeout'), 'the re-park was served by the reused helper (::Timeout), so it did not deadlock' );
+    ok $repark_at < 5000 && $repark_at > 400, "re-park resolved at ${repark_at}ms - by the ~700ms deadline helper, not instantly";
+};
+subtest 'Card 17 (E): a cancel scope and a with_timeout deadline coexist on one park' => sub {
+    my ( $err, $done );
+    async {
+        my $ch  = Acme::Parataxis::Channel->new;
+        my $tok = Acme::Parataxis::CancellationToken->new;
+        fiber {
+            $tok->register;
+            eval { with_timeout( 2000, sub { $ch->get } ) };
+            $err  = $@;
+            $done = 1;
+        };
+        await_sleep( 20 );
+        $tok->cancel;
+        await_sleep( 30 );
+    };
+    ok $done, 'the park settled';
+    ok( $err && ref($err) && $err->isa('Acme::Parataxis::Error::Cancelled'), 'the cancel scope tore the deadline-bound park' );
 };
 #
 done_testing;
