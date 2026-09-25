@@ -136,6 +136,8 @@ sub wait_for {
 
 sub spawn_child {
     my ($body) = @_;
+    $ENV{PERL_BADLANG} = 0;    # breaks a broken-locale perl (Haiku's SIGINT leg) no longer spams "Setting locale failed."
+                               # startup warnings into the drained pipe, which would break the exact-4-lines assertion
     pipe my ( $r, $w ) or die "pipe: $!";
     my $pid = fork();
     die "fork: $!" unless defined $pid;
