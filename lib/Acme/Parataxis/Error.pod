@@ -37,8 +37,8 @@ Telling a cancellation apart from a crash is the point of the base class:
 
 Parataxis raises one shape of exception when a parked wait is cut short: a C<with_timeout> deadline, a
 L<Acme::Parataxis::CancellationToken>, or a tree of children that failed. Every one of those is an object, and every
-one of them is a subclass of C<Acme::Parataxis::Error>. That is the whole job of the base class: a single
-C<< $err->isa('Acme::Parataxis::Error') >> catches every diagnostic flavour, and C<kind> says which one it was.
+one of them is a subclass of C<Acme::Parataxis::Error>. That is the whole job of the base class: a single C<<
+$err->isa('Acme::Parataxis::Error') >> catches every diagnostic flavour, and C<kind> says which one it was.
 
 A cancelled wait throws B<before> the call it was waiting for runs, so an interrupted block is not half-finished - it
 never started. An ordinary C<die> inside the block is B<not> converted into one of these; it propagates unchanged.
@@ -58,9 +58,9 @@ C<Acme/Parataxis/Error/Timeout.pm> to C<use>.
 
     say $err->message;          # "The operation timed out at Semaphore down (t/job.pl line 42)"
 
-The rendered message, C<< <label> at <site> >>. The site is the parked wait that was interrupted, as
-C<< <reason> (<file> line <line>) >>, or the literal C<an unknown wait> when the wait recorded no reason. Measured
-from a real C<with_timeout>:
+The rendered message, C<< <label> at <site> >>. The site is the parked wait that was interrupted, as C<< <reason>
+(<file> line <line>) >>, or the literal C<an unknown wait> when the wait recorded no reason. Measured from a real
+C<with_timeout>:
 
     The operation timed out at await_sleep (t/job.pl line 42)
     The operation was cancelled at Semaphore down (t/job.pl line 17)
@@ -69,8 +69,8 @@ from a real C<with_timeout>:
 
     if ( $err->kind eq 'timeout' ) { ... }
 
-The machine-readable discriminator. One of five strings: C<'cancelled'>, C<'timeout'>, C<'nursery'>,
-C<'supervisor'>, or C<'stm_retry'>. The last one is internal to software transactions and never reaches your code; see
+The machine-readable discriminator. One of five strings: C<'cancelled'>, C<'timeout'>, C<'nursery'>, C<'supervisor'>,
+or C<'stm_retry'>. The last one is internal to software transactions and never reaches your code; see
 L</"Acme::Parataxis::Error::STM_Retry">.
 
 =head2 C<wait_reason( )>
@@ -90,21 +90,20 @@ The same value is available on the fiber itself via C<wait_reason>; see L<Acme::
 
     Acme::Parataxis::Error::Cancelled->throw( wait_reason => $reason );
 
-Kind C<'cancelled'>. Thrown at the re-entry of a parked wait when a L<Acme::Parataxis::CancellationToken> was
-cancelled while the fiber was waiting. Message C<The operation was cancelled at ...>. Has C<new> and C<throw>, and
-inherits C<message> and C<wait_reason> from the base.
+Kind C<'cancelled'>. Thrown at the re-entry of a parked wait when a L<Acme::Parataxis::CancellationToken> was cancelled
+while the fiber was waiting. Message C<The operation was cancelled at ...>. Has C<new> and C<throw>, and inherits
+C<message> and C<wait_reason> from the base.
 
 =head2 Acme::Parataxis::Error::Timeout
 
     Acme::Parataxis::Error::Timeout->throw( wait_reason => $reason );
 
 Kind C<'timeout'>. Thrown at the re-entry of a parked wait when a C<with_timeout> deadline fired before the block could
-finish. Message C<The operation timed out at ...>. Also has C<new> and C<throw>, and adds C<seconds> - but see
-L</"The seconds accessor is never populated by the framework"> before relying on it.
+finish. Message C<The operation timed out at ...>. Also has C<new> and C<throw>, and adds C<seconds> - but see L</"The
+seconds accessor is never populated by the framework"> before relying on it.
 
-This is a sibling of C<Cancelled>, not a subclass of it. Both descend directly from C<Acme::Parataxis::Error>, so
-C<< $err->isa('Acme::Parataxis::Error::Cancelled') >> is false for a timeout. Catch the base class and switch on
-C<kind>.
+This is a sibling of C<Cancelled>, not a subclass of it. Both descend directly from C<Acme::Parataxis::Error>, so C<<
+$err->isa('Acme::Parataxis::Error::Cancelled') >> is false for a timeout. Catch the base class and switch on C<kind>.
 
 =head2 Acme::Parataxis::Error::Nursery
 
@@ -112,9 +111,9 @@ C<kind>.
     say $err->primary;         # the real culprit
     say $_->message for $err->failures;
 
-Kind C<'nursery'>. Thrown by L<Acme::Parataxis::Nursery> when one or more enrolled children died. C<failures> is
-every child's error in spawn order; C<primary> is the first natural one, that is, the first failure whose C<kind> is
-not C<'cancelled'> - the real culprit rather than the siblings it brought down with it. A plain-string C<die> counts as
+Kind C<'nursery'>. Thrown by L<Acme::Parataxis::Nursery> when one or more enrolled children died. C<failures> is every
+child's error in spawn order; C<primary> is the first natural one, that is, the first failure whose C<kind> is not
+C<'cancelled'> - the real culprit rather than the siblings it brought down with it. A plain-string C<die> counts as
 natural. If every child was merely cancelled, C<primary> falls back to the first one. Neither C<wait_reason> nor
 C<seconds> applies, and there is no C<throw>: the nursery builds this for you.
 
@@ -124,10 +123,10 @@ C<seconds> applies, and there is no C<throw>: the nursery builds this for you.
     say $err->child . ' blew the budget: ' . $err->primary;
 
 Kind C<'supervisor'>. Thrown by L<Acme::Parataxis::Supervisor>'s C<run> when a supervised tree exhausts its restart
-budget, after the tree has already been torn down. C<failures> is every death that counted against the budget, in
-the order it happened, and C<child> names the one that blew it. Same shape as the nursery error, but C<primary> is
-resolved differently - see L</"Nursery and Supervisor disagree about which failure is primary">. No C<throw>, no
-C<wait_reason>, no C<seconds>.
+budget, after the tree has already been torn down. C<failures> is every death that counted against the budget, in the
+order it happened, and C<child> names the one that blew it. Same shape as the nursery error, but C<primary> is resolved
+differently - see L</"Nursery and Supervisor disagree about which failure is primary">. No C<throw>, no C<wait_reason>,
+no C<seconds>.
 
 =head2 Acme::Parataxis::Error::STM_Retry
 
@@ -135,8 +134,8 @@ C<wait_reason>, no C<seconds>.
     Acme::Parataxis::Error::STM_Retry->new;      # message: "STM retry (internal)"
 
 Kind C<'stm_retry'>, and the one kind you should never see. C<retry> inside an C<atomically> block throws this, and
-C<atomically> itself catches it: it discards the transaction's writes, parks on the read set and re-runs the block.
-It cannot escape C<atomically>, because C<retry> outside a transaction croaks before this is ever constructed. It is
+C<atomically> itself catches it: it discards the transaction's writes, parks on the read set and re-runs the block. It
+cannot escape C<atomically>, because C<retry> outside a transaction croaks before this is ever constructed. It is
 listed here only so that C<kind> has a complete set of values.
 
 =head1 Recipes
@@ -154,8 +153,8 @@ listed here only so that C<kind> has a complete set of values.
         return;
     }
 
-C<isa> first, then C<kind>. Anything that is not an C<Acme::Parataxis::Error> is a real exception and belongs back
-on the floor.
+C<isa> first, then C<kind>. Anything that is not an C<Acme::Parataxis::Error> is a real exception and belongs back on
+the floor.
 
 =head2 Report a deadline, and where it was waiting
 
@@ -168,6 +167,9 @@ on the floor.
 
 C<message> is the human-readable line; C<wait_reason> is the same information split apart, which is what you want when
 the text is going into a log or a metric rather than onto a screen.
+
+Guard this handler against repeats. C<__DIE__> fires once per C<die>, not once per exception, and an interrupted wait
+is thrown four times on its way out of C<with_timeout> - see L</"__DIE__ fires once per die, not once per exception">.
 
 =head2 Unwrap a nursery failure
 
@@ -202,6 +204,51 @@ children of the base class.
 
 =head1 Behavior Notes
 
+=head2 C<__DIE__> fires once per die, not once per exception
+
+C<$SIG{__DIE__}> is the obvious way to report every diagnostic without wrapping each call site, and for most code it
+behaves the way you expect. Parataxis does not: an exception is re-thrown at every scope boundary it climbs out of, and
+each of those throws fires the hook again. The count for one visible exception, caught by the caller:
+
+    a token cancelled from another fiber                   1
+    with_cancel, cancelled while the block is parked       2
+    with_timeout( 20, sub { await_sleep 5_000 } )          4
+    a nursery whose child dies with a plain string         5
+    with_timeout, two levels deep                          7
+    with_timeout( 20, sub { 'returns at once' } )          0
+    with_timeout( 0, sub { await_sleep 5_000 } )           0
+
+Four C<die>s carry a single interrupted wait out of one C<with_timeout>: the park re-throws it when the wait is
+interrupted, the child fiber that ran the block re-throws it after tearing the deadline down, the dead fiber's C<await>
+re-throws the error it stored, and C<with_timeout> re-throws the lot into the calling fiber. So the count is followable
+rather than arbitrary. Each extra C<with_timeout> level adds three more (4, then 7, then 10), each extra fiber you reap
+with C<< E<gt>await >> adds one (4, 5, 6), and an error you let escape the top-level C<run> adds two (4 becomes 6). A
+deadline that never parks reports nothing at all, because no exception is ever thrown.
+
+The messages are the part that will not follow a rule. One level deep every fire carries the same message, and deduping
+collapses them. Nested, a second message turns up naming C<fiber await> inside Parataxis itself, and a nursery adds a
+C<nursery failure:> summary beside the error of the child that caused it. A handler also sees exceptions that never
+propagate at all: when a nursery child dies with a plain string, the framework calls a method on it inside a defensive
+C<eval>, and that trapped failure fires the hook as well.
+
+    Can't locate object method "kind" via package "child blew up\n" ... at Error.pm line 53
+
+So report a failure where you catch it, as the recipes above do. Treat a global reporter as a fallback, and build it to
+expect the noise - dedupe on the message, and filter on C<isa> to drop the trapped internal failures, which are plain
+strings:
+
+    my %seen;
+    $SIG{__DIE__} = sub {
+        my $err = shift;
+        return unless ref $err and $err->isa('Acme::Parataxis::Error');
+        my $key = "$err";                     # the object stringifies to its message
+        return if $seen{$key}++;
+        report( $err->kind, $err->wait_reason );
+    };
+
+That gives one report for a single C<with_timeout> and two for a nested one, the second naming a framework line rather
+than one of yours.
+
 =head2 The seconds accessor is never populated by the framework
 
 C<Error::Timeout-E<gt>seconds> exists and works, and on any error Parataxis throws itself it returns C<undef>. No call
@@ -235,17 +282,17 @@ Both errors take a C<failures> list and both expose C<primary>, and they resolve
 
 The nursery rule matches its documented intent: the point is to name the real culprit, not the siblings it cancelled.
 The supervisor rule is simply the first defined entry, so a cancellation listed first is reported as the cause of the
-budget being exhausted. If you are reading C<primary> off a supervisor error, do not assume it is the interesting one
-- scan C<failures> for a non-C<kind eq 'cancelled'> entry yourself.
+budget being exhausted. If you are reading C<primary> off a supervisor error, do not assume it is the interesting one -
+scan C<failures> for a non-C<kind eq 'cancelled'> entry yourself.
 
 =head2 The overload is a string, not a number
 
-The classes overload C<""> onto C<message> with C<fallback> C<1>, so comparison operators autogenerate from the
-string and C<< $err eq $err->message >> is true. C<< $err->can('eq') >> is still false, because there is no such
-method - it is a synthetic operator.
+The classes overload C<""> onto C<message> with C<fallback> C<1>, so comparison operators autogenerate from the string
+and C<< $err eq $err->message >> is true. C<< $err->can('eq') >> is still false, because there is no such method - it
+is a synthetic operator.
 
-Numeric context is where that bites. C<< $err == $other >> compares the two message B<strings> and warns
-C<Argument "..." isn't numeric in numeric eq> on both sides, and C<0 + $err> warns and yields C<0>. The scheduler in
+Numeric context is where that bites. C<< $err == $other >> compares the two message B<strings> and warns C<Argument
+"..." isn't numeric in numeric eq> on both sides, and C<0 + $err> warns and yields C<0>. The scheduler in
 F<lib/Acme/Parataxis.c> relies on the stringification, not on any numeric form, so this only bites code that compares
 errors directly.
 

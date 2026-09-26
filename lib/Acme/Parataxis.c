@@ -1957,9 +1957,8 @@ static OP * parataxis_pp_exit(pTHX) {
         anum = 0;
         (void)POPs;
     }
-    else {
+    else
         anum = SvIVx(POPs);
-    }
     PL_exit_flags |= PERL_EXIT_EXPECTED;
     para_fiber_t * c = fibers[current_fiber_id];
     c->exit_pending = 1;
@@ -2296,7 +2295,7 @@ static void free_fiber_stack(void * p, size_t sz) {
         stack_cache[stack_cache_count++] = p;
         return;
     }
-if (p)
+    if (p)
         munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 }
 
@@ -2472,9 +2471,8 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     if (!fiber_capacity)
         _fiber_table_grow(DEFAULT_FIBER_TABLE);
     int idx;
-    if (free_slot_count > 0) {
+    if (free_slot_count > 0)
         idx = free_slots[--free_slot_count];
-    }
     else {
         /* Every allocated slot is taken while more fibers are still allowed: double the table (bounded by
          * HARD_FIBER_LIMIT) and take one of the slots it just added to the free list. */

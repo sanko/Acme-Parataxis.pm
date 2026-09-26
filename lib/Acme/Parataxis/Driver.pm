@@ -79,7 +79,7 @@ class Acme::Parataxis::Driver v0.1.1 {
     # IO::Async's loop_once(0) returns at once and still fires a due timer, while Mojo's one_tick takes no timeout at
     # all and always waits for the earliest registered timer, so Driver::Mojo's poll_ready is the same call as its
     # drive(). Subclass this only if your loop can do a genuinely non-blocking pass.
-    method poll_ready()            {...}    # run the loop's readiness pass; expected not to block
+    method poll_ready() {...}    # run the loop's readiness pass; expected not to block
 
     # Wrap (or pass through) an event loop object as a Driver. attach_loop() routes everything through here, so callers
     # may hand in a Mojo::IOLoop (or Mojo::Reactor) or an IO::Async::Loop and get the right reference driver for free.
