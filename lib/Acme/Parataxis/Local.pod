@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Local - A per-fiber storage slot
+Acme::Parataxis::Local - Per-fiber Storage Slot
 
 =head1 SYNOPSIS
 

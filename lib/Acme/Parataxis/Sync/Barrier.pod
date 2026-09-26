@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Sync::Barrier - Release N fibers at a common boundary
+Acme::Parataxis::Sync::Barrier - Release N Fibers at a Common Boundary
 
 =head1 SYNOPSIS
 
@@ -32,16 +32,16 @@ remaining live parties still complete the phase.
 
 =head1 METHODS
 
-=head2 C<new( parties =E<gt> $n )>
+=head2 C<new( ... )>
 
 Creates a barrier requiring C<$n> arrivals per phase. Croaks unless C<$n> is positive.
 
-=head2 C<arrive_and_wait()>
+=head2 C<arrive_and_wait( )>
 
 Arrives at the current phase and parks until C<parties> fibers have arrived, then returns true. The last arrival also
 returns true (its own release) and starts the next phase. Croaks outside a scheduled fiber.
 
-=head2 C<parties()>
+=head2 C<parties( )>
 
 Returns the number of arrivals required per phase.
 
@@ -49,7 +49,7 @@ Returns the number of arrivals required per phase.
 
 Returns how many arrivals are still needed for the current phase.
 
-=head2 C<waiters()>
+=head2 C<waiters( )>
 
 Returns how many fibers are currently parked at the phase boundary.
 

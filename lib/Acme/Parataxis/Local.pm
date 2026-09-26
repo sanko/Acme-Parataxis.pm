@@ -9,16 +9,14 @@ use feature 'class';
 #
 # Keys are a monotonic process-wide id, never a refaddr: a recycled memory address must not
 # alias a newer Local's slot.
-my $NEXT_ID = 0;
 class Acme::Parataxis::Local v0.1.1 {
     use Acme::Parataxis;
     use Carp qw[croak];
-    field $id;                        # process-wide unique slot key
+    my $NEXT_ID = 0;
+    field $id = $NEXT_ID++;           # process-wide unique slot key
     field $default : param = undef;
     field $inherit : param = 0;       # opt-in: spawn copies this slot's value from parent fiber to child (trace propagation)
     ADJUST {
-        $id = ++$NEXT_ID;
-
         # register with spawn's trace-propagation hook: a fiber that spawns a child with a value in this slot
         # seeds it into the child's stash before the child body runs (see Acme::Parataxis::spawn)
         push @Acme::Parataxis::INHERIT_LOCAL_IDS, $id if $inherit;
@@ -43,6 +41,6 @@ class Acme::Parataxis::Local v0.1.1 {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
         @Acme::Parataxis::INHERIT_LOCAL_IDS = grep { $_ != $id } @Acme::Parataxis::INHERIT_LOCAL_IDS;
     }
-    }
-    #
-    1;
+};
+#
+1;

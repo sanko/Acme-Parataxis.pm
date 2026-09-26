@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Driver v0.1.1 {
     use Carp qw[croak];
@@ -20,9 +20,7 @@ class Acme::Parataxis::Driver v0.1.1 {
     # True while this driver still has registered watches or timers. The scheduler's idle branch hands control to the
     # loop only when this is true; with nothing pending a run would otherwise block forever in the loop instead of
     # deadlock-detecting.
-    method pending {
-        return scalar( keys %watches ) + scalar( keys %timers );
-    }
+    method pending { return scalar( keys %watches ) + scalar( keys %timers ) }
 
     # Unwind every watch and timer this driver registered. Called by run() on teardown and by detach_loop(), so a
     # stale listener socket or deadline timer from an exited run can never leave the next run blocked in the loop.
@@ -67,32 +65,40 @@ class Acme::Parataxis::Driver v0.1.1 {
     method watch_count () { return scalar( keys %watches ) }
     method timer_count () { return scalar( keys %timers ) }
 
-    # -- required subclass interface --
-    # watch_read($fh, $cb)                -- call $cb->() when $fh becomes readable
-    # watch_write($fh, $cb)               -- call $cb->() when $fh becomes writable
-    # unwatch($fh)                        -- stop watching $fh (both directions), 0 if nothing was watched
-    # timer($ms, $cb)                     -- call $cb->() after $ms millseconds; returns an opaque id
-    # cancel_timer($id)                   -- cancel a pending timer, 0 if unknown/already fired
-    # drive()                             -- run the loop until at least one event fires (may block)
-    # poll_ready()                        -- run the loop's readiness pass without blocking (best effort)
-};
+    # subclass interface
+    method watch_read( $fh, $cb )  {...}    # call $cb->() when $fh becomes readable
+    method watch_write( $fh, $cb ) {...}    # call $cb->() when $fh becomes writable
+    method unwatch($fh)            {...}    # stop watching $fh (both directions), 0 if nothing was watched
+    method timer( $ms, $cb )       {...}    # call $cb->() after $ms millseconds; returns an opaque id
+    method cancel_timer($id)       {...}    # cancel a pending timer, 0 if unknown/already fired
+    method drive()                 {...}    # run the loop until at least one event fires (may block)
 
-# Wrap (or pass through) an event-loop object as a Driver. attach_loop() routes everything through here, so callers
-# may hand in a Mojo::IOLoop (or Mojo::Reactor) or an IO::Async::Loop and get the right reference driver for free.
-# A plain package sub declared outside the class block, since it returns a driver rather than dispatching on one.
-# Called as Acme::Parataxis::Driver::wrap($loop).
-sub Acme::Parataxis::Driver::wrap ($loop) {
-    Carp::croak 'wrap() requires an event-loop object' unless Scalar::Util::blessed($loop);
-    return $loop if $loop->isa('Acme::Parataxis::Driver');
-    my $pkg = ref $loop;
-    if ( $pkg =~ /^Mojo::/ || $loop->isa('Mojo::IOLoop') || $loop->isa('Mojo::Reactor') ) {
-        require Acme::Parataxis::Driver::Mojo;
-        return Acme::Parataxis::Driver::Mojo->new( loop => $loop );
+    # One readiness pass, and the scheduler expects it back promptly -- it only reaches this on the pass where pool jobs
+    # are still in flight and nothing is runnable, so a version that waits turns a long driver timer (a with_timeout
+    # deadline, an await_read timeout) into a stall on that loop. Whether a loop can honour that is up to the loop:
+    # IO::Async's loop_once(0) returns at once and still fires a due timer, while Mojo's one_tick takes no timeout at
+    # all and always waits for the earliest registered timer, so Driver::Mojo's poll_ready is the same call as its
+    # drive(). Subclass this only if your loop can do a genuinely non-blocking pass.
+    method poll_ready()            {...}    # run the loop's readiness pass; expected not to block
+
+    # Wrap (or pass through) an event loop object as a Driver. attach_loop() routes everything through here, so callers
+    # may hand in a Mojo::IOLoop (or Mojo::Reactor) or an IO::Async::Loop and get the right reference driver for free.
+    # A plain package sub declared outside the class block, since it returns a driver rather than dispatching on one.
+    # Called as Acme::Parataxis::Driver::wrap($loop).
+    sub wrap ($loop) {
+        Carp::croak 'wrap() requires an event-loop object' unless Scalar::Util::blessed($loop);
+        return $loop if $loop->isa('Acme::Parataxis::Driver');
+        my $pkg = ref $loop;
+        if ( $pkg =~ /^Mojo::/ || $loop->isa('Mojo::IOLoop') || $loop->isa('Mojo::Reactor') ) {
+            require Acme::Parataxis::Driver::Mojo;
+            return Acme::Parataxis::Driver::Mojo->new( loop => $loop );
+        }
+        if ( $pkg =~ /^IO::Async::/ ) {
+            require Acme::Parataxis::Driver::IOAsync;
+            return Acme::Parataxis::Driver::IOAsync->new( loop => $loop );
+        }
+        Carp::croak "wrap() does not know how to drive a $pkg event loop";
     }
-    if ( $pkg =~ /^IO::Async::/ ) {
-        require Acme::Parataxis::Driver::IOAsync;
-        return Acme::Parataxis::Driver::IOAsync->new( loop => $loop );
-    }
-    Carp::croak "wrap() does not know how to drive a $pkg event loop";
-}
+};
+#
 1;

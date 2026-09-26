@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Sync::Once - Run an initializer exactly once
+Acme::Parataxis::Sync::Once - Run an Initializer Exactly Once
 
 =head1 SYNOPSIS
 
@@ -35,21 +35,23 @@ same fiber croaks, corking a recursive initializer instead of deadlocking on its
 
 =head1 METHODS
 
-=head2 C<new()>
+=head2 C<new( )>
 
 Creates an un-run Once.
 
-=head2 C<do( $code )>
+=head2 C<do( ... )>
+
+    $config->do( $code );
 
 Runs C<$code> exactly once across all callers, as described above. Returns the action's return value for the executing
 fiber only; returns nothing for everyone else. Croaks outside a scheduled fiber, without a CODE reference, and when
 called re-entrantly from the action itself.
 
-=head2 C<done()>
+=head2 C<done( )>
 
 Returns true once the action has run (or died), false before anything calls C<do>.
 
-=head2 C<waiters()>
+=head2 C<waiters( )>
 
 Returns how many fibers are currently parked waiting for the action to finish.
 

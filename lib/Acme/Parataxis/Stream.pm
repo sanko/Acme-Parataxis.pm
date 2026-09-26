@@ -1,6 +1,6 @@
 use v5.40;
 use feature 'class';
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use Time::HiRes qw[time];
 
 # A chainable FRP pipeline over bounded Channels: async stream stages. Every stage is a
@@ -118,7 +118,7 @@ class Acme::Parataxis::Stream v0.1.1 {
             $out->shutdown;    # upstream ended: release any downstream parked get()ers; the chain unwinds one fiber at a time
             1;
         };
-        my $chain = __PACKAGE__->new( src => $out, cap => $self->cap );
+        my $chain = __CLASS__->new( src => $out, cap => $self->cap );
         $chain->_link($self);    # chain heads back toward the raw source (introspection)
         return $chain;
     }

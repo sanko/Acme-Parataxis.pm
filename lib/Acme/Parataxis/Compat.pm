@@ -5,6 +5,7 @@ package Acme::Parataxis::Compat v0.1.1 {
     use IO::Handle  ();                       # loaded only: the overrides call IO::Handle::blocking() fully qualified
     use Carp        qw[croak];
     use Time::HiRes ();                       # loaded only: the overrides call Time::HiRes::time() fully qualified
+
     #
     # Transparent unblocking (CORE::GLOBAL overrides). This module is an opt-in
     # convenience: Acme::Parataxis->enable_transparent_unblocking() installs overrides
@@ -42,7 +43,7 @@ package Acme::Parataxis::Compat v0.1.1 {
     }
 
     # Put a handle into non-blocking mode, answering the mode it was in, or undef when the platform will not.
-    sub _try_nonblocking ( $fh ) {
+    sub _try_nonblocking ($fh) {
 
         # `blocking` with no argument reports the current mode, and undef is its answer for a handle it cannot
         # interrogate: an already-closed glob, a dirhandle, a driver-supplied handle - and on Win32, a socket.
@@ -98,17 +99,14 @@ package Acme::Parataxis::Compat v0.1.1 {
     # handle (already undefined behaviour in perl).
     sub _read_nonblocking ( $fh, $len, $is_sys ) {
         no warnings 'io';
-
         my $was = $is_sys ? undef : _try_nonblocking($fh);
-
         my $buf = q{};
         my $rc  = defined $was ? CORE::read( $fh, $buf, $len, 0 ) : CORE::sysread( $fh, $buf, $len, 0 );
-
         _restore_blocking( $fh, $was ) if defined $was;
         return ( $rc, $buf );
     }
 
-    sub install ($class=()) {
+    sub install ( $class = () ) {
         return 1 if $INSTALLED;
         {
             no strict 'refs';
@@ -215,7 +213,7 @@ package Acme::Parataxis::Compat v0.1.1 {
         return 1;
     }
 
-    sub disable ($class=()) {
+    sub disable ( $class = () ) {
         return 1 unless $INSTALLED;
         {
             no strict 'refs';
@@ -225,7 +223,7 @@ package Acme::Parataxis::Compat v0.1.1 {
         $INSTALLED = 0;
         return 1;
     }
-    sub installed ($class=()) { !!$INSTALLED }
+    sub installed ( $class = () ) { !!$INSTALLED }
 };
 #
 1;

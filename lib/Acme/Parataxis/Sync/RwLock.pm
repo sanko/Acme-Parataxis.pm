@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Sync::RwLock v0.1.1 : isa(Acme::Parataxis::Sync) {
     use Acme::Parataxis;
@@ -11,7 +11,7 @@ class Acme::Parataxis::Sync::RwLock v0.1.1 : isa(Acme::Parataxis::Sync) {
     field @write_waiters : reader;    # fiber ids parked for the exclusive write lock, FIFO
 
     #
-    method owner        {$writer}
+    method owner        {$writer}                                            # Sign of a poor API...
     method read_holders { scalar keys %read_holders }
     method waiters      { scalar(@read_waiters) + scalar(@write_waiters) }
 
@@ -205,7 +205,7 @@ class Acme::Parataxis::Sync::RwLock v0.1.1 : isa(Acme::Parataxis::Sync) {
 # violation behind threads->create on some 5.42.x builds (Acme::Parataxis::Blocking's spawn_blocking), so guard classes
 # are kept as classic blessed packages. Note: the Sync::* namespaces themselves still hit a separate, name-dependent
 # clone crash on affected perls regardless of this - see Acme::Parataxis::Blocking's pod warning.
-package Acme::Parataxis::Sync::RwLock::Guard {
+package Acme::Parataxis::Sync::RwLock::Guard v0.1.1 {
 
     sub new ( $class, %args ) {
         return bless { lock => $args{lock}, mode => $args{mode} }, $class;

@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 #
 class Acme::Parataxis::Ticker v0.1.1 {
@@ -21,7 +21,7 @@ class Acme::Parataxis::Ticker v0.1.1 {
     field $interval : reader : param;    # milliseconds between ticks
     field $channel;                      # capacity 1 - the single un-collected tick, if any
     field $stop_token;                   # interrupts the ticker fiber's await_sleep when stop() is called
-    field $running = false;
+    field $running : reader = false;
     field $fired   : reader = 0;         # ticks produced
     field $dropped : reader = 0;         # ticks discarded: superseded uncollected ones (boundaries missed while the
 
@@ -103,10 +103,9 @@ class Acme::Parataxis::Ticker v0.1.1 {
         $stop_token->cancel;
         return 1;
     }
-    method running () {$running}
 
     # Ticks still waiting to be collected (0 or 1; never a backlog).
     method pending () { $channel->size }
-    }
-    #
-    1;
+};
+#
+1;

@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Sync::RwLock - A writer-preferring shared/exclusive read-write lock for fibers
+Acme::Parataxis::Sync::RwLock - A Writer-preferring Shared or Exclusive Read-write Lock for Fibers
 
 =head1 SYNOPSIS
 
@@ -38,7 +38,7 @@ lock is recorded on the next waiter B<before> that waiter is woken, so nobody ca
 collect what is already theirs. A parked wait is interruptible like any park, so C<with_timeout( $ms, sub {
 $rw->write_lock } )> times out instead of blocking forever.
 
-=head1 RULES
+=head2 RULES
 
 =over
 
@@ -71,70 +71,70 @@ fired, the hand-off is transferred on to the next waiter rather than stranded on
 
 =head1 METHODS
 
-=head2 C<new()>
+=head2 C<new( )>
 
 Creates a free lock.
 
-=head2 C<read_lock()>
+=head2 C<read_lock( )>
 
 Takes a shared read hold, parking until no writer holds the lock and no writer is queued. Returns true. Croaks outside
 a scheduled fiber. Deepens the hold in place when the calling fiber already reads, and grants it in place when that
 fiber already holds the write lock - see L</RULES>.
 
-=head2 C<try_read_lock()>
+=head2 C<try_read_lock( )>
 
 Takes a shared read hold if one is available right now, returning true. Returns false instead of parking when a writer
 holds the lock or is queued for it. Croaks outside a scheduled fiber.
 
-=head2 C<read_unlock()>
+=head2 C<read_unlock( )>
 
 Releases B<one> read hold owned by the calling fiber and, when it was the last one, hands the lock on to the next
 waiter. Nesting C<read_lock> pairs one-for-one with nesting C<read_unlock>. Croaks outside a scheduled fiber and when
 the calling fiber holds no read lock.
 
-=head2 C<write_lock()>
+=head2 C<write_lock( )>
 
 Takes the exclusive write lock, parking until every reader has drained and every queued writer ahead of this fiber has
 been served. Returns true. Croaks outside a scheduled fiber, on same-fiber re-entry, and on a read-to-write upgrade
 attempt.
 
-=head2 C<try_write_lock()>
+=head2 C<try_write_lock( )>
 
 Takes the exclusive write lock if it is completely free and unqueued, returning true. Returns false instead of parking
 when a reader holds it or any writer is queued (it never jumps the FIFO). Croaks outside a scheduled fiber, on
 same-fiber re-entry, and on a read-to-write upgrade - a C<try_> that merely returned false there would invite a retry
 loop that can never succeed.
 
-=head2 C<write_unlock()>
+=head2 C<write_unlock( )>
 
 Releases the exclusive write lock to the next queued writer, or to the waiting readers when the queue empties. Only the
 current writer may call it. Croaks outside a scheduled fiber, when the lock is not write-held, and when the caller is
 not the writer.
 
-=head2 C<read_guard()>
+=head2 C<read_guard( )>
 
 Calls C<read_lock> and returns an object that calls C<read_unlock> when it goes out of scope - including when the scope
 unwinds on an exception.
 
-=head2 C<write_guard()>
+=head2 C<write_guard( )>
 
 Calls C<write_lock> and returns an object that calls C<write_unlock> when it goes out of scope - including when the
 scope unwinds on an exception. Prefer this over pairing C<write_lock> and C<write_unlock> by hand.
 
-=head2 C<writer()>
+=head2 C<writer( )>
 
 Returns the fiber id currently holding the write lock, or C<undef> when no writer holds it. C<owner()> is an alias for
 symmetry with L<Acme::Parataxis::Sync::Mutex|Acme::Parataxis::Sync::Mutex>.
 
-=head2 C<readers()>
+=head2 C<readers( )>
 
 Returns the number of outstanding read holds.
 
-=head2 C<read_holders()>
+=head2 C<read_holders( )>
 
 Returns how many B<distinct> fibers currently hold a read lock.
 
-=head2 C<read_waiters()>, C<write_waiters()>, C<waiters()>
+=head2 C<read_waiters( )>, C<write_waiters( )>, C<waiters( )>
 
 How many fibers are parked waiting for a read lock, for a write lock, and in total.
 

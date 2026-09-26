@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Signal - A two-state flag with a FIFO queue of waiters
+Acme::Parataxis::Signal - Two-state Flag with a FIFO Wueue of Waiters
 
 =head1 SYNOPSIS
 

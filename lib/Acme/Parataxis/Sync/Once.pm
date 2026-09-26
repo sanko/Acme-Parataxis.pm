@@ -1,12 +1,12 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Sync::Once v0.1.1 : isa(Acme::Parataxis::Sync) {
     use Acme::Parataxis;
     use Carp qw[croak];
-    field $owner;           # fiber id running the action; undef when idle
-    field $done = false;    # the action has completed (even if it died)
-    field @waiters;         # fiber ids parked until the action completes, FIFO
+    field $owner;                    # fiber id running the action; undef when idle
+    field $done : reader = false;    # the action has completed (even if it died)
+    field @waiters;                  # fiber ids parked until the action completes, FIFO
 
     # Run $code exactly once. The first fiber in executes it; concurrent callers park until it finishes and late
     # callers return immediately. If the action dies, that error propagates to the executing fiber only, the Once is
@@ -33,7 +33,6 @@ class Acme::Parataxis::Sync::Once v0.1.1 : isa(Acme::Parataxis::Sync) {
         die $err if $err;
         return $ok ? $rv : undef;
     }
-    method done    {$done}
     method waiters { scalar @waiters }
 
     method remove_waiter ($fid) {

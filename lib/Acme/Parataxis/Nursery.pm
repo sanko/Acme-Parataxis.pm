@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 #
 # Structured concurrency: an enclosed block spawns child fibers that are all guaranteed to
@@ -74,9 +74,7 @@ class Acme::Parataxis::Nursery v0.1.1 {
             }
 
             # If the child finished/died, its error will be aggregated below.
-            if ( $child->is_done ) {
-                next;
-            }
+            next if $child->is_done;
 
             # The parent was interrupted mid-await: cancel siblings and drain.
             warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d join got parent-interrupt error=%s site=%s\n", ( time - $^T ) * 1000,

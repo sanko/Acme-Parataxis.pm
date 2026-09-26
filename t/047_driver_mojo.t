@@ -44,8 +44,18 @@ sub socket_pairs ($n) {
 # ask each OS what its limit is, try the real thing - open the pairs, and halve on EMFILE/ENFILE until one size fits.
 # The probe runs in this same process against this same soft limit, so the number it settles on is the number that
 # will still be there when the subtest asks for it.
+#
+# RLIMIT_NOFILE is not the only ceiling, and on NetBSD it is not the binding one. The platform's FD_SETSIZE bounds
+# the descriptor NUMBER rather than the count: 300 pairs open 600 descriptors and reach fd 605, comfortably past
+# NetBSD's FD_SETSIZE of 256 and nowhere near Linux's 1024, and an fd_set that size cannot name a descriptor at all.
+# Two descriptors per pair, plus a listener and the handful of handles already open, is the budget that leaves.
+# Measured from C because perl cannot measure it - `getconf FD_SETSIZE` is not a valid symbol and answers 20, and
+# Fcntl::FD_SETSIZE() dies at runtime - and on NetBSD that number is the whole difference between this leg passing
+# and not.
 sub pairs_that_fit ($want) {
-    my $n = $want;
+    my $n   = $want;
+    my $cap = int( ( Acme::Parataxis::fd_setsize() - 16 ) / 2 );
+    $n = $cap if $n > $cap;
     while ( $n > 8 ) {
         my ($probe) = eval { socket_pairs($n) };
         return $n if $probe;
@@ -150,8 +160,14 @@ my $orig_submit_job = \&Acme::Parataxis::_submit_job;
 # 5 watches after 70 dummy fds woke 0/5), IO::Select never crashes but reports at most 64 ready handles, and the
 # pure-Mojo stack crashes the interpreter above 128 pairs on perl 5.42.3. 24 pairs keep every fd under 64, which
 # is enough to exercise the whole driver path on Windows; other platforms ask for the full 300, less whatever their
-# descriptor limit cannot hold (see pairs_that_fit).
+# own two ceilings cannot hold - see pairs_that_fit.
 my $N = pairs_that_fit( $^O eq 'MSWin32' ? 24 : 300 );
+
+# The cap is only as good as the number behind it, and a broken accessor would shrink this workload quietly rather
+# than fail: 0 gives a negative cap, pairs_that_fit's halving loop never runs on a negative, and $N would just come
+# back small with every assertion below still green. Ask for the number directly so that shows up as a failure.
+ok Acme::Parataxis::fd_setsize() >= 64, 'the platform reports a usable FD_SETSIZE (' . Acme::Parataxis::fd_setsize() . ')';
+ok $N >= 8,                             "the high-volume workload kept a workable $N pairs";
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     Acme::Parataxis->attach_loop( Mojo::IOLoop->new );

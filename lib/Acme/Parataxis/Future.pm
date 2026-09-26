@@ -1,11 +1,11 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Future v0.1.1 {
     use Carp qw[croak];
     field $is_ready : reader = 0;
     field $result;
-    field $error;
+    field $error : reader;
     field @callbacks;
     field @waiters;
 
@@ -14,7 +14,6 @@ class Acme::Parataxis::Future v0.1.1 {
         croak $error if defined $error;
         return $result;
     }
-    method error () {$error}    # The stored error, raw: undef until the future fails, the error value after set_error.
 
     method set_result ($val) {
         die 'Future already ready' if $is_ready;
@@ -45,9 +44,7 @@ class Acme::Parataxis::Future v0.1.1 {
         else             { push @callbacks, $cb }
     }
 
-    method await () {
-
-        # Suspends the current fiber until the future is ready. Returns the result or dies if the task encountered an error.
+    method await () {    # Suspends the current fiber until the future is ready. Returns the result or dies on error.
         return $self->result if $is_ready;
         my $fid = Acme::Parataxis->current_fid;
         croak 'await() must be called from inside a scheduled fiber' if $fid < 0;

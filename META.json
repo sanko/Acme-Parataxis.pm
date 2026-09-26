@@ -151,7 +151,8 @@
          "version" : "v0.1.1"
       },
       "Acme::Parataxis::Semaphore::Guard" : {
-         "file" : "lib/Acme/Parataxis/Semaphore.pm"
+         "file" : "lib/Acme/Parataxis/Semaphore.pm",
+         "version" : "v0.1.1"
       },
       "Acme::Parataxis::Signal" : {
          "file" : "lib/Acme/Parataxis/Signal.pm",
@@ -178,7 +179,8 @@
          "version" : "v0.1.1"
       },
       "Acme::Parataxis::Sync::Mutex::Guard" : {
-         "file" : "lib/Acme/Parataxis/Sync/Mutex.pm"
+         "file" : "lib/Acme/Parataxis/Sync/Mutex.pm",
+         "version" : "v0.1.1"
       },
       "Acme::Parataxis::Sync::Once" : {
          "file" : "lib/Acme/Parataxis/Sync/Once.pm",
@@ -189,7 +191,8 @@
          "version" : "v0.1.1"
       },
       "Acme::Parataxis::Sync::RwLock::Guard" : {
-         "file" : "lib/Acme/Parataxis/Sync/RwLock.pm"
+         "file" : "lib/Acme/Parataxis/Sync/RwLock.pm",
+         "version" : "v0.1.1"
       },
       "Acme::Parataxis::Sync::WaitGroup" : {
          "file" : "lib/Acme/Parataxis/Sync/WaitGroup.pm",

@@ -1,9 +1,6 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
-use Acme::Parataxis::Error;          # for the internal STM_Retry control-flow exception
-use Acme::Parataxis::Sync::Mutex;    # the global commit lock
-use Scalar::Util qw[refaddr];
 #
 # STM (software transactional memory). A TVar is a versioned mutable cell whose
 # reads and writes only take effect through Acme::Parataxis->atomically. The transaction
@@ -19,10 +16,13 @@ my %RETRY_REGS;    # fid => dereg: removes the fiber from every TVar's waiters l
 #
 class Acme::Parataxis::TVar v0.1.1 {
     use Acme::Parataxis;
-    use Carp qw[croak];
-    field $value : param;    # committed value
-    field $version = 0;      # bumped on every committed write; the conflict detector
-    field @waiters;          # fids parked by retry() whose read sets include this TVar
+    use Acme::Parataxis::Error;          # for the internal STM_Retry control-flow exception
+    use Acme::Parataxis::Sync::Mutex;    # the global commit lock
+    use Scalar::Util qw[refaddr];
+    use Carp         qw[croak];
+    field $value : reader : param;       # committed value
+    field $version : reader = 0;         # bumped on every committed write; the conflict detector
+    field @waiters;                      # fids parked by retry() whose read sets include this TVar
 
     # The current fiber's transaction log, or a croak when there is none. Every TVar
     # operation (and retry()) runs strictly inside an atomically block.
@@ -57,8 +57,6 @@ class Acme::Parataxis::TVar v0.1.1 {
 
     # The committed value, readable from anywhere (no transaction required). Use for
     # inspection and tests; reads that participate in a transaction go through get().
-    method value ()           { return $value }
-    method version()          { return $version }
     method waiters()          { return scalar @waiters }    # retry waiters parked on this TVar
     method _add_waiter ($fid) { push @waiters, $fid; 1 }
 
@@ -80,8 +78,7 @@ class Acme::Parataxis::TVar v0.1.1 {
         return 1;
     }
 
-    # --- transaction engine -----------------------------------------------------------
-    # Runs $code as one transaction on the calling fiber. Nested atomically calls join the
+    # The transaction engine: Runs $code as one transaction on the calling fiber. Nested atomically calls join the
     # outer transaction (no separate commit; retry() still aborts the whole thing).
     sub _atomically ($cb) {
         my $fid = Acme::Parataxis->current_fid;

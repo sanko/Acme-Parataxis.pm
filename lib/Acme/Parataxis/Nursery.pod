@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Nursery - Structured concurrency: a block whose spawned children are all joined, or all cancelled
+Acme::Parataxis::Nursery - Structured Concurrency Container for Spawned Children that are all Joined, or all Cancelled
 
 =head1 SYNOPSIS
 

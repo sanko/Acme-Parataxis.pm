@@ -5,7 +5,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Ticker - A drift-free interval timer for scheduled fibers
+Acme::Parataxis::Ticker - Drift-free Interval Timer for Scheduled Fibers
 
 =head1 SYNOPSIS
 
@@ -46,7 +46,7 @@ C<stop> ends all of it at once: it releases any fiber parked in C<wait_next> (wh
 background fiber's sleep so the fiber unwinds and the sleep job it armed is recalled. A stopped ticker therefore never
 keeps C<run> alive and never leaves a fiber behind.
 
-=head1 CONSTRUCTOR
+=head1 METHODS
 
 =head2 C<new( interval => $ms )>
 
@@ -58,9 +58,7 @@ defined and positive; anything else croaks.
 Construction starts the background fiber immediately, so you may build a ticker before C<run> and consume it inside
 one. That fiber runs until the ticker is stopped, so call C<stop> when you are finished with it.
 
-=head1 METHODS
-
-=head2 C<wait_next()>
+=head2 C<wait_next( )>
 
     while ( my $t = $tick->wait_next ) {
         do_work();
@@ -73,7 +71,7 @@ elsewhere it croaks.
 The ticker keeps ticking while nobody is waiting: a consumer that takes longer than one interval simply finds whole
 periods skipped when it comes back, never a queue of overdue ticks.
 
-=head2 C<stop()>
+=head2 C<stop( )>
 
     $tick->stop;
 
@@ -82,38 +80,38 @@ background fiber so it exits at once and its armed sleep job is recalled instead
 interval. Idempotent - returns a true value the first time it does work and false on every later call. Safe to call
 whether the ticker has ticked or not, and from inside or outside a fiber.
 
-=head2 C<running()>
+=head2 C<running( )>
 
     $tick->running;     # true until stop()
 
 True while the ticker is still publishing.
 
-=head2 C<interval()>
+=head2 C<interval( )>
 
     $tick->interval;    # the period in milliseconds
 
 The interval the ticker was constructed with.
 
-=head2 C<pending()>
+=head2 C<pending( )>
 
     $tick->pending;     # 0 or 1
 
 How many ticks are waiting to be collected. Never exceeds C<1>: the newest tick replaces any unread one.
 
-=head2 C<fired()>
+=head2 C<fired( )>
 
     $tick->fired;       # ticks produced
 
 Ticks the ticker has published since construction.
 
-=head2 C<dropped()>
+=head2 C<dropped( )>
 
     $tick->dropped;     # ticks discarded
 
 Ticks discarded because nobody collected them before the next one came due. The ticks actually handed to a consumer are
 C<fired - dropped - pending>.
 
-=head2 C<skipped()>
+=head2 C<skipped( )>
 
     $tick->skipped;     # boundaries never fired
 

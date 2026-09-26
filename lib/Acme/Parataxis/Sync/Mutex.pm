@@ -4,8 +4,8 @@ use feature 'class';
 class Acme::Parataxis::Sync::Mutex v0.1.1 : isa(Acme::Parataxis::Sync) {
     use Acme::Parataxis;
     use Carp qw[croak];
-    field $owner;      # fiber id holding the lock; undef when free
-    field @waiters;    # fiber ids waiting to lock, FIFO
+    field $owner : reader;    # fiber id holding the lock; undef when free
+    field @waiters;           # fiber ids waiting to lock, FIFO
 
     # Acquire the lock, parking until it is handed over. The lock is not reentrant: a fiber that already holds it croaks.
     method lock {
@@ -67,7 +67,6 @@ class Acme::Parataxis::Sync::Mutex v0.1.1 : isa(Acme::Parataxis::Sync) {
         $self->lock;
         Acme::Parataxis::Sync::Mutex::Guard->new( mutex => $self );
     }
-    method owner   {$owner}
     method waiters { scalar @waiters }
 
     method remove_waiter ($fid) {    # unregister a parked waiter (used by the lock park's interruption path)
@@ -81,7 +80,7 @@ class Acme::Parataxis::Sync::Mutex v0.1.1 : isa(Acme::Parataxis::Sync) {
 # violation behind threads->create on some 5.42.x builds (Acme::Parataxis::Blocking's spawn_blocking), so guard classes
 # are kept as classic blessed packages. Note: the Sync::* namespaces themselves still hit a separate, name-dependent
 # clone crash on affected perls regardless of this - see Acme::Parataxis::Blocking's pod warning.
-package Acme::Parataxis::Sync::Mutex::Guard {
+package Acme::Parataxis::Sync::Mutex::Guard v0.1.1 {
 
     sub new ( $class, %args ) {
         return bless { mutex => $args{mutex} }, $class;

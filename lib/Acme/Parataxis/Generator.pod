@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Generator - A stackful, lazily-pulled iterator
+Acme::Parataxis::Generator - Stackful, Lazily-pulled Iterator
 
 =head1 SYNOPSIS
 
@@ -53,7 +53,7 @@ generator is done afterwards (later C<next> calls are C<undef>).
 
 True once the body has finished (normally or by throwing).
 
-=head1 HOW IT WORKS
+=head1 How It Works
 
 =over
 

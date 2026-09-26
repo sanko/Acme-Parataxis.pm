@@ -5,7 +5,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::RateLimiter - A token-bucket rate limiter for fibers
+Acme::Parataxis::RateLimiter - Token-bucket Rate Limiter for Fibers
 
 =head1 SYNOPSIS
 
@@ -40,7 +40,7 @@ delivered rate tracks real time however coarsely the platform wakes the ticker. 
 bucket sits below its ceiling, so nothing accumulates while the limiter is idle, and a busy limiter hands out tokens at
 a steady C<rate> forever.
 
-=head1 BURST VS. STRICT RATE
+=head1 Burst vs. String Rate
 
 C<burst> is the knob that decides how C<smooth> the traffic looks, and it is worth choosing deliberately.
 
@@ -62,9 +62,9 @@ should not queue for 50 periods if you are willing to send 50 at once), but keep
 enforce a burst limit of their own alongside their rate limit. A C<burst> far above what the service documents buys you
 nothing but a burst of 429s. When in doubt, C<burst = 1> or a small multiple of your fan-out is the safe shape.
 
-=head1 CONSTRUCTOR
+=head1 METHODS
 
-=head2 C<new( rate => $n, burst => $m )>
+=head2 C<new( ... )>
 
     my $rl = Acme::Parataxis::RateLimiter->new( rate => 5, burst => 10 );
 
@@ -73,9 +73,7 @@ positive and C<burst> must be a positive integer; anything else croaks.
 
 Construction starts two background fibers (the ticker and the refill loop), so call C<stop> when you are finished.
 
-=head1 METHODS
-
-=head2 C<acquire( $n = 1 )>
+=head2 C<acquire( ... )>
 
     $rl->acquire(1);
     $rl->acquire(5);            # five tokens, one after another
@@ -92,7 +90,7 @@ bucket refills on a wall-clock schedule regardless, so it recovers on its own wi
 
 Croaks if the limiter has been stopped.
 
-=head2 C<stop()>
+=head2 C<stop( )>
 
     $rl->stop;
 
@@ -100,29 +98,29 @@ Halts refills. Every fiber already parked in C<acquire> is let through rather th
 never wedge the run; a later C<acquire> croaks instead of parking forever with nobody left to refill. Idempotent, and
 safe from inside or outside a fiber.
 
-=head2 C<tokens()>
+=head2 C<tokens( )>
 
     $rl->tokens;     # 0 .. burst
 
 Tokens currently available to spend.
 
-=head2 C<waiters()>
+=head2 C<waiters( )>
 
     $rl->waiters;
 
 Fibers currently parked waiting for a token. Introspection, chiefly useful in tests.
 
-=head2 C<running()>
+=head2 C<running( )>
 
     $rl->running;    # true until stop()
 
 True while the limiter is still refilling.
 
-=head2 C<rate()>
+=head2 C<rate( )>
 
     $rl->rate;       # acquisitions per second
 
-=head2 C<burst()>
+=head2 C<burst( )>
 
     $rl->burst;      # bucket size
 

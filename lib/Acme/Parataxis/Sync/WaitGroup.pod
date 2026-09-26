@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Sync::WaitGroup - Wait for a collection of jobs to finish
+Acme::Parataxis::Sync::WaitGroup - Wait for a Collection of Jobs to Finish
 
 =head1 SYNOPSIS
 
@@ -36,29 +36,29 @@ the cancelled waiter unregisters itself and the group stays usable.
 
 =head1 METHODS
 
-=head2 C<new( [ count =E<gt> $n ] )>
+=head2 C<new( [ ... ] )>
 
 Creates a group. The optional C<count> primes the counter (default 0).
 
-=head2 C<add( $n )>
+=head2 C<add( ... )>
 
 Adds C<$n> to the counter (it may be negative, as C<done> uses -1). Croaks if the counter would drop below zero, or if
 C<$n> is not an integer.
 
-=head2 C<done()>
+=head2 C<done( )>
 
 Same as C<add(-1)>. Calling it when nothing is outstanding croaks.
 
-=head2 C<wait()>
+=head2 C<wait( )>
 
 Parks the current fiber until the counter reaches zero, then returns true. Returns immediately (without parking) when
 the counter is already zero. Croaks outside a scheduled fiber.
 
-=head2 C<remaining()>
+=head2 C<remaining( )>
 
 Returns the current counter value. Useful for diagnostics, not for waiting on.
 
-=head2 C<waiters()>
+=head2 C<waiters( )>
 
 Returns how many fibers are currently parked in C<wait>.
 

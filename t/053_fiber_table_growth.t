@@ -97,9 +97,9 @@ async {
 };
 subtest 'the diagnostics snapshot reaches fibers past the old fixed 1024 slots' => sub {
     my $want = $reaches1024 ? 1100 : $default - 2;
-    is $r5->[0], $want, $reaches1024
-        ? 'spawned 1100 fibers unconfigured, past the 1024 the snapshot used to stop at'
-        : sprintf( 'the default only reaches %d, so the past-1024 case is unbuildable; took all %d', $default, $want );
+    is $r5->[0], $want,
+        $reaches1024 ? 'spawned 1100 fibers unconfigured, past the 1024 the snapshot used to stop at' :
+        sprintf( 'the default only reaches %d, so the past-1024 case is unbuildable; took all %d', $default, $want );
     ok !defined $r5->[1], 'and not one of them croaked' or diag "err: $r5->[1]";
     if ($reaches1024) {
         cmp_ok $r5->[3], '>', 0, sprintf 'the dump listed %d live fiber(s) with an id of 1024 or more', $r5->[3];

@@ -27,10 +27,10 @@ sub socket_pair {
 # rejection is the whole reason a handle is unwatchable - Win32's select() takes sockets and nothing else - so it is
 # also the honest way to ask whether a fiber could ever be parked on something, rather than naming an OS.
 sub can_watch {
-    my $in   = q{};
+    my $in = q{};
     vec( $in, fileno( $_[0] ), 1 ) = 1;
-    my $out  = q{};
-    my $n    = select( $in, $out, undef, 0 );
+    my $out = q{};
+    my $n   = select( $in, $out, undef, 0 );
     return defined $n && $n >= 0;
 }
 #
@@ -104,6 +104,7 @@ subtest 'read/sysread inside a fiber frame until the peer writes' => sub {
     }
 };
 subtest 'a read asked for more than the peer sends returns the short count' => sub {
+
     # Every socket case above asks for exactly the number of bytes the peer sends, which is the one shape a blocking
     # read cannot get wrong. Ask for one more than arrives and the old override froze the entire run: await_read only
     # promises that *something* is readable, but a raw read on a blocking stream handle waits for the whole requested
@@ -131,11 +132,12 @@ subtest 'a read asked for more than the peer sends returns the short count' => s
         my $ms = ( time - $t0 ) * 1000;
         is $rc,  5,       "$builtin asked for 10, got 5, and returned the short count instead of waiting";
         is $buf, 'hello', "$builtin filled the caller buffer with the bytes that had arrived";
-        ok $ms < 2000,    "the $builtin returned promptly ($ms ms) instead of parking the OS thread";
-        ok $ticked,       "a sibling fiber ran during the $builtin, so the rest of the run kept going";
+        ok $ms < 2000, "the $builtin returned promptly ($ms ms) instead of parking the OS thread";
+        ok $ticked,    "a sibling fiber ran during the $builtin, so the rest of the run kept going";
     }
 };
 subtest 'the caller handle is handed back in the mode it arrived in' => sub {
+
     # The override makes the handle non-blocking only for the duration of its own read, then puts the mode back.
     # Anything else would break the gevent-style contract in reverse: code compiled *before* installation still gets a
     # raw blocking read from that same handle, and would start failing with EAGAIN if we left it flipped.
@@ -145,23 +147,22 @@ subtest 'the caller handle is handed back in the mode it arrived in' => sub {
     # FIONBIO can set a socket's mode but has no way to report one, so the getter answers undef there. The capability
     # is probed rather than assumed, so a platform that cannot answer is a skip and not a false pass.
     my ( $a, $b ) = socket_pair();
-    plan skip_all => 'this platform cannot report a handle mode through IO::Handle'
-        unless defined IO::Handle::blocking($a);
-
+    plan skip_all => 'this platform cannot report a handle mode through IO::Handle' unless defined IO::Handle::blocking($a);
     for my $want ( 1, 0 ) {    # 1 = the socket default (blocking), 0 = the caller set non-blocking itself
         IO::Handle::blocking( $a, $want );
         my $before = IO::Handle::blocking($a) ? 1 : 0;
         syswrite $b, 'ok';
         my ( $buf, $rc );
         async { $rc = read( $a, $buf, 2 ) };
-        my $after = IO::Handle::blocking($a) ? 1 : 0;
-        my $was   = $before ? 'non-blocking' : 'blocking';
-        my $now   = $after  ? 'still non-blocking' : 'still blocking';
-        is $rc,    2,        "an exact read on a handle the caller left $was worked";
+        my $after = IO::Handle::blocking($a) ? 1                    : 0;
+        my $was   = $before                  ? 'non-blocking'       : 'blocking';
+        my $now   = $after                   ? 'still non-blocking' : 'still blocking';
+        is $rc,    2,       "an exact read on a handle the caller left $was worked";
         is $after, $before, "...and the handle is $now afterwards";
     }
 };
 subtest 'a pipe parks the fiber instead of freezing the thread' => sub {
+
     # Only a platform whose select() accepts a pipe can park here, and that is a question about the platform rather
     # than about the OS by name, so it is asked: select() is the mechanism the worker itself uses, and it answers
     # immediately either way. Win32's takes sockets only and reports ENOTSOCK for a pipe, which makes a pipe there
@@ -171,15 +172,14 @@ subtest 'a pipe parks the fiber instead of freezing the thread' => sub {
     # rather than something this module can paper over; the regular-file subtest below still covers the unwatchable
     # fallback for the case it actually exists for, where the data is already there.
     pipe( my $r, my $w ) or die "pipe: $!";
-    plan skip_all => 'select() cannot watch a pipe on this platform, so a fiber cannot wait on one'
-        unless can_watch( $r );
+    plan skip_all => 'select() cannot watch a pipe on this platform, so a fiber cannot wait on one' unless can_watch($r);
     my ( $buf, $rc, $ticked );
     my $t0 = time;
     async {
         with_timeout(
             5000,
             sub {
-                my $ticks = fiber { await_sleep(30); $ticked = 1; 1 };
+                my $ticks = fiber { await_sleep(30);  $ticked = 1; 1 };
                 my $late  = fiber { await_sleep(150); syswrite $w, 'piped' };
                 $rc = read( $r, $buf, 5 );
                 $late->await;
@@ -190,9 +190,9 @@ subtest 'a pipe parks the fiber instead of freezing the thread' => sub {
     my $ms = ( time - $t0 ) * 1000;
     is $rc,  5,       'the read on a pipe returned the byte count once the writer got there';
     is $buf, 'piped', '...and filled the caller buffer';
-    ok $ms >= 140,    "the read waited for the late writer ($ms ms) rather than spinning or returning early";
-    ok $ms < 3000,    "...and returned promptly once the data arrived ($ms ms)";
-    ok $ticked,       'a sibling fiber ran while the pipe read was parked';
+    ok $ms >= 140, "the read waited for the late writer ($ms ms) rather than spinning or returning early";
+    ok $ms < 3000, "...and returned promptly once the data arrived ($ms ms)";
+    ok $ticked,    'a sibling fiber ran while the pipe read was parked';
 };
 subtest 'a regular file read inside a fiber falls back to the raw builtin' => sub {
     my $dir  = File::Temp->newdir( CLEANUP => 0 );

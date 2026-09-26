@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Monitor - Observe another fiber's death without owning it
+Acme::Parataxis::Monitor - Observe Another Fiber's Death without Owning it
 
 =head1 SYNOPSIS
 

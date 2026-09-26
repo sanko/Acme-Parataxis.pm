@@ -8,14 +8,12 @@ package Acme::Parataxis::Generator v0.1.1 {
     our $DRAIN = \do { my $x = 1 };    # an opaque scalar ref, so no user yield/die value can collide with the marker
     use Carp qw[croak];
 
-    # Stackful lazy iterator backed by a private fiber (online note: the producer never
-    # enters the scheduler run queue; each ->next resumes it via coro_call, i.e. it parks in
-    # the same way a coroutine parks, and exhaustion/error finish the fiber normally).
-    # Windows longjmp across the very first fiber allocated in a process (fid 0) is
-    # unreliable (the body's die escapes every anchored JMPENV -> "uncaught die" or
-    # 0xC0000005). Keeping one permanently parked reserved fiber means generators always
-    # land on fid >= 1, where the resume-die path is exercised by the whole test suite from
-    # the first scheduler tests on and has always been stable.
+    # Stackful lazy iterator backed by a private fiber (online note: the producer never enters the scheduler run queue;
+    # each ->next resumes it via coro_call, i.e. it parks in the same way a coroutine parks, and exhaustion/error
+    # finish the fiber normally). Windows longjmp across the very first fiber allocated in a process (fid 0) is
+    # unreliable (the body's die escapes every anchored JMPENV -> "uncaught die" or 0xC0000005). Keeping one
+    # permanently parked reserved fiber means generators always land on fid >= 1, where the resume-die path is
+    # exercised by the whole test suite from the first scheduler tests on and has always been stable.
     sub _ensure_reserved_fiber {
         return if $RESERVED;
         my $fiber = Acme::Parataxis->new(
@@ -65,10 +63,7 @@ package Acme::Parataxis::Generator v0.1.1 {
         die $err if defined $err && !( ref($err) eq 'SCALAR' && $err == $DRAIN );
         return undef;
     }
-
-    sub is_done ($self) {
-        return $self->{fiber}->is_done;
-    }
+    sub is_done ($self) { $self->{fiber}->is_done }
 
     # An unexhausted (suspended) fiber is drained to its natural exit instead of being torn
     # down in mid-shot: resuming it with the drain marker makes the yield closure die, the
@@ -90,5 +85,6 @@ package Acme::Parataxis::Generator v0.1.1 {
         $fiber->[Acme::Parataxis::F_IS_DONE] = 1;
         return;
     }
-}
+};
+#
 1;

@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Semaphore - A counting semaphore for fiber synchronization
+Acme::Parataxis::Semaphore - Counting Semaphore for Fiber Synchronization
 
 =head1 SYNOPSIS
 
@@ -26,7 +26,7 @@ semaphore, so one fiber can C<down> it while another can C<up> it, C<up> may be 
 Blocked fibers are parked (they do not busy-wait) and are resumed in FIFO order as permits become available, exactly
 like the futures used by C<await>.
 
-=head1 CONSTRUCTOR
+=head1 METHODS
 
 =head2 C<new( [...] )>
 
@@ -34,8 +34,6 @@ like the futures used by C<await>.
     my $sem = Acme::Parataxis::Semaphore->new(count => 3);
 
 Creates a new semaphore. The optional C<count> parameter sets the initial number of permits and defaults to C<1>.
-
-=head1 METHODS
 
 =head2 C<down( )>
 

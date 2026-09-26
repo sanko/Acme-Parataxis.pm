@@ -78,6 +78,6 @@ package Acme::Parataxis::Monitor v0.1.1 {
         $self->{future}->on_ready( sub { $cb->($weak) if $weak } );    # hand the caller the monitor, not the inner future
         return $self;
     }
-}
+};
 #
 1;

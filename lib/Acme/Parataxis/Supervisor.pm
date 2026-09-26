@@ -1,5 +1,5 @@
 use v5.40;
-no warnings 'experimental::class', 'recursion';
+no warnings qw[experimental::class recursion];
 use feature 'class';
 #
 # OTP-style supervisor trees: children are supervised actors (or nested supervisors) that are
@@ -40,9 +40,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     # Where dying instances report [ $child, $token, $err ]. Oversized so a report can never park a
     # fiber that is in the middle of tearing itself down.
     field $deaths;
-    field $running  = false;
-    field $stopping = false;
-    field $started  = false;
+    field $running  : reader = false;
+    field $stopping : reader = false;
+    field $started  : reader = false;
     ADJUST {
         croak "Supervisor->new: strategy must be OneForOne, OneForAll or RestForOne (got '$strategy')"
             unless defined $strategy && ( $strategy eq 'OneForOne' || $strategy eq 'OneForAll' || $strategy eq 'RestForOne' );
@@ -88,7 +88,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             token    => undef,
             pending  => 0,
             restarts => 0,
-            index    => scalar @children,
+            index    => scalar @children
             };
         return $self;
     }
@@ -185,7 +185,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
                     primary  => $reason,
                     child    => $child->{name},
                     strategy => $strategy,
-                    restarts => $max_restarts,
+                    restarts => $max_restarts
                 );
             }
             push @budget, [ $now, $child->{name}, $reason ];
@@ -265,9 +265,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         return;
     }
 
-    # ---- introspection -------------------------------------------------
+    # introspection
     method children () {
-        return map { $_->{name} } @children;
+        map { $_->{name} } @children;
     }
 
     method child ($name) {
@@ -288,8 +288,6 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         croak "Supervisor->restarts(): no supervised child named '$name'" unless $child;
         return $child->{restarts};
     }
-    method running ()  {$running}
-    method stopping () {$stopping}
-    }
-    #
-    1;
+};
+#
+1;

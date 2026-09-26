@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Stream - Chainable async streams over bounded Channels
+Acme::Parataxis::Stream - Chainable Async Streams over Bound Channels
 
 =head1 SYNOPSIS
 
@@ -34,19 +34,18 @@ right exactly as the method calls read.
 
 Everything rides on the scheduler's ordinary Channel parks, which is what makes the pipeline safe by construction:
 
-=over 4
+=over
 
-=item *
+=item * Backpressure is free.
 
-Backpressure is free. A bounded output Channel that fills up parks the stage's producer, and that park propagates all
-the way upstream, so a slow C<consume> (or a slow stage) throttles the raw producer instead of queueing unbounded
-memory.
+A bound output Channel that fills up parks the stage's producer, and that park propagates all the way upstream, so a
+slow C<consume> (or a slow stage) throttles the raw producer instead of queueing unbounded memory.
 
-=item *
+=item * A stream ends when its source Channel shuts down.
 
-A stream ends when its source Channel shuts down. Each stage's fiber sees the shutdown as C<undef> from C<get> and then
-shuts its own output down, so a consumed chain unwinds fiber-by-fiber back to the source and the live fiber count
-returns to its baseline: no stage can park forever on a source that quit, and no orphan fibers are left behind.
+Each stage's fiber sees the shutdown as C<undef> from C<get> and then shuts its own output down, so a consumed chain
+unwinds fiber-by-fiber back to the source and the live fiber count returns to its baseline: no stage can park forever
+on a source that quit, and no orphan fibers are left behind.
 
 =item *
 
@@ -55,7 +54,7 @@ cancellation token interrupts a stage mid-loop cleanly.
 
 =back
 
-=head1 CONSTRUCTOR
+=head1 METHODS
 
 =head2 C<from_channel( $ch, stage_capacity => $n )>
 
@@ -66,10 +65,6 @@ Wraps an existing Channel as the head of a new pipeline. C<stage_capacity> (defa
 bounded output Channel the stages of this pipeline allocate: pick it small to make backpressure bite early, large to
 let a burst flow through before any producer parks. The head itself never allocates a Channel; it reads C<$ch>
 directly, which is also the handle the pipeline shuts down.
-
-=head1 METHODS
-
-Stepping on a stream returns a new stream; the original is untouched and can be read from twice.
 
 =head2 C<map( sub ($item) { ... } )>
 
@@ -103,17 +98,17 @@ The terminal stage. Runs the callback on every item as it arrives: a batch (arra
 argument list, anything else is passed whole. Returns the fiber handle, which you can C<await> if you want the sink to
 have finished. The sink fiber ends when the source shuts down, at which point the whole pipeline is done.
 
-=head2 C<shutdown()>
+=head2 C<shutdown( )>
 
 Shuts the head's source Channel down (and, through each stage's link, the whole chain upstream), which ends every stage
 fiber and releases any parked consumer. Mostly a convenience: shutting down the original Channel yourself has the same
 effect.
 
-=head2 C<chain()>
+=head2 C<chain( )>
 
 The upstream Stream a stage was built from, or C<undef> at the head. Introspection, chiefly useful in tests.
 
-=head2 C<cap()>
+=head2 C<cap( )>
 
 The stage capacity this pipeline was built with.
 
