@@ -11,11 +11,18 @@ package Acme::Parataxis::Generator v0.1.1 {
     # Stackful lazy iterator backed by a private fiber (online note: the producer never enters the scheduler run queue;
     # each ->next resumes it via coro_call, i.e. it parks in the same way a coroutine parks, and exhaustion/error
     # finish the fiber normally). Windows longjmp across the very first fiber allocated in a process (fid 0) is
-    # unreliable (the body's die escapes every anchored JMPENV -> "uncaught die" or 0xC0000005). Keeping one
-    # permanently parked reserved fiber means generators always land on fid >= 1, where the resume-die path is
-    # exercised by the whole test suite from the first scheduler tests on and has always been stable.
+    # unreliable (the body's die escapes every anchored JMPENV -> "uncaught die" or 0xC0000005), so a generator must
+    # never land on fid 0, a slot the resume-die path is not exercised on until much later in the suite.
+    #
+    # On the mainline nothing else has allocated a fiber yet, so one permanently parked reserved fiber takes fid 0 and
+    # every generator then lands on fid >= 1. Inside a run the run's own main fiber already holds fid 0 before the body
+    # executes, so a generator built there is on fid >= 1 regardless and reserving again buys nothing: all it adds is a
+    # fiber parked for the lifetime of the process, which the scheduler's deadlock detector counts as run work and
+    # trips over when that run ends. (Acme::Parataxis snapshots %PRESET_FIBERS when a run starts, so a fiber born
+    # *during* the run is not excluded from that count the way a fiber from an earlier run is.)
     sub _ensure_reserved_fiber {
         return if $RESERVED;
+        return if Acme::Parataxis->current_fid >= 0;    # a run already owns fid 0; do not add a permanent fiber
         my $fiber = Acme::Parataxis->new(
             code => sub {
                 Acme::Parataxis::coro_yield( [] );

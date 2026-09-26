@@ -1282,7 +1282,7 @@ depths, sets `CvDEPTH` to the deepest parked frame before a resume (using the co
 for frames still on the resuming stack, which `cx_popsub_args`' DEBUGGING assert requires), and only cleans a landing
 pad that no parked frame owns, so a resume can never step on a pad another fiber is parked in. Registrations are purged
 when a fiber is destroyed. This is regression-tested by the four-fiber park/re-enter choreography in
-`t/055_shared_pads.t`.
+`t/355_shared_pads.t`.
 
 ## `eval` vs. `try/catch`
 

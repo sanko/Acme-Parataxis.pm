@@ -29,7 +29,7 @@ subtest 'run-time dump classifies a fiber blocked on a semaphore and one on a sl
             ok my $s = $by{ $sleeper->fid }, 'the sleeper is listed';
             is $s->{state},     'WAITING',     'blocked on the sleep job';
             is $s->{reason}[0], 'await_sleep', 'its wait reason names the wait';
-            like $s->{reason}[1], qr[045_diagnostics\.t$], 'the site is the fiber body that slept';
+            like $s->{reason}[1], qr[400_diagnostics\.t$], 'the site is the fiber body that slept';
             is $s->{reason}[2], $sleep_line, 'at the exact line of the call';
             my $report = '';
             open my $cap, '>', \$report;
