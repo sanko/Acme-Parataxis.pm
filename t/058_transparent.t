@@ -3,7 +3,7 @@ use blib;
 use Test2::V1 -ipP;
 use Time::HiRes      qw[time];
 use File::Temp       ();
-use Fcntl            qw[F_GETFL F_SETFL O_NONBLOCK];
+use IO::Handle       ();
 use IO::Socket::INET ();
 use Acme::Parataxis  qw[async fiber await_sleep with_timeout];
 
@@ -20,6 +20,18 @@ sub socket_pair {
     my $client = IO::Socket::INET->new( PeerAddr  => '127.0.0.1:' . $server->sockport )                         or die "connect: $!";
     my $conn   = $server->accept or die "accept: $!";
     return ( $client, $conn );
+}
+#
+# Whether select() will even take this handle. A zero timeout means "report what is ready now", so the answer costs
+# nothing either way: 0 (or 1) means the handle was accepted, -1 means select() rejected the descriptor. That
+# rejection is the whole reason a handle is unwatchable - Win32's select() takes sockets and nothing else - so it is
+# also the honest way to ask whether a fiber could ever be parked on something, rather than naming an OS.
+sub can_watch {
+    my $in   = q{};
+    vec( $in, fileno( $_[0] ), 1 ) = 1;
+    my $out  = q{};
+    my $n    = select( $in, $out, undef, 0 );
+    return defined $n && $n >= 0;
 }
 #
 subtest 'opt-in install is explicit and reports' => sub {
@@ -124,21 +136,25 @@ subtest 'a read asked for more than the peer sends returns the short count' => s
     }
 };
 subtest 'the caller handle is handed back in the mode it arrived in' => sub {
-    # The override makes the handle non-blocking only for the duration of its own read, then puts the flags back.
+    # The override makes the handle non-blocking only for the duration of its own read, then puts the mode back.
     # Anything else would break the gevent-style contract in reverse: code compiled *before* installation still gets a
     # raw blocking read from that same handle, and would start failing with EAGAIN if we left it flipped.
+    #
+    # Asked through IO::Handle->blocking, which is the interface the override itself uses and the only portable one -
+    # Fcntl has no F_GETFL or F_SETFL on Win32 at all. It is not an interface that works *everywhere* either: Winsock's
+    # FIONBIO can set a socket's mode but has no way to report one, so the getter answers undef there. The capability
+    # is probed rather than assumed, so a platform that cannot answer is a skip and not a false pass.
     my ( $a, $b ) = socket_pair();
-    unless ( defined eval { fcntl( $a, F_GETFL, 0 ) } ) {
-        SKIP: { skip 'this platform does not report a descriptor mode for a socket', 2 }
-    }
-    for my $want ( 0, 1 ) {    # 0 = the socket default, 1 = the caller set O_NONBLOCK itself
-        my $flags = fcntl( $a, F_GETFL, 0 );
-        fcntl( $a, F_SETFL, $want ? ( $flags | O_NONBLOCK ) : ( $flags & ~O_NONBLOCK ) );
-        my $before = fcntl( $a, F_GETFL, 0 ) & O_NONBLOCK ? 1 : 0;
+    plan skip_all => 'this platform cannot report a handle mode through IO::Handle'
+        unless defined IO::Handle::blocking($a);
+
+    for my $want ( 1, 0 ) {    # 1 = the socket default (blocking), 0 = the caller set non-blocking itself
+        IO::Handle::blocking( $a, $want );
+        my $before = IO::Handle::blocking($a) ? 1 : 0;
         syswrite $b, 'ok';
         my ( $buf, $rc );
         async { $rc = read( $a, $buf, 2 ) };
-        my $after = fcntl( $a, F_GETFL, 0 ) & O_NONBLOCK ? 1 : 0;
+        my $after = IO::Handle::blocking($a) ? 1 : 0;
         my $was   = $before ? 'non-blocking' : 'blocking';
         my $now   = $after  ? 'still non-blocking' : 'still blocking';
         is $rc,    2,        "an exact read on a handle the caller left $was worked";
@@ -146,7 +162,17 @@ subtest 'the caller handle is handed back in the mode it arrived in' => sub {
     }
 };
 subtest 'a pipe parks the fiber instead of freezing the thread' => sub {
+    # Only a platform whose select() accepts a pipe can park here, and that is a question about the platform rather
+    # than about the OS by name, so it is asked: select() is the mechanism the worker itself uses, and it answers
+    # immediately either way. Win32's takes sockets only and reports ENOTSOCK for a pipe, which makes a pipe there
+    # unwatchable - nothing for await_read to wait on, so the override's only remaining move is to read it, and a
+    # read of a pipe with no writer yet parks the OS thread until the writer runs. The writer is usually a fiber, and
+    # it cannot run, because the thread that would run it is the one now inside the read. That is a platform limit
+    # rather than something this module can paper over; the regular-file subtest below still covers the unwatchable
+    # fallback for the case it actually exists for, where the data is already there.
     pipe( my $r, my $w ) or die "pipe: $!";
+    plan skip_all => 'select() cannot watch a pipe on this platform, so a fiber cannot wait on one'
+        unless can_watch( $r );
     my ( $buf, $rc, $ticked );
     my $t0 = time;
     async {

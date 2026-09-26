@@ -2,8 +2,9 @@ use v5.40;
 
 package Acme::Parataxis::Compat v0.1.1 {
     use Errno       qw[EAGAIN EWOULDBLOCK];
+    use IO::Handle  ();                       # loaded only: the overrides call IO::Handle::blocking() fully qualified
     use Carp        qw[croak];
-    use Fcntl       qw[F_GETFL F_SETFL O_NONBLOCK];
+    use Time::HiRes ();                       # loaded only: the overrides call Time::HiRes::time() fully qualified
     #
     # Transparent unblocking (CORE::GLOBAL overrides). This module is an opt-in
     # convenience: Acme::Parataxis->enable_transparent_unblocking() installs overrides
@@ -23,6 +24,12 @@ package Acme::Parataxis::Compat v0.1.1 {
     # back short of it means a real wait timed out, so the override keeps waiting rather than block the process.
     my $PROBE_MS = 5000;
 
+    # How much of that budget a probe has to burn before its -1 is read as "the handle is watchable, it just had
+    # nothing to say" rather than "this platform cannot watch this handle at all". Win32's select() takes sockets
+    # and nothing else, so a pipe or a regular file there answers -1 instantly, while a socket that truly timed out
+    # takes the full budget. Anything under this fraction is the former.
+    my $UNWATCHED = 0.9;
+
     # Write the framed read's result back into the caller's scalar (a reference to its
     # @_ slot), mimicking the builtin: undef (error) and 0 (EOF) leave the caller's
     # buffer alone; otherwise bytes before OFFSET are preserved and the read data is
@@ -34,42 +41,70 @@ package Acme::Parataxis::Compat v0.1.1 {
         return $rc;
     }
 
+    # Put a handle into non-blocking mode, answering the mode it was in, or undef when the platform will not.
+    sub _try_nonblocking ( $fh ) {
+
+        # `blocking` with no argument reports the current mode, and undef is its answer for a handle it cannot
+        # interrogate: an already-closed glob, a dirhandle, a driver-supplied handle - and on Win32, a socket.
+        # Winsock's FIONBIO can *set* a socket's mode but has no way to report one, so there the save half of a
+        # save/restore does not exist. Nothing is lost by asking rather than assuming a platform: on the one
+        # platform that cannot answer, the answer this read needs is already "no mode change", because sysread
+        # hands back a short count on its own (see _read_nonblocking).
+        my $was = IO::Handle::blocking($fh);
+        return undef unless defined $was;
+
+        # The setter answers with the mode it *replaced*, and -1 when it could not do the job at all. -1 is true, so
+        # the return cannot be read as a success flag the way an undef could be; comparing against -1 is what tells
+        # the two apart.
+        my $replaced = IO::Handle::blocking( $fh, 0 );
+        return defined $replaced && $replaced >= 0 ? $was : undef;
+    }
+
+    # Put a handle back the way the caller had it. The caller's own mode is what the handle looks like to every other
+    # bit of code that touches it, including code compiled *before* installation, which still gets a raw blocking read
+    # from this same handle. Restoring is what keeps transparent unblocking transparent.
+    sub _restore_blocking ( $fh, $was ) {
+        IO::Handle::blocking( $fh, $was ? 1 : 0 );
+        return;
+    }
+
     # Perform one read on a handle that is already known to be readable, WITHOUT letting a
     # short read park the OS thread.
     #
-    # This is the whole point of the exercise. A blocking read on a stream socket does not
-    # return when *one* byte is available, it returns when the *requested count* is - so
-    # "await_read says ready, now read" froze the entire run the moment a caller asked for
-    # more bytes than the peer had sent. Every fiber stalled, and because the fiber was
-    # inside a syscall rather than parked in the scheduler, no deadline or token could
-    # rescue it either.
+    # This is the whole point of the exercise. Perl's read() builtin does not return when *one* byte is available,
+    # it keeps going until it has the *requested count* - so "await_read says ready, now read" froze the entire run
+    # the moment a caller asked for more bytes than the peer had sent. Every fiber stalled, and because the fiber
+    # was inside a syscall rather than parked in the scheduler, no deadline or token could rescue it either.
     #
-    # So the handle is flipped to O_NONBLOCK for the duration of the read and restored
-    # afterwards. The read then returns whatever is there (>= 1 byte, or 0 at EOF) or
-    # fails with EAGAIN, both of which the caller's loop already knows how to handle. A
-    # regular file is unaffected: the worker's select() always reports one readable, and
-    # O_NONBLOCK is a no-op there, so the read answers instantly.
+    # So the handle is put into non-blocking mode for the duration of the read and put back afterwards, and the read
+    # itself is done with the builtin that stops at whatever arrived.
     #
-    # The flag save/restore is best-effort by design: if the handle cannot be interrogated
-    # (an already-closed glob, a driver-supplied handle) we still attempt the read rather
-    # than dying, preserving the old behaviour for anything we cannot measure.
+    # The mode is read and set through IO::Handle->blocking rather than through fcntl, and that is the whole
+    # portability story. Fcntl's constant table has no F_GETFL or F_SETFL on Win32 at all, and naming one there does
+    # not fail at compile time - it compiles as a call to a sub that does not exist and croaks at *runtime*, with
+    # "Your vendor has not defined Fcntl macro F_GETFL" - so a POSIX-only fcntl call compiles silently on every
+    # platform and then explodes exactly where it matters. IO::Handle already does the platform's own dispatch: fcntl
+    # where that exists, Winsock's FIONBIO where it does not. FIONBIO is the same request number the hand-rolled
+    # mode-flip carries, reached through a module that already knows it, and it comes back with an answer a caller
+    # can act on instead of an exception.
+    #
+    # Only the *buffered* builtin needs the mode changed, and only where there is a mode to change. sysread stops at
+    # a short count on every platform, on a blocking handle included: Winsock's recv - which is what a sysread on a
+    # socket calls - hands back whatever has arrived rather than waiting for the caller's count. read's buffered
+    # layer does loop internally until it has the full count, and it honours a non-blocking descriptor by stopping,
+    # but only where one can be set. So the buffered read is used when the flip took and sysread otherwise, on either
+    # side of that decision; the two agree on the count they return and differ only in whether perl's per-handle
+    # buffer is in the path, which is invisible to a caller that does not mix buffered and unbuffered reads on one
+    # handle (already undefined behaviour in perl).
     sub _read_nonblocking ( $fh, $len, $is_sys ) {
-
-        # fcntl refuses dirhandles ("fcntl() on unopened filehandle") even though the descriptor behind one is
-        # perfectly good, so the probe is silenced here. A handle we cannot interrogate is a "fall back to the raw
-        # read" case, not something worth two diagnostics on top of the read's own.
         no warnings 'io';
-        my $flags = fcntl( $fh, F_GETFL, 0 );
-        if ( defined $flags && !( $flags & O_NONBLOCK ) ) {
-            fcntl( $fh, F_SETFL, $flags | O_NONBLOCK );
-        }
-        my $buf = q{};
-        my $rc  = $is_sys ? CORE::sysread( $fh, $buf, $len, 0 ) : CORE::read( $fh, $buf, $len, 0 );
 
-        # The caller's original mode is what the handle looks like to every other bit of code that touches it,
-        # including code compiled *before* installation, which still gets a raw blocking read from this same
-        # handle. Restoring is what keeps transparent unblocking transparent.
-        fcntl( $fh, F_SETFL, $flags ) if defined $flags;
+        my $was = $is_sys ? undef : _try_nonblocking($fh);
+
+        my $buf = q{};
+        my $rc  = defined $was ? CORE::read( $fh, $buf, $len, 0 ) : CORE::sysread( $fh, $buf, $len, 0 );
+
+        _restore_blocking( $fh, $was ) if defined $was;
         return ( $rc, $buf );
     }
 
@@ -116,12 +151,35 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return _store( \$_[1], $off, $rc, $buf );
                 }
                 while (1) {
+                    my $t0    = Time::HiRes::time();
                     my $ready = Acme::Parataxis->await_read( $_[0], $PROBE_MS );
+                    if ( $ready < 0 ) {
 
-                    # A probe that gave up short means a real wait timed out - the handle is watchable, it just had
-                    # nothing to say. Keep waiting: a round with no data cycles the 5s await_read default forever,
-                    # matching a blocking read, and parking this fiber is what stops that from stalling the process.
-                    next if $ready < 0;
+                        # A probe that gave up *short of its budget* means this platform cannot watch this handle
+                        # at all - Win32's select() takes sockets only, so a pipe or a regular file answers -1
+                        # immediately - rather than that a watchable handle merely had nothing to say. Read those
+                        # directly, because there is nothing else left to try: a handle that cannot be watched
+                        # cannot be parked on either, so a read of it is the only thing that can make progress, and
+                        # refusing would mean such a handle never reads at all.
+                        #
+                        # The cost of that is real and is why it is reached only here: a read of a handle with
+                        # nothing buffered yet parks the OS thread, and on Win32 a pipe is in exactly that state
+                        # whenever a writer has not run yet - and the writer is usually a fiber, which cannot run
+                        # because the thread that would run it is the one now inside the read. There is no fixing
+                        # that from perl without a native overlapped-I/O wait, so a fiber that needs to *wait* on a
+                        # non-socket handle on Win32 has to be driven from a socket or a driver instead.
+                        #
+                        # The test is re-armed every round rather than spent once, so one slow round does not cost
+                        # the fallback permanently and leave the loop spinning a 5s probe at a time forever, and it
+                        # is measured on a high-resolution clock so a probe that merely crosses a clock second is
+                        # still recognised as short. A round that really did burn the whole budget is a genuine
+                        # timeout, and raw-blocking on it would stall the process instead.
+                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
+                            my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 0 );
+                            return _store( \$_[1], $off, $rc, $buf );
+                        }
+                        next;
+                    }
                     my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
@@ -135,11 +193,18 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return _store( \$_[1], $off, $rc, $buf );
                 }
                 while (1) {
+                    my $t0    = Time::HiRes::time();
                     my $ready = Acme::Parataxis->await_read( $_[0], $PROBE_MS );
+                    if ( $ready < 0 ) {
 
-                    # See the read override: a probe that gave up short means the handle had nothing to say, not
-                    # that it is unwatchable, so keep waiting.
-                    next if $ready < 0;
+                        # See the read override: a probe that gave up short of its budget is a handle this platform
+                        # cannot watch, so read it raw rather than spin.
+                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
+                            my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 1 );
+                            return _store( \$_[1], $off, $rc, $buf );
+                        }
+                        next;
+                    }
                     my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 1 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
