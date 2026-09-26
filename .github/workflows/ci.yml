@@ -29,6 +29,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   freebsd:
     name: FreeBSD
@@ -54,6 +62,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   haiku:
     name: Haiku
@@ -81,6 +97,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   linux:
     name: Linux
@@ -145,6 +169,11 @@ jobs:
         #~ resets PATH, so a bare name would not be found).
         cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v . \
           || sudo "$(command -v cpanm)" --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        #~ t/047 and t/048 skip without an event loop, leaving attach_loop untested.
+        #~ Not in META.json's test/recommends, so --with-recommends does not cover
+        #~ them; install both directly. Best effort, as above.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         perl Build.PL
         ./Build
         ./Build test --v
@@ -195,6 +224,11 @@ jobs:
         curl -L https://cpanmin.us | perl - --notest App::cpanminus
         command -v cpanm
         cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        #~ t/047 and t/048 skip without an event loop, leaving attach_loop untested.
+        #~ Not in META.json's test/recommends, so --with-recommends does not cover
+        #~ them; install both directly. Best effort, as above.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         perl Build.PL
         ./Build
         ./Build test --v
@@ -224,6 +258,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   omnios:
     name: OmniOS
@@ -251,6 +293,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   openbsd:
     name: OpenBSD
@@ -278,6 +328,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   results:
     if: always()
@@ -322,6 +380,14 @@ jobs:
         export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
         command -v cpanm
         cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/047 Mojo, t/048 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
   windows:
     name: Windows
@@ -342,6 +408,11 @@ jobs:
         curl -L https://cpanmin.us | perl - --notest App::cpanminus
         command -v cpanm
         cpanm --installdeps --notest --with-suggests --with-recommends --with-configure -v .
+        #~ t/047 and t/048 skip without an event loop, leaving attach_loop untested.
+        #~ Not in META.json's test/recommends, so --with-recommends does not cover
+        #~ them; install both directly. Best effort, as above.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
         cpanm --test-only -v .
 name: CI Matrix
 on:

@@ -79,7 +79,8 @@ class Acme::Parataxis::Driver v0.1.1 {
 
 # Wrap (or pass through) an event-loop object as a Driver. attach_loop() routes everything through here, so callers
 # may hand in a Mojo::IOLoop (or Mojo::Reactor) or an IO::Async::Loop and get the right reference driver for free.
-# A plain package sub (perlclass only allows instance method dispatch); Acme::Parataxis::Driver::wrap($loop).
+# A plain package sub declared outside the class block, since it returns a driver rather than dispatching on one.
+# Called as Acme::Parataxis::Driver::wrap($loop).
 sub Acme::Parataxis::Driver::wrap ($loop) {
     Carp::croak 'wrap() requires an event-loop object' unless Scalar::Util::blessed($loop);
     return $loop if $loop->isa('Acme::Parataxis::Driver');

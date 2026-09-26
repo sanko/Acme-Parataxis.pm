@@ -1,9 +1,9 @@
 use v5.40;
-use Errno       qw[EAGAIN EWOULDBLOCK];
-use Carp        qw[croak];
-use Time::HiRes ();                       # loaded only: the overrides call Time::HiRes::time() fully qualified, never bare time()
 
 package Acme::Parataxis::Compat v0.1.1 {
+    use Errno       qw[EAGAIN EWOULDBLOCK];
+    use Carp        qw[croak];
+    use Fcntl       qw[F_GETFL F_SETFL O_NONBLOCK];
     #
     # Transparent unblocking (CORE::GLOBAL overrides). This module is an opt-in
     # convenience: Acme::Parataxis->enable_transparent_unblocking() installs overrides
@@ -19,11 +19,9 @@ package Acme::Parataxis::Compat v0.1.1 {
     my $INSTALLED = 0;
     my @SAVED;    # [ name, saved-glob ] per installed override, for disable()
 
-    # The readiness budget, in ms, that the read/sysread overrides give each await_read probe, plus the fraction of
-    # that budget a probe must return short of to count as "select() cannot watch this handle" rather than "a real
-    # wait timed out". See the read override for why that has to be timed on a high-resolution clock.
-    my $PROBE_MS  = 5000;
-    my $UNWATCHED = 0.9;
+    # The readiness budget, in ms, that the read/sysread overrides give each await_read probe. A probe that comes
+    # back short of it means a real wait timed out, so the override keeps waiting rather than block the process.
+    my $PROBE_MS = 5000;
 
     # Write the framed read's result back into the caller's scalar (a reference to its
     # @_ slot), mimicking the builtin: undef (error) and 0 (EOF) leave the caller's
@@ -36,10 +34,50 @@ package Acme::Parataxis::Compat v0.1.1 {
         return $rc;
     }
 
-    sub install : prototype() {
+    # Perform one read on a handle that is already known to be readable, WITHOUT letting a
+    # short read park the OS thread.
+    #
+    # This is the whole point of the exercise. A blocking read on a stream socket does not
+    # return when *one* byte is available, it returns when the *requested count* is - so
+    # "await_read says ready, now read" froze the entire run the moment a caller asked for
+    # more bytes than the peer had sent. Every fiber stalled, and because the fiber was
+    # inside a syscall rather than parked in the scheduler, no deadline or token could
+    # rescue it either.
+    #
+    # So the handle is flipped to O_NONBLOCK for the duration of the read and restored
+    # afterwards. The read then returns whatever is there (>= 1 byte, or 0 at EOF) or
+    # fails with EAGAIN, both of which the caller's loop already knows how to handle. A
+    # regular file is unaffected: the worker's select() always reports one readable, and
+    # O_NONBLOCK is a no-op there, so the read answers instantly.
+    #
+    # The flag save/restore is best-effort by design: if the handle cannot be interrogated
+    # (an already-closed glob, a driver-supplied handle) we still attempt the read rather
+    # than dying, preserving the old behaviour for anything we cannot measure.
+    sub _read_nonblocking ( $fh, $len, $is_sys ) {
+
+        # fcntl refuses dirhandles ("fcntl() on unopened filehandle") even though the descriptor behind one is
+        # perfectly good, so the probe is silenced here. A handle we cannot interrogate is a "fall back to the raw
+        # read" case, not something worth two diagnostics on top of the read's own.
+        no warnings 'io';
+        my $flags = fcntl( $fh, F_GETFL, 0 );
+        if ( defined $flags && !( $flags & O_NONBLOCK ) ) {
+            fcntl( $fh, F_SETFL, $flags | O_NONBLOCK );
+        }
+        my $buf = q{};
+        my $rc  = $is_sys ? CORE::sysread( $fh, $buf, $len, 0 ) : CORE::read( $fh, $buf, $len, 0 );
+
+        # The caller's original mode is what the handle looks like to every other bit of code that touches it,
+        # including code compiled *before* installation, which still gets a raw blocking read from this same
+        # handle. Restoring is what keeps transparent unblocking transparent.
+        fcntl( $fh, F_SETFL, $flags ) if defined $flags;
+        return ( $rc, $buf );
+    }
+
+    sub install ($class=()) {
         return 1 if $INSTALLED;
         {
             no strict 'refs';
+            no warnings 'redefine';
             push @SAVED, [ sleep   => \*{'CORE::GLOBAL::sleep'} ];
             push @SAVED, [ read    => \*{'CORE::GLOBAL::read'} ];
             push @SAVED, [ sysread => \*{'CORE::GLOBAL::sysread'} ];
@@ -53,8 +91,8 @@ package Acme::Parataxis::Compat v0.1.1 {
                 my $secs = @_ ? $_[0] : $_;
                 $secs = 0 if !defined $secs || $secs < 0;
                 return $secs              if 0 == $secs;
-                return CORE::sleep($secs) if 'Acme::Parataxis'->current_fid < 0;
-                'Acme::Parataxis'->await_sleep( $secs * 1000 );
+                return CORE::sleep($secs) if Acme::Parataxis->current_fid < 0;
+                Acme::Parataxis->await_sleep( $secs * 1000 );
                 return $secs;
             };
 
@@ -78,33 +116,13 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return _store( \$_[1], $off, $rc, $buf );
                 }
                 while (1) {
-                    my $t0    = Time::HiRes::time();
-                    my $ready = 'Acme::Parataxis'->await_read( $_[0], $PROBE_MS );
-                    if ( $ready < 0 ) {
+                    my $ready = Acme::Parataxis->await_read( $_[0], $PROBE_MS );
 
-                        # A probe that came back well short of its own budget means select() cannot watch this handle
-                        # at all (a regular file, a pipe), not that a real wait timed out. Fall back to a raw blocking
-                        # read there, which is instant for files, instead of spinning forever.
-                        #
-                        # Two things this comparison has to get right, both of which used to be wrong and made a
-                        # regular-file read inside a fiber hang until the caller's deadline killed it:
-                        #   - it must be timed on a high-resolution clock. `time` here was plain CORE::time, so the
-                        #     whole-second answer made a sub-50ms probe read as 0 or 1, and any probe that happened to
-                        #     cross a second boundary was misread as a genuine timeout;
-                        #   - it must be per round, not a one-shot on the first. The flag used to be cleared whether or
-                        #     not the fallback was taken, so one slow round cost the fallback permanently and the loop
-                        #     then spun a 5s probe at a time forever.
-                        # A round that really did burn the budget is a real timeout, so keep waiting instead of
-                        # blocking the whole process on a raw read of a socket that has nothing yet.
-                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
-                            my $buf = '';
-                            my $rc  = CORE::read( $_[0], $buf, $_[2], 0 );
-                            return _store( \$_[1], $off, $rc, $buf );
-                        }
-                        next;
-                    }
-                    my $buf = '';
-                    my $rc  = CORE::read( $_[0], $buf, $_[2], 0 );
+                    # A probe that gave up short means a real wait timed out - the handle is watchable, it just had
+                    # nothing to say. Keep waiting: a round with no data cycles the 5s await_read default forever,
+                    # matching a blocking read, and parking this fiber is what stops that from stalling the process.
+                    next if $ready < 0;
+                    my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 0 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
                 }
@@ -117,22 +135,12 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return _store( \$_[1], $off, $rc, $buf );
                 }
                 while (1) {
-                    my $t0    = Time::HiRes::time();
-                    my $ready = 'Acme::Parataxis'->await_read( $_[0], $PROBE_MS );
-                    if ( $ready < 0 ) {
+                    my $ready = Acme::Parataxis->await_read( $_[0], $PROBE_MS );
 
-                        # See the read override: a probe that gave up short of its budget means the handle cannot
-                        # be select()ed, so read it raw rather than spin. Same high-resolution timing, same per-round
-                        # (not one-shot) test, same refusal to raw-block a socket that merely timed out.
-                        if ( Time::HiRes::time() - $t0 < $PROBE_MS / 1000 * $UNWATCHED ) {
-                            my $buf = '';
-                            my $rc  = CORE::sysread( $_[0], $buf, $_[2], 0 );
-                            return _store( \$_[1], $off, $rc, $buf );
-                        }
-                        next;
-                    }
-                    my $buf = '';
-                    my $rc  = CORE::sysread( $_[0], $buf, $_[2], 0 );
+                    # See the read override: a probe that gave up short means the handle had nothing to say, not
+                    # that it is unwatchable, so keep waiting.
+                    next if $ready < 0;
+                    my ( $rc, $buf ) = _read_nonblocking( $_[0], $_[2], 1 );
                     return _store( \$_[1], $off, $rc, $buf ) if defined $rc;
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
                 }
@@ -142,7 +150,7 @@ package Acme::Parataxis::Compat v0.1.1 {
         return 1;
     }
 
-    sub disable : prototype() {
+    sub disable ($class=()) {
         return 1 unless $INSTALLED;
         {
             no strict 'refs';
@@ -152,5 +160,7 @@ package Acme::Parataxis::Compat v0.1.1 {
         $INSTALLED = 0;
         return 1;
     }
-    sub installed : prototype() { return $INSTALLED ? 1 : 0 }
-}
+    sub installed ($class=()) { !!$INSTALLED }
+};
+#
+1;

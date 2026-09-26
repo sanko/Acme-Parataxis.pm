@@ -138,7 +138,8 @@ class Acme::Parataxis::Stream v0.1.1 {
     method shutdown () { $src->shutdown; $self->chain->shutdown if $self->chain; 1 }
 
     # from_channel() is the chain head constructor, called as Acme::Parataxis::Stream->from_channel($ch, ...),
-    # so it is a plain package sub like Channel->select (perlclass only allows instance method invocations).
+    # so like Channel->select it is a plain package sub: it builds a new stream rather than dispatching on one,
+    # and takes the class as $class.
     sub from_channel ( $class, $ch, %opts ) {
         my $cap = $opts{stage_capacity} // 128;
         return $class->new( src => $ch, cap => $cap );

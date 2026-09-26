@@ -1028,7 +1028,7 @@ it too when no explicit `timeout` is given.
 use Acme::Parataxis;
 use Acme::Parataxis::Channel;
 
-my $q = Acme::Parataxis::Channel->new( 4 );
+my $q = Acme::Parataxis::Channel->new( capacity => 4 );
 
 async {
     fiber { $q->put( $_ ) for 1 .. 8 };      # producers

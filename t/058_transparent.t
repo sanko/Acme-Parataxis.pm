@@ -3,6 +3,7 @@ use blib;
 use Test2::V1 -ipP;
 use Time::HiRes      qw[time];
 use File::Temp       ();
+use Fcntl            qw[F_GETFL F_SETFL O_NONBLOCK];
 use IO::Socket::INET ();
 use Acme::Parataxis  qw[async fiber await_sleep with_timeout];
 
@@ -89,6 +90,83 @@ subtest 'read/sysread inside a fiber frame until the peer writes' => sub {
         is $buf, 'framed!', "$builtin wrote the result back into the caller buffer";
         ok $ms < 4000, "the $builtin returned promptly ($ms ms) once the peer wrote";
     }
+};
+subtest 'a read asked for more than the peer sends returns the short count' => sub {
+    # Every socket case above asks for exactly the number of bytes the peer sends, which is the one shape a blocking
+    # read cannot get wrong. Ask for one more than arrives and the old override froze the entire run: await_read only
+    # promises that *something* is readable, but a raw read on a blocking stream handle waits for the whole requested
+    # count, so the fiber sat in a syscall where no deadline, no token and no sibling could reach it.
+    for my $builtin (qw[read sysread]) {
+        my ( $a, $b ) = socket_pair();
+        syswrite $b, 'hello';    # five bytes down the wire to $a, then silence
+        my ( $buf, $rc, $ticked );
+        my $t0 = time;
+        async {
+            # The deadline below does NOT rescue this one if the override regresses: a fiber wedged in the read
+            # syscall cannot be interrupted, because the timer fiber that would raise the deadline never gets
+            # scheduled. It is here to catch a *spin* regression, which a deadline can stop. A return to plain
+            # blocking reads stalls the run outright, so that failure mode is a stall to be read, not a red test.
+            with_timeout(
+                5000,
+                sub {
+                    my $ticks = fiber { await_sleep(30); $ticked = 1; 1 };
+                    if ( $builtin eq 'read' ) { $rc = read( $a, $buf, 10 ) }
+                    else                      { $rc = sysread( $a, $buf, 10 ) }
+                    $ticks->await;
+                }
+            );
+        };
+        my $ms = ( time - $t0 ) * 1000;
+        is $rc,  5,       "$builtin asked for 10, got 5, and returned the short count instead of waiting";
+        is $buf, 'hello', "$builtin filled the caller buffer with the bytes that had arrived";
+        ok $ms < 2000,    "the $builtin returned promptly ($ms ms) instead of parking the OS thread";
+        ok $ticked,       "a sibling fiber ran during the $builtin, so the rest of the run kept going";
+    }
+};
+subtest 'the caller handle is handed back in the mode it arrived in' => sub {
+    # The override makes the handle non-blocking only for the duration of its own read, then puts the flags back.
+    # Anything else would break the gevent-style contract in reverse: code compiled *before* installation still gets a
+    # raw blocking read from that same handle, and would start failing with EAGAIN if we left it flipped.
+    my ( $a, $b ) = socket_pair();
+    unless ( defined eval { fcntl( $a, F_GETFL, 0 ) } ) {
+        SKIP: { skip 'this platform does not report a descriptor mode for a socket', 2 }
+    }
+    for my $want ( 0, 1 ) {    # 0 = the socket default, 1 = the caller set O_NONBLOCK itself
+        my $flags = fcntl( $a, F_GETFL, 0 );
+        fcntl( $a, F_SETFL, $want ? ( $flags | O_NONBLOCK ) : ( $flags & ~O_NONBLOCK ) );
+        my $before = fcntl( $a, F_GETFL, 0 ) & O_NONBLOCK ? 1 : 0;
+        syswrite $b, 'ok';
+        my ( $buf, $rc );
+        async { $rc = read( $a, $buf, 2 ) };
+        my $after = fcntl( $a, F_GETFL, 0 ) & O_NONBLOCK ? 1 : 0;
+        my $was   = $before ? 'non-blocking' : 'blocking';
+        my $now   = $after  ? 'still non-blocking' : 'still blocking';
+        is $rc,    2,        "an exact read on a handle the caller left $was worked";
+        is $after, $before, "...and the handle is $now afterwards";
+    }
+};
+subtest 'a pipe parks the fiber instead of freezing the thread' => sub {
+    pipe( my $r, my $w ) or die "pipe: $!";
+    my ( $buf, $rc, $ticked );
+    my $t0 = time;
+    async {
+        with_timeout(
+            5000,
+            sub {
+                my $ticks = fiber { await_sleep(30); $ticked = 1; 1 };
+                my $late  = fiber { await_sleep(150); syswrite $w, 'piped' };
+                $rc = read( $r, $buf, 5 );
+                $late->await;
+                $ticks->await;
+            }
+        );
+    };
+    my $ms = ( time - $t0 ) * 1000;
+    is $rc,  5,       'the read on a pipe returned the byte count once the writer got there';
+    is $buf, 'piped', '...and filled the caller buffer';
+    ok $ms >= 140,    "the read waited for the late writer ($ms ms) rather than spinning or returning early";
+    ok $ms < 3000,    "...and returned promptly once the data arrived ($ms ms)";
+    ok $ticked,       'a sibling fiber ran while the pipe read was parked';
 };
 subtest 'a regular file read inside a fiber falls back to the raw builtin' => sub {
     my $dir  = File::Temp->newdir( CLEANUP => 0 );

@@ -1,24 +1,23 @@
 use v5.40;
 use feature 'class';
 no warnings 'experimental::class', 'recursion';
-use Carp;
-use Acme::Parataxis qw[fiber await_sleep];
+#
 class Acme::Parataxis::Channel v0.1.1 {
     use Acme::Parataxis qw[fiber await_sleep];
     use Acme::Parataxis::CancellationToken;
     use Acme::Parataxis::Semaphore;
     use Carp qw[croak];
-    field $capacity : param //= 2_000_000_000;
-    field $timeout  : param //= 0;               # per-channel default wait bound in ms; 0 (and undef) means none
+    #
+    field $capacity : reader : param //= 2_000_000_000;
+    field $timeout  : reader : param //= 0;               # per-channel default wait bound in ms; 0 (and undef) means none
     field $sem_get = Acme::Parataxis::Semaphore->new( count => 0 );
     field $sem_put = Acme::Parataxis::Semaphore->new( count => $capacity );
     field @data : reader;
-    field @select_waiters;                       # [fid, op] pairs parked here by select(); op is 'get' or 'put'
+    field @select_waiters;                                # [fid, op] pairs parked here by select(); op is 'get' or 'put'
     ADJUST {
         $capacity >= 1                    or die "Channel capacity must be >= 1 (got $capacity)\n";
         defined $timeout && $timeout >= 0 or die "Channel timeout must be a non-negative number of milliseconds (got $timeout)\n";
     }
-    method timeout () {$timeout}
 
     # Runs $op (a get/put body that parks through the channel semaphores) under the channel's default
     # wait bound. The deadline is armed only when the op may actually park ($may_park): a ready channel
@@ -137,122 +136,123 @@ class Acme::Parataxis::Channel v0.1.1 {
         @select_waiters = @still;
         return;
     }
-};
 
-# CSP select: wait on the first ready case and return its (channel, value). A plain package sub (perlclass only
-# allows instance invocations), called as Acme::Parataxis::Channel->select(...). Two probe/register phases as
-# Two probe/register phases -- probe without yielding first, fall back to registering on every in
-# channel's private @select_waiters, arming the shared deadline *after* registration, then parking.
-sub Acme::Parataxis::Channel::select ( $class, @args ) {
-    my ( $timeout, $default );
-    my @cases;
-    while (@args) {
-        my $arg = shift @args;
-        if ( ref $arg eq 'ARRAY' && @$arg >= 2 ) {
-            my ( $ch, $op, @rest ) = @$arg;
-            Carp::croak 'select() case channel must be an Acme::Parataxis::Channel' unless ref($ch) && $ch->isa('Acme::Parataxis::Channel');
-            Carp::croak 'select() case op must be "get" or "put"'                   unless $op eq 'get' || $op eq 'put';
-            Carp::croak 'select() "put" case requires a value' if $op eq 'put' && @$arg < 3;
-            push @cases, [ $ch, $op, $rest[0] ];
-        }
-        elsif ( $arg eq 'timeout' ) {
-            $timeout = shift @args;
-            Carp::croak 'select() timeout must be a non-negative number of milliseconds' unless defined $timeout && $timeout >= 0;
-        }
-        elsif ( $arg eq 'default' ) {
-            $default = shift @args;
-            Carp::croak 'select() default must be a CODE ref' unless ref $default eq 'CODE';
-        }
-        else {
-            Carp::croak 'select() arguments must be [ $channel, "get" | "put", $value? ] cases, with timeout/default options';
-        }
-    }
-    Carp::croak 'select() needs at least one case' unless @cases;
-    my $fid = Acme::Parataxis->current_fid;
-    Carp::croak 'select() must be called from inside a scheduled fiber' if $fid < 0;
-
-    # No explicit timeout: each case's channel-level default (Channel->new( timeout => $ms )) applies
-    # and select parks until the earliest fires - so the shared deadline is the smallest positive
-    # default among the cases. An explicit timeout option (including timeout => 0) always wins.
-    if ( !defined $timeout ) {
-        my @bounds = sort { $a <=> $b } grep { defined && $_ > 0 } map { $_->[0]->timeout } @cases;
-        $timeout = @bounds ? $bounds[0] : undef;
-    }
-
-    # The timeout deadline is armed once on the first park and reused across re-parks, so a spurious wake can
-    # never stack timers. "Register, then arm" (token.register before the sleep job) closes the lost-wakeup
-    # window an await_sleep-only timeout would leave between the probe step and registration.
-    my $deadline;
-    my $timer_armed;
-    my ( $out_ch, $out_val, $out_die ) = ( undef, undef, undef );
-OUTER: while (1) {
-
-        # Phase 1 -- probe, no yield: shuffle so no ordering starves a case, commit the first match, and let
-        # default run only when nothing is ready (it never parks).
-        my @order = 0 .. $#cases;
-        for ( my $i = $#order; $i > 0; $i-- ) {
-            my $j = int rand( $i + 1 );
-            @order[ $i, $j ] = @order[ $j, $i ];
-        }
-        for my $i (@order) {
-            my ( $ch, $op, $v ) = @{ $cases[$i] };
-            if ( $op eq 'get' ) {
-                my ( $ok, $got ) = $ch->try_get;
-                if ($ok) { ( $out_ch, $out_val ) = ( $ch, $got ); last OUTER; }
+    # CSP select: wait on the first ready case and return its (channel, value). A plain package sub rather than a
+    # method, since it has no channel of its own to dispatch on, so it takes the class as $class and is called as
+    # Acme::Parataxis::Channel->select(...). Two probe/register phases -- probe without yielding first, fall back to
+    # registering on every case in the channel's private @select_waiters, arming the shared deadline *after*
+    # registration, then parking.
+    sub select ( $class, @args ) {
+        my ( $timeout, $default );
+        my @cases;
+        while (@args) {
+            my $arg = shift @args;
+            if ( ref $arg eq 'ARRAY' && @$arg >= 2 ) {
+                my ( $ch, $op, @rest ) = @$arg;
+                Carp::croak 'select() case channel must be an Acme::Parataxis::Channel' unless ref($ch) && $ch->isa('Acme::Parataxis::Channel');
+                Carp::croak 'select() case op must be "get" or "put"'                   unless $op eq 'get' || $op eq 'put';
+                Carp::croak 'select() "put" case requires a value' if $op eq 'put' && @$arg < 3;
+                push @cases, [ $ch, $op, $rest[0] ];
+            }
+            elsif ( $arg eq 'timeout' ) {
+                $timeout = shift @args;
+                Carp::croak 'select() timeout must be a non-negative number of milliseconds' unless defined $timeout && $timeout >= 0;
+            }
+            elsif ( $arg eq 'default' ) {
+                $default = shift @args;
+                Carp::croak 'select() default must be a CODE ref' unless ref $default eq 'CODE';
             }
             else {
-                if ( $ch->try_put($v) ) { ( $out_ch, $out_val ) = ( $ch, $v ); last OUTER; }
+                Carp::croak 'select() arguments must be [ $channel, "get" | "put", $value? ] cases, with timeout/default options';
             }
         }
-        if ( defined $default ) { ( $out_ch, $out_val ) = ( undef, $default->() ); last OUTER; }
+        Carp::croak 'select() needs at least one case' unless @cases;
+        my $fid = Acme::Parataxis->current_fid;
+        Carp::croak 'select() must be called from inside a scheduled fiber' if $fid < 0;
 
-        # Phase 2 -- register on every involved channel, arm the shared deadline, then park. On wake the
-        # park's deregistrations were already dropped (_resume_hooks) or the per-channel wake skipped the
-        # fiber, so re-probe exactly once and fall back to re-registering; the one-shot re-poll per wake is
-        # natural here because registering happens before the next park.
-        for my $case (@cases) { $case->[0]->_register_select_waiter( $fid, $case->[1] ); }
-        if ( defined $timeout && $timeout > 0 ) {
-            $deadline //= Acme::Parataxis::CancellationToken->new( kind => 'timeout' );
-            $deadline->register;
-            unless ($timer_armed) {
-                my $ms = $timeout;
-
-                # The timer registers on the shared deadline and swallows its own interrupt, so teardown can
-                # recall it when a case commits first instead of leaving a worker parked for the full $ms.
-                Acme::Parataxis::fiber {
-                    $deadline->register;
-                    eval { Acme::Parataxis::await_sleep($ms); $deadline->cancel; 1 };
-                };
-                $timer_armed = 1;
-            }
+        # No explicit timeout: each case's channel-level default (Channel->new( timeout => $ms )) applies
+        # and select parks until the earliest fires - so the shared deadline is the smallest positive
+        # default among the cases. An explicit timeout option (including timeout => 0) always wins.
+        if ( !defined $timeout ) {
+            my @bounds = sort { $a <=> $b } grep { defined && $_ > 0 } map { $_->[0]->timeout } @cases;
+            $timeout = @bounds ? $bounds[0] : undef;
         }
-        my $dereg = sub {
-            for my $case (@cases) { $case->[0]->_unregister_select_waiter($fid) }
-            $deadline->unregister if defined $deadline;
-        };
-        my $ok = eval { Acme::Parataxis::_park( 'Channel select', 1, $dereg ); 1 };
-        $dereg->();    # idempotent: on interrupt _park already ran it; on a natural wake this is the cleanup
-        my $err = $@;
-        if ( !$ok ) {
 
-            # Our own deadline fired -> the API is (undef, undef) on timeout. A timeout sent by an *enclosing*
-            # with_timeout/nursery did not cancel our token, so it propagates instead of being swallowed.
-            if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
-                ( $out_ch, $out_val ) = ( undef, undef );
+        # The timeout deadline is armed once on the first park and reused across re-parks, so a spurious wake can
+        # never stack timers. "Register, then arm" (token.register before the sleep job) closes the lost-wakeup
+        # window an await_sleep-only timeout would leave between the probe step and registration.
+        my $deadline;
+        my $timer_armed;
+        my ( $out_ch, $out_val, $out_die ) = ( undef, undef, undef );
+    OUTER: while (1) {
+
+            # Phase 1 -- probe, no yield: shuffle so no ordering starves a case, commit the first match, and let
+            # default run only when nothing is ready (it never parks).
+            my @order = 0 .. $#cases;
+            for ( my $i = $#order; $i > 0; $i-- ) {
+                my $j = int rand( $i + 1 );
+                @order[ $i, $j ] = @order[ $j, $i ];
+            }
+            for my $i (@order) {
+                my ( $ch, $op, $v ) = @{ $cases[$i] };
+                if ( $op eq 'get' ) {
+                    my ( $ok, $got ) = $ch->try_get;
+                    if ($ok) { ( $out_ch, $out_val ) = ( $ch, $got ); last OUTER; }
+                }
+                else {
+                    if ( $ch->try_put($v) ) { ( $out_ch, $out_val ) = ( $ch, $v ); last OUTER; }
+                }
+            }
+            if ( defined $default ) { ( $out_ch, $out_val ) = ( undef, $default->() ); last OUTER; }
+
+            # Phase 2 -- register on every involved channel, arm the shared deadline, then park. On wake the
+            # park's deregistrations were already dropped (_resume_hooks) or the per-channel wake skipped the
+            # fiber, so re-probe exactly once and fall back to re-registering; the one-shot re-poll per wake is
+            # natural here because registering happens before the next park.
+            for my $case (@cases) { $case->[0]->_register_select_waiter( $fid, $case->[1] ); }
+            if ( defined $timeout && $timeout > 0 ) {
+                $deadline //= Acme::Parataxis::CancellationToken->new( kind => 'timeout' );
+                $deadline->register;
+                unless ($timer_armed) {
+                    my $ms = $timeout;
+
+                    # The timer registers on the shared deadline and swallows its own interrupt, so teardown can
+                    # recall it when a case commits first instead of leaving a worker parked for the full $ms.
+                    Acme::Parataxis::fiber {
+                        $deadline->register;
+                        eval { Acme::Parataxis::await_sleep($ms); $deadline->cancel; 1 };
+                    };
+                    $timer_armed = 1;
+                }
+            }
+            my $dereg = sub {
+                for my $case (@cases) { $case->[0]->_unregister_select_waiter($fid) }
+                $deadline->unregister if defined $deadline;
+            };
+            my $ok = eval { Acme::Parataxis::_park( 'Channel select', 1, $dereg ); 1 };
+            $dereg->();    # idempotent: on interrupt _park already ran it; on a natural wake this is the cleanup
+            my $err = $@;
+            if ( !$ok ) {
+
+                # Our own deadline fired -> the API is (undef, undef) on timeout. A timeout sent by an *enclosing*
+                # with_timeout/nursery did not cancel our token, so it propagates instead of being swallowed.
+                if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
+                    ( $out_ch, $out_val ) = ( undef, undef );
+                    last OUTER;
+                }
+                $out_die = $err;
                 last OUTER;
             }
-            $out_die = $err;
-            last OUTER;
         }
-    }
 
-    # Every exit funnels through here so the armed timeout helper is never orphaned: drop the select fiber off
-    # the token first (a running fiber must not receive its own interrupt), then cancel to recall the timer's
-    # sleep job. A deadline that already fired makes both steps no-ops.
-    $deadline->unregister if defined $deadline;
-    $deadline->cancel     if defined $deadline;
-    die $out_die          if defined $out_die;
-    return ( $out_ch, $out_val );
-}
+        # Every exit funnels through here so the armed timeout helper is never orphaned: drop the select fiber off
+        # the token first (a running fiber must not receive its own interrupt), then cancel to recall the timer's
+        # sleep job. A deadline that already fired makes both steps no-ops.
+        $deadline->unregister if defined $deadline;
+        $deadline->cancel     if defined $deadline;
+        die $out_die          if defined $out_die;
+        return ( $out_ch, $out_val );
+    }
+};
 #
 1;
