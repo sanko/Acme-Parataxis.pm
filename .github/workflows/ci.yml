@@ -239,7 +239,7 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"netbsd","os":"netbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"/usr/sbin/pkg_add perl curl gmake"}
+          {"platform_name":"netbsd","os":"netbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"/usr/sbin/pkg_add perl curl gmake gdb"}
         ]
       os_version: 10.1
       task: |
@@ -266,7 +266,72 @@ jobs:
         #~ these, so --installdeps alone never brings them in.
         cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
           || echo '::warning::event-loop drivers unavailable, t/047 and t/048 will skip'
-        cpanm --test-only -v .
+        #~ Build in the checkout so the failing tests and the probe can be re-run
+        #~ directly below, against the same blib the suite just used. cpanm's
+        #~ --test-only builds in its own work dir and keeps the per-test TAP in a
+        #~ log that dies with the VM, which is why a teardown abort currently
+        #~ shows up as a bare "Wstat: 134" and nothing else.
+        perl Build.PL
+        ./Build
+        SUITE_RC=0
+        cpanm --test-only -v . || SUITE_RC=$?
+        #~ From here on nothing may abort the leg: the suite's verdict is already
+        #~ captured in $SUITE_RC and re-emitted at the end, so the diagnostics
+        #~ below run even on a red build and even if a tool is missing.
+        echo "=== t/047 and t/048 on their own, repeated ==="
+        for t in t/047_driver_mojo.t t/048_driver_ioasync.t; do
+          for i in 1 2 3; do
+            if out=$(timeout 300 perl -Mblib "$t" 2>&1); then
+              echo "  $t run $i: clean"
+            else
+              rc=$?
+              echo "  ::error::$t run $i aborted (rc=$rc)"
+              echo "$out" | tail -25
+            fi
+          done
+        done
+        echo "=== teardown probe: which phase leaks into the abort ==="
+        #~ Each phase is a superset of the one before it, so the first phase that
+        #~ aborts is the smallest reproduction. Repeats matter: t/047 passed on one
+        #~ CI run and aborted on the next with byte-identical code, so one clean
+        #~ pass is not evidence of anything.
+        for phase in attach run attach_run detach_run read; do
+          for loop in mojo ioasync; do
+            aborts=0
+            for i in 1 2 3; do
+              if ! timeout 120 perl -Mblib diagnostics/driver-teardown-probe.pl "$phase" "$loop" >/dev/null 2>&1; then
+                aborts=$((aborts + 1))
+              fi
+            done
+            if [ "$aborts" -gt 0 ]; then
+              echo "  ::error::phase=$phase loop=$loop aborted $aborts/3"
+            else
+              echo "  phase=$phase loop=$loop clean 3/3"
+            fi
+          done
+        done
+        echo "=== gdb backtrace, if the abort shows up under the debugger ==="
+        #~ The probe is the cheap half; this is the half that says why. gdb is in
+        #~ the matrix prepare list, but a debugger that will not start is not a
+        #~ reason to lose the rest of the run.
+        if command -v gdb >/dev/null 2>&1; then
+          for target in t/048_driver_ioasync.t t/047_driver_mojo.t; do
+            for i in 1 2 3; do
+              if gdb --batch -ex run -ex 'thread apply all bt' --args perl -Mblib "$target" \
+                   > /tmp/gdb.out 2>&1 && ! grep -qE 'SIGABRT|Signal 6|Program received' /tmp/gdb.out; then
+                echo "  $target under gdb $i: no abort"
+                continue
+              fi
+              echo "  ::error::$target aborted under gdb on run $i - backtrace follows"
+              grep -A 40 -E 'SIGABRT|Signal 6|Program received' /tmp/gdb.out | head -80
+              break 2
+            done
+          done
+        else
+          echo '  gdb unavailable, no backtrace'
+        fi
+        echo "=== suite verdict was: $SUITE_RC ==="
+        exit "$SUITE_RC"
   omnios:
     name: OmniOS
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
