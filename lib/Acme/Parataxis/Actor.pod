@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-Acme::Parataxis::Actor - A thin actor: a fiber with a mailbox
+Acme::Parataxis::Actor - A Fiber with a Mailbox
 
 =head1 SYNOPSIS
 
@@ -49,18 +49,14 @@ senders start parking.
 
 Options:
 
-=over 4
+=over
 
-=item *
-
-C<supervised =E<gt> 1>: a handler die kills the actor instead of only failing that one ask. The mailbox loop breaks,
+=item * C<supervised =E<gt> 1>: a handler die kills the actor instead of only failing that one ask. The mailbox loop breaks,
 every ask still queued or parked is failed with the handler error, and the C<on_death> hooks fire with that error, so
 an L<Acme::Parataxis::Supervisor|Acme::Parataxis::Supervisor> watching the actor learns it died and can restart it.
 Without it (the default), a handler die fails its own ask (or warns, for a C<send>) and the actor keeps running.
 
-=item *
-
-C<name =E<gt> $name>: registers the actor process-wide (Erlang's
+=item * C<name =E<gt> $name>: registers the actor process-wide (Erlang's
 L<register|https://www.erlang.org/doc/system/design_principles.htm> table). C<Acme::Parataxis-E<gt>actor($name)> (or
 C<-E<gt>whereis($name)>) then returns this handle, or C<undef> for a name nobody holds. The name is a process-wide
 unique key and a second live registration under the same name croaks, like Erlang's C<register>; a name whose holder is

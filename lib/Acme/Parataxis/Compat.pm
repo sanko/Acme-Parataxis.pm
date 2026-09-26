@@ -1,7 +1,7 @@
 use v5.40;
-use Errno qw[EAGAIN EWOULDBLOCK];
-use Carp  qw[croak];
-use Time::HiRes ();    # loaded only: the overrides call Time::HiRes::time() fully qualified, never bare time()
+use Errno       qw[EAGAIN EWOULDBLOCK];
+use Carp        qw[croak];
+use Time::HiRes ();                       # loaded only: the overrides call Time::HiRes::time() fully qualified, never bare time()
 
 package Acme::Parataxis::Compat v0.1.1 {
     #

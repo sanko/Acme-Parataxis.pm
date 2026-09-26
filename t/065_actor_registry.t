@@ -5,12 +5,7 @@ use Acme::Parataxis::Actor;
 use Scalar::Util qw[weaken];
 use Test2::V1 -ipP;
 $|++;
-
-# actor named registry + hot code swap. `Actor->spawn(..., name => $name)` registers the
-# actor process-wide; Acme::Parataxis->actor($name) (or ->whereis) returns the handle, or undef when
-# the actor is gone. `$actor->swap($code)` replaces the handler atomically at the next message
-# boundary: a message already in flight finishes with the old code, and every message dispatched
-# after the swap runs the new code. The registration is removed on stop, crash, and DESTROY.
+#
 subtest 'actor() finds a registered actor; the name is released on stop' => sub {
     async {
         my $actor = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg }, 16, name => 'worker-1' );
@@ -29,7 +24,7 @@ subtest 'a supervised crash also releases the name' => sub {
         my $actor = Acme::Parataxis::Actor->spawn(
             sub ( $self, $msg ) { $msg eq 'boom' ? die "handler-boom\n" : 'ok' }, 16,
             supervised => 1,
-            name       => 'flaky',
+            name       => 'flaky'
         );
         my $reply = $actor->ask('boom');
         ok !eval { $reply->await; 1 }, 'the ask failed';
@@ -39,13 +34,10 @@ subtest 'a supervised crash also releases the name' => sub {
 };
 subtest 'spawn name collision croaks like Erlang register' => sub {
     async {
-        my $a   = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg }, 16, name => 'dup' );
-        my $err = eval {
+        my $a = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg }, 16, name => 'dup' );
+        like dies {
             Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg }, 16, name => 'dup' );
-            1;
-        };
-        ok !$err, 'a second registration under the same name is rejected';
-        like "$@", qr/already registered/, 'the message says so';
+        }, qr[already registered], 'a second registration under the same name is rejected';
         is Acme::Parataxis->actor('dup'), $a, 'the first actor still owns the name';
         $a->stop;
         yield while $a->is_alive;
@@ -99,17 +91,12 @@ subtest 'double swap: the last handler wins' => sub {
 subtest 'swap validates its argument and refuses a dead actor' => sub {
     async {
         my $actor = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return 1 }, 4 );
-        my $err   = eval { $actor->swap(42); 1 };
-        ok !$err, 'swap() rejects a non-CODE';
-        like "$@", qr/CODE ref/, 'with the reason';
+        like dies { $actor->swap(42) }, qr[CODE], 'swap() rejects a non-CODE';
         $actor->stop;
         yield while $actor->is_alive;
-        $err = eval {
-            $actor->swap( sub {1} );
-            1;
-        };
-        ok !$err, 'swap() on a dead actor croaks';
-        like "$@", qr/no longer running/, 'with the reason';
+        like dies {
+            $actor->swap( sub {1} )
+        }, qr[no longer running], 'swap() on a dead actor croaks';
     };
 };
 subtest 'a supervisor-style respawn inherits the registered name' => sub {

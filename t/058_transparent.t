@@ -103,7 +103,6 @@ subtest 'a regular file read inside a fiber falls back to the raw builtin' => su
             with_timeout(
                 15000,
                 sub {
-
                     # Many reads, not one. The override times its readiness probe against the wall clock to tell
                     # "select() cannot watch this handle" (fall back to a raw read) from "a real wait timed out"
                     # (keep waiting), and a probe landing across a clock-second boundary used to be misread as the

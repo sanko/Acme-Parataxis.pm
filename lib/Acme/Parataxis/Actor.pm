@@ -1,33 +1,19 @@
 use v5.40;
-use Acme::Parataxis;
-use Acme::Parataxis::Channel;
-use Acme::Parataxis::Future;
-use Carp qw[croak];
 
 package Acme::Parataxis::Actor v0.1.1 {
-    our @ISA = ();
     use Acme::Parataxis qw[fiber];
     use Acme::Parataxis::Channel;
     use Acme::Parataxis::Future;
     use Carp qw[croak];
-
-    # Thin actors: a dedicated fiber owns a Channel mailbox and runs one user handler per message.
-    # `ask` tags a message with a Future so the handler's return value (or die) travels back to the
-    # caller; `send` is fire-and-forget. The mailbox is a plain bounded channel, so a slow handler
-    # gives the *sender* backpressure instead of growing a queue without bound. Spawned with
-    # supervised => 1, a handler die kills the actor instead of only failing that one ask, which is
-    # what Acme::Parataxis::Supervisor supervises. A `name` registers the actor process-wide:
-    # Acme::Parataxis->actor($name) / ->whereis($name) returns the handle, and the name is released
-    # when the actor stops, dies, or is destroyed, so a dead actor never answers a lookup. The
-    # registration holds a strong reference, so a *named* actor lives as long as it is registered
-    # even if every caller drops its handle - the name is the handle (Erlang's register table).
+    #
     my $STOP = \do { my $x = 1 };    # envelope value that tells the loop to shut down gracefully
 
-    sub spawn ( $class, $code, $capacity = 16, %opts ) {
-        croak 'Actor->spawn() requires a CODE ref' unless ref $code eq 'CODE';
+    sub spawn : prototype($\&;$\%) ( $class, $code, $capacity = 16, %opts ) {
         croak 'Actor->spawn() must be called from inside a scheduled fiber' if Acme::Parataxis->current_fid < 0;
         croak "Actor->spawn() mailbox capacity must be >= 1 (got $capacity)" unless $capacity >= 1;
+        #
         my %unknown = %opts;
+        #
         delete @unknown{qw[supervised name]};
         croak 'Actor->spawn(): unknown options: ' . join ', ', sort keys %unknown if %unknown;
         my $name = $opts{name};
@@ -37,17 +23,17 @@ package Acme::Parataxis::Actor v0.1.1 {
             croak "Actor->spawn(): an actor named '$name' is already registered" if $existing && $existing->is_alive;
         }
         my $self = bless {
-            code       => $code,
             cap        => $capacity,
-            opts       => {%opts},
-            name       => $name,
-            supervised => $opts{supervised} ? 1 : 0,
-            mailbox    => Acme::Parataxis::Channel->new( capacity => $capacity ),
-            stopping   => 0,
+            code       => $code,
             done       => 0,
             error      => undef,
-            on_death   => [],
             fiber      => undef,
+            mailbox    => Acme::Parataxis::Channel->new( capacity => $capacity ),
+            name       => $name,
+            on_death   => [],
+            opts       => \%opts,
+            stopping   => 0,
+            supervised => !!$opts{supervised}
         }, $class;
         my $weak = $self;    # the fiber body captures this weak copy, so a done actor is collectable
         builtin::weaken($weak);
@@ -75,10 +61,10 @@ package Acme::Parataxis::Actor v0.1.1 {
             if ( my $actor = $weak ) { $actor->_finish($crash) }
         };
         $Acme::Parataxis::ACTOR_REGISTRY{$name} = $self if defined $name;    # only a spawned actor is registered
-        return $self;
+        $self;
     }
 
-    # Teardown, on every exit path. Refuses new messages first (so nothing can be queued after the
+    # Teardown for on every exit path. Refuses new messages first (so nothing can be queued after the
     # drain below), fails everything still outstanding, then tells whoever is watching that this
     # actor is gone. A defined $crash is what killed us; undef means a graceful stop.
     sub _finish ( $self, $crash ) {
@@ -88,9 +74,8 @@ package Acme::Parataxis::Actor v0.1.1 {
 
         # Release any registered name so a dead actor never answers a lookup. The guard (entry still == $self)
         # keeps an older actor's teardown from clobbering a same-named replacement that registered since.
-        if ( defined $self->{name} ) {
-            delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } if ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self;
-        }
+        delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} }
+            if defined $self->{name} && ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self;
 
         # The drain is best effort: a watcher must learn about this death even if an interrupt lands
         # on this fiber mid-teardown, or whoever is waiting for the report waits forever.
@@ -118,7 +103,7 @@ package Acme::Parataxis::Actor v0.1.1 {
                 my ($reply) = @$env;
                 next unless defined $reply;
                 next if $reply->is_ready;
-                eval { $reply->set_error($msg); 1 } or warn "Acme::Parataxis::Actor: failed to fail a queued ask: $@";
+                eval { $reply->set_error($msg); 1 } or warn 'Acme::Parataxis::Actor: failed to fail a queued ask: ' . $@;
                 next;
             }
             $idle++;
@@ -127,19 +112,18 @@ package Acme::Parataxis::Actor v0.1.1 {
         return;
     }
 
-    # Fires exactly once when this actor is gone: $err is what killed it, or undef for a graceful
-    # stop. An actor that is already done calls back immediately, so a watcher never has to check.
-    sub on_death ( $self, $cb ) {
-        croak 'on_death() requires a CODE ref' unless ref $cb eq 'CODE';
+    # Fires exactly once when this actor is gone: $err is what killed it, or undef for a graceful stop. An actor that
+    # is already done calls back immediately, so a watcher never has to check.
+    sub on_death : prototype($&) ( $self, $cb ) {
         if ( $self->{done} ) { $cb->( $self, $self->{error} ); return $self }
         push $self->{on_death}->@*, $cb;
         return $self;
     }
     sub error ($self) { $self->{error} }    # why it died, or undef if it stopped gracefully
 
-    # A fresh, already-running actor with the same handler, mailbox size and options: what a
-    # supervisor starts in place of this one. The new actor owns a new mailbox, so asks still
-    # outstanding here are failed here rather than answered there.
+    # A fresh, already-running actor with the same handler, mailbox size and options: what a supervisor starts in
+    # place of this one. The new actor owns a new mailbox, so asks still outstanding here are failed here rather than
+    # answered there.
     sub respawn ($self) {
         return ref($self)->spawn( $self->{code}, $self->{cap}, $self->{opts}->%* );
     }
@@ -154,7 +138,11 @@ package Acme::Parataxis::Actor v0.1.1 {
         if ( !$ok ) {
             $err = $@;
             if ( defined $reply ) {
-                eval { $reply->set_error($err); 1 }
+                try {
+                    $reply->set_error($err);
+                }
+                catch ($e) {
+                }
             }
             elsif ( !$self->{supervised} ) {    # a supervised actor reports this death to its supervisor instead
                 warn "Acme::Parataxis::Actor: handler died: $err";
@@ -188,13 +176,9 @@ package Acme::Parataxis::Actor v0.1.1 {
     sub fid      ($self) { return $self->{fiber}->fid }
     sub name     ($self) { return $self->{name} }         # the registered name, or undef for an unnamed actor
 
-    # Hot code swap: atomically replace the handler for *subsequent* messages. A message already
-    # being handled finishes with the old code (the running call reads what it captured when it
-    # started); every message dispatched after swap returns runs the new code, because the loop
-    # reads $self->{code} afresh at each dispatch. This is a plain field swap, so it is atomic at
-    # the message boundary with no drain, stop, or restart of the actor. Croaks on a dead actor.
-    sub swap ( $self, $code ) {
-        croak 'swap() requires a CODE ref' unless ref $code eq 'CODE';
+    # Hot code swap: atomically replace the handler for *subsequent* messages.
+    sub swap : prototype($\&) ( $self, $code ) {
+        croak 'requires a CODE ref' unless builtin::reftype($code) // '' eq 'CODE';
         croak 'swap(): this actor is no longer running' if $self->{done};
         $self->{code} = $code;
         return $self;
@@ -208,9 +192,8 @@ package Acme::Parataxis::Actor v0.1.1 {
 
     sub DESTROY ($self) {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        if ( defined $self->{name} && ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self ) {
-            delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} };
-        }
+        delete $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} }
+            if defined $self->{name} && ( $Acme::Parataxis::ACTOR_REGISTRY{ $self->{name} } // 0 ) == $self;
         $self->stop unless $self->{done};
     }
 }

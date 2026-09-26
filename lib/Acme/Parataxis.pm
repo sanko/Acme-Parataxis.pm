@@ -151,7 +151,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'is_finished',                       [Int],                          Int;
         affix $l, 'get_fiber_by_id',                   [Int],                          Pointer [SV];
         affix $l, 'get_live_fiber_count',              [],                             Int;
-affix $l, 'get_fiber_capacity',                [],                             Int;
+        affix $l, 'get_fiber_capacity',                [],                             Int;
         affix $l, 'destroy_coro',                      [Int],                          Void;
         affix $l, 'force_depth_zero',                  [ Pointer [SV] ],               Void;
         affix $l, 'cleanup',                           [],                             Void;
