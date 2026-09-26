@@ -721,6 +721,30 @@ set_max_threads(4);
 
 Returns the currently configured maximum thread pool size.
 
+## `fd_setsize()`
+
+Returns the highest descriptor number this platform's `fd_set` can represent: 1024 on Linux, macOS and FreeBSD,
+256 on NetBSD, and 64 for the `winsock` `fd_set` on Win32.
+
+It bounds the descriptor **number**, not how many handles you are watching. Twenty sockets opened early and three
+hundred opened late are the same count and not the same watch set, which is why sizing a fan-out by connection count
+is not enough.
+
+`await_read` and `await_write` already refuse a descriptor at or past this rather than register a watch that can
+never fire, and answer `-1` when they do - see ["Behavior Notes" in Acme::Parataxis::Driver](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ADriver#Behavior-Notes). Reach for this when you
+would rather stay on the right side of it than find out afterwards:
+
+```perl
+use Acme::Parataxis qw[fd_setsize];
+
+# two descriptors per connection, less the listener and stdio
+my $room = int( ( fd_setsize() - 16 ) / 2 );
+warn "close some sockets first\n" if $open > $room;
+```
+
+Measured in C, because perl has no way to ask: `getconf FD_SETSIZE` is not a valid symbol and answers `20`, and
+`Fcntl::FD_SETSIZE()` dies at runtime.
+
 ## Background interpreters (spawn\_blocking)
 
 CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with

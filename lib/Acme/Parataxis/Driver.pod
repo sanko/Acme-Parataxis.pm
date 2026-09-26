@@ -37,7 +37,12 @@ A driver is the adapter between Parataxis and an existing CPAN event loop. When 
 L<Acme::Parataxis-E<gt>attach_loop|Acme::Parataxis>, C<await_read>, C<await_write> and C<await_sleep> stop submitting a
 job to the OS worker pool per filehandle or sleep and instead register watches and timers on that loop. The benefit is
 readiness driven by C<epoll>/C<kqueue>/C<select> rather than a thread blocked in C<select()>, which caps at
-C<FD_SETSIZE> (1024) and burns a whole thread per watched socket.
+C<FD_SETSIZE> and burns a whole thread per watched socket.
+
+C<FD_SETSIZE> is a property of the platform's C library, not a constant, and it bounds the descriptor B<number> rather
+than the number of watches: 1024 on Linux, macOS and FreeBSD, 256 on NetBSD, 64 for the C<winsock> C<fd_set> on Win32.
+A loop whose readiness comes from C<select()> cannot report a descriptor at or past that limit, so on those platforms a
+workload has to be sized against it. See L</"Behavior Notes"> for what happens past it.
 
 The division of labour is deliberately narrow:
 
@@ -128,6 +133,39 @@ becomes L<Acme::Parataxis::Driver::Mojo|Acme::Parataxis::Driver::Mojo>; anything
 becomes L<Acme::Parataxis::Driver::IOAsync|Acme::Parataxis::Driver::IOAsync>.
 
 Croaks when called without a blessed object, and when the object's class is not one it knows how to drive.
+
+=head1 Behavior Notes
+
+=head2 The descriptor-number ceiling is the platform's, not Parataxis's
+
+Readiness under a driver comes from the attached loop, and that loop reaches the kernel through C<epoll>, C<kqueue> or
+- where neither is available - C<select()>. The C<select()> case is bounded by C<FD_SETSIZE>, which is a property of
+the platform's C library and bounds the descriptor B<number> being watched, not how many are being watched. It is worth
+measuring rather than assuming: C<getconf FD_SETSIZE> is not a valid symbol and answers C<20>, and
+C<Fcntl::FD_SETSIZE()> dies at runtime, so neither is a measurement.
+
+Measured on the platforms this runs on:
+
+=over
+
+=item * Linux, macOS, FreeBSD: 1024, a 128-byte C<fd_set>
+
+=item * NetBSD: 256, a 32-byte C<fd_set>
+
+=item * Win32: the C<winsock> C<fd_set> is a 64-entry bitmask
+
+=back
+
+So a program that opens descriptors past that ceiling gets different answers on different platforms, and sizing a
+workload by descriptor B<count> alone is not enough - twenty sockets opened early and three hundred opened late are the
+same count and not the same watch set. Size against the highest descriptor number, not the number of handles.
+
+Parataxis refuses the read rather than registering a watch that can never fire, on both paths. The worker pool declines
+to hand an unrepresentable descriptor to C<select()> and reports not ready; a driver declines to register the watch,
+because the C<fd_set> in that case belongs to the loop library and Parataxis cannot widen it. Either way the answer is
+C<-1>, which is also what a deadline produces, so a caller already knows how to read it. The refusal warns once per
+process, naming the descriptor and the ceiling, because the limit belongs to the platform and a workload sized on a
+different OS can cross it without anyone noticing.
 
 =head1 SEE ALSO
 

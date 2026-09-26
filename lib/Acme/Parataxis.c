@@ -284,17 +284,35 @@ int get_cpu_count() {
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
     /* NetBSD and DragonFly never declare _SC_NPROCESSORS_ONLN; hw.ncpu exists on all four of these. */
     int nm[2];
-    size_t len = 4;
-    uint32_t count;
+    uint32_t count = 0;
+    size_t len = sizeof(count);
     nm[0] = CTL_HW;
     nm[1] = HW_NCPU;
-    sysctl(nm, 2, &count, &len, NULL, 0);
+    /* A failed sysctl leaves count untouched, and the caller divides by the result (thread_id % cpu_count), so
+     * an indeterminate value is not a cosmetic problem here. Treat failure as "one core" and let the pool clamp. */
+    if (sysctl(nm, 2, &count, &len, NULL, 0) != 0)
+        return 1;
     return (count > 0) ? (int)count : 1;
 #else
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     return (count > 0) ? (int)count : 1;
 #endif
 }
+
+/**
+ * @brief The highest descriptor number this platform's fd_set can represent.
+ *
+ * FD_SETSIZE belongs to the platform's C library, not to us, and it is not 1024 everywhere: it is 1024 on
+ * Linux, macOS and FreeBSD, 256 on NetBSD, and 64 for the winsock fd_set on Win32. It bounds the descriptor
+ * NUMBER rather than how many descriptors are being watched, so a process that has opened 300 sockets can
+ * still be holding descriptor 605 - past a 256-entry set on NetBSD. FD_SET is a bare array index with no
+ * bounds check of its own and select() rejects an oversized nfds with EINVAL, so a descriptor at or past
+ * this cannot be waited on through an fd_set at all. Exposed so a caller can size a workload against the
+ * real ceiling instead of assuming the number they are used to.
+ *
+ * @return int FD_SETSIZE for this platform.
+ */
+DLLEXPORT int get_fd_setsize() { return FD_SETSIZE; }
 
 /**
  * @struct para_fiber_t
@@ -868,34 +886,52 @@ void * worker_thread(void * arg) {
                 FD_ZERO(&read_fds);
                 FD_ZERO(&write_fds);
                 int nfds = 0;
+                int res = -1;    /* an unrepresentable descriptor can never become ready, so -1 from the start */
 #ifdef _WIN32
                 SOCKET s = (SOCKET)job->input.i;
                 if (job->type == TASK_READ) FD_SET(s, &read_fds);
                 else                        FD_SET(s, &write_fds);
                 nfds = 0;
-#else
-                int fd = (int)job->input.i;
-                if (job->type == TASK_READ) FD_SET(fd, &read_fds);
-                else                        FD_SET(fd, &write_fds);
-                nfds = fd + 1;
-
-                if (shutdown_pipe[0] >= 0) {
-                    FD_SET(shutdown_pipe[0], &read_fds); /* ALWAYS read_fds */
-                    if (shutdown_pipe[0] + 1 > nfds)
-                        nfds = shutdown_pipe[0] + 1;
-                }
-#endif
                 int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;
                 struct timeval tv;
                 tv.tv_sec = timeout / 1000;
                 tv.tv_usec = (timeout % 1000) * 1000;
 
                 /* Pass both sets to select */
-                int res = select(nfds, &read_fds, &write_fds, NULL, &tv);
+                res = select(nfds, &read_fds, &write_fds, NULL, &tv);
+#else
+                int fd = (int)job->input.i;
 
-#ifndef _WIN32
-                if (shutdown_pipe[0] >= 0 && FD_ISSET(shutdown_pipe[0], &read_fds))
-                    res = -1;    /* woken for shutdown, not readiness */
+                /* FD_SET is a bare array index with no bounds check, and read_fds/write_fds are FD_SETSIZE-bit
+                 * sets sitting in this thread's stack frame - 128 bytes where FD_SETSIZE is 1024, but only 32 on
+                 * NetBSD, whose FD_SETSIZE is 256. A descriptor at or past FD_SETSIZE
+                 * writes off the end of them - into the neighbouring set, then into this frame's canary - and
+                 * select() would reject the oversized nfds with EINVAL anyway, so there is nothing to gain by
+                 * trying. Refuse it and report "not ready", the same answer a deadline produces. The Windows
+                 * branch above needs no equivalent: a WinSock fd_set is a full descriptor bitmask, not a
+                 * 1024-entry array, and has no FD_SETSIZE to exceed. */
+                if (fd >= 0 && fd < FD_SETSIZE) {
+                    if (job->type == TASK_READ) FD_SET(fd, &read_fds);
+                    else                        FD_SET(fd, &write_fds);
+                    nfds = fd + 1;
+
+                    if (shutdown_pipe[0] >= 0) {
+                        FD_SET(shutdown_pipe[0], &read_fds); /* ALWAYS read_fds */
+                        if (shutdown_pipe[0] + 1 > nfds)
+                            nfds = shutdown_pipe[0] + 1;
+                    }
+
+                    int timeout = job->timeout_ms > 0 ? job->timeout_ms : 5000;
+                    struct timeval tv;
+                    tv.tv_sec = timeout / 1000;
+                    tv.tv_usec = (timeout % 1000) * 1000;
+
+                    /* Pass both sets to select */
+                    res = select(nfds, &read_fds, &write_fds, NULL, &tv);
+
+                    if (shutdown_pipe[0] >= 0 && FD_ISSET(shutdown_pipe[0], &read_fds))
+                        res = -1;    /* woken for shutdown, not readiness */
+                }
 #endif
                 job->output.i = (res > 0) ? 1 : -1;
             }

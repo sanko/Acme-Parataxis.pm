@@ -19,7 +19,7 @@ package Acme::Parataxis v0.1.1 {
                 run spawn yield await stop async fiber
                 await_sleep await_read await_write await_core_id
                 current_fid tid root maybe_yield on_wake with_timeout with_cancel nursery pmap wait_all wait_any
-                set_max_threads max_threads set_max_fibers max_fibers dump_fibers
+                set_max_threads max_threads set_max_fibers max_fibers dump_fibers fd_setsize
                 backtrace_depth
                 atomically retry
                 ]
@@ -167,6 +167,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'free_job_slot',                     [Int],                          Void;
         affix $l, 'get_thread_pool_size',              [],                             Int;
         affix $l, 'get_max_thread_pool_size',          [],                             Int;
+        affix $l, 'get_fd_setsize',                    [],                             Int;
         affix $l, 'set_max_threads',                   [Int],                          Void;
         affix $l, 'get_max_fibers',                    [],                             Int;
         affix $l, 'set_max_fibers',                    [Int],                          Void;
@@ -1022,9 +1023,32 @@ package Acme::Parataxis v0.1.1 {
     # returns 1; the wait's own deadline swallows its ::Timeout and returns -1 like the pool path does; an *enclosing*
     # with_timeout / nursery interrupt did not cancel our deadline token, so it propagates by dying.
     #
+    my $WARNED_FD_SETSIZE = 0;
+
     sub _driver_wait ( $driver, $fh, $dir, $timeout, $reason ) {
         my $fid = Acme::Parataxis->current_fid;
         croak "$reason() must be called from inside a scheduled fiber" if $fid < 0;
+
+        # A loop whose readiness comes from select() cannot name a descriptor at or past the platform's
+        # FD_SETSIZE - 256 on NetBSD, 64 for winsock, 1024 on Linux - and the fd_set in that case belongs to
+        # the loop library rather than to us, so there is nothing here to widen. Registering the watch anyway
+        # would either never fire or corrupt the loop's own stack, so refuse it. The worker-pool path answers
+        # the same way for the same reason (see worker_thread in Parataxis.c), and -1 is what a deadline
+        # produces too, so a caller already knows how to read it. Worth saying out loud once, because the
+        # limit is the platform's and a workload sized on another OS can sail past it unnoticed.
+        #
+        # fileno croaks on something that is not a handle at all, and whatever the driver says about that is a
+        # better message than anything invented here, so an answer of undef means "no descriptor to check" and
+        # the handle goes on to the driver as it always did. An in-memory file answers -1, which is under any
+        # ceiling, and needs no watch anyway.
+        my $fd = eval { fileno $fh };
+        if ( defined $fd && $fd >= Acme::Parataxis::fd_setsize() ) {
+            warn "Acme::Parataxis: $reason() refused: descriptor $fd is at or past this platform's FD_SETSIZE (" .
+                Acme::Parataxis::fd_setsize() .
+                "), which a select()-based readiness stack cannot name. Further refusals will not be reported.\n"
+                unless $WARNED_FD_SETSIZE++;
+            return -1;
+        }
         my $wake = sub { Acme::Parataxis::_scheduler_enqueue_by_id($fid) };
         if ( $dir eq 'read' ) { $driver->watch_read( $fh, $wake ) }
         else                  { $driver->watch_write( $fh, $wake ) }
@@ -1143,6 +1167,13 @@ package Acme::Parataxis v0.1.1 {
     sub root           { state $root //= Acme::Parataxis::Root->new() }
     sub max_threads () { Acme::Parataxis::get_max_thread_pool_size() }
     sub max_fibers ()  { Acme::Parataxis::get_max_fibers() }
+
+    # The highest descriptor number an fd_set can name on this platform: 1024 on Linux, macOS and FreeBSD,
+    # 256 on NetBSD, 64 for winsock. It is a property of the C library rather than a constant, and it bounds
+    # the descriptor NUMBER, not the number of handles - so size a workload of N watched sockets against it
+    # and not against N. Read it from C because nothing in perl can: `getconf FD_SETSIZE` is not a valid
+    # symbol and answers 20, and Fcntl::FD_SETSIZE() dies at runtime.
+    sub fd_setsize () { Acme::Parataxis::get_fd_setsize() }
 
     # Scheduler internals
     sub _scheduler_enqueue_by_id ($fid) {
