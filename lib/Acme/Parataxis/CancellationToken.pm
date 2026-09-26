@@ -4,14 +4,14 @@ use feature 'class';
 #
 class Acme::Parataxis::CancellationToken v0.1.1 {
     use Acme::Parataxis;
-    use Carp qw[croak];
-    use Time::HiRes 'time';
+    use Carp        qw[croak];
+    use Time::HiRes qw[time];
 
     # $kind selects which error an interrupted waiter throws. Public tokens use 'cancel'; with_timeout's internal
     # deadline token uses 'timeout' so the same mechanism raises Timeout instead of Cancelled.
     field $cancelled : reader : param = false;
-    field $kind : param  = 'cancel';
-    field $t0   : reader = time;       # token birth, for elapsed-time tracing
+    field $kind      : reader : param = 'cancel';
+    field $t0        : reader = time;    # token birth, for elapsed-time tracing
 
     # Fiber ids currently parked under this token, in registration order. cancel() wakes them; unregister()/the
     # on_wake( { ... } ) cleanup removes them when their wait finishes normally.
@@ -51,6 +51,6 @@ class Acme::Parataxis::CancellationToken v0.1.1 {
         return true;
     }
     method waiters () { return scalar @registered }
-    }
-    #
-    1;
+};
+#
+1;
