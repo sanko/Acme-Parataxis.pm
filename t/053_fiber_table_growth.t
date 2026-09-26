@@ -40,27 +40,34 @@ sub drain ( $sig, $here ) {
     $sig->broadcast;
     Acme::Parataxis->yield while live() > $here;
 }
-my ( $default, $want1, $target2, $r1, $r2, $r3, $r4, $r5 );
+my ( $default, $want1, $target2, $r1, $r2, $r3, $r4, $r5, $reaches1024 );
 async {
     my $here = live();    # this run's fiber, which exists for the whole block below
+
+    # On platforms without MAP_NORESERVE (OpenBSD) the library clamps the default limit to the number of 8 MiB
+    # stacks RLIMIT_DATA can host, so the old 1100/1300 targets are replaced by the achievable default minus two
+    # (the policy, not the stack mmap, must be what refuses the next spawn). Both bursts below are sized from it.
+    $default = Acme::Parataxis::max_fibers();
 
     # 1) The diagnostics snapshot has to keep up with the growth. dump_fibers() walks the slots itself, and it used to
     #    walk a hardcoded first 1024 of them, so every fiber past that - exactly the ones a full table is made of, and
     #    exactly the ones a deadlock report has to name - went missing. Run first, while the table is still at its
     #    initial 1024 and this fiber holds slot 0, so the ids in play are guaranteed to straddle 1024 rather than
     #    depending on which slots later scenarios happen to recycle.
+    #
+    #    That needs more than 1024 fibers to exist at once, which is exactly what the MAP_NORESERVE clamp on
+    #    OpenBSD forbids: there the default is a few hundred, so the premise is unreachable and asking for 1100 only
+    #    re-proved that the limit is enforced (scenario 2 already checks that). Ask for the same achievable target
+    #    instead, and let $reaches1024 decide what the snapshot subtest is allowed to claim.
+    $reaches1024 = $default > 1024;
     my $sig5 = Acme::Parataxis::Signal->new;
-    my ( $made5, $err5 ) = spawn_parked( 1100, $sig5 );
+    my ( $made5, $err5 ) = spawn_parked( $reaches1024 ? 1100 : $default - 2, $sig5 );
     my $rows5 = Acme::Parataxis::dump_fibers();
     $r5 = [ $made5, $err5, scalar @$rows5, scalar( grep { $_->{fid} >= 1024 } @$rows5 ) ];
     drain( $sig5, $here );
 
-    # On platforms without MAP_NORESERVE (OpenBSD) the library clamps the default limit to the number of 8 MiB
-    # stacks RLIMIT_DATA can host, so the old 1100/1300 targets are replaced by the achievable default minus two
-    # (the policy, not the stack mmap, must be what refuses the next spawn).
     # 2) With nobody configuring anything, the default must already be reachable in one burst.
-    $default = Acme::Parataxis::max_fibers();
-    $want1   = $default > 1024 ? 1100 : $default - 2;
+    $want1 = $default > 1024 ? 1100 : $default - 2;
     my $sig1 = Acme::Parataxis::Signal->new;
     my ( $made1, $err1 ) = spawn_parked( $want1, $sig1 );
     $r1 = [ $made1, $err1, live() ];
@@ -89,9 +96,17 @@ async {
     drain( $sig4, $here );
 };
 subtest 'the diagnostics snapshot reaches fibers past the old fixed 1024 slots' => sub {
-    is $r5->[0], 1100, 'spawned 1100 fibers unconfigured, past the 1024 the snapshot used to stop at';
+    my $want = $reaches1024 ? 1100 : $default - 2;
+    is $r5->[0], $want, $reaches1024
+        ? 'spawned 1100 fibers unconfigured, past the 1024 the snapshot used to stop at'
+        : sprintf( 'the default only reaches %d, so the past-1024 case is unbuildable; took all %d', $default, $want );
     ok !defined $r5->[1], 'and not one of them croaked' or diag "err: $r5->[1]";
-    cmp_ok $r5->[3], '>',  0,        sprintf 'the dump listed %d live fiber(s) with an id of 1024 or more',  $r5->[3];
+    if ($reaches1024) {
+        cmp_ok $r5->[3], '>', 0, sprintf 'the dump listed %d live fiber(s) with an id of 1024 or more', $r5->[3];
+    }
+    else {
+        is $r5->[3], 0, 'nothing can be past 1024 when the clamp caps the table below it';
+    }
     cmp_ok $r5->[2], '>=', $r5->[0], sprintf 'and listed every live fiber, none silently dropped (%d rows)', $r5->[2];
 };
 subtest 'the default limit is reachable without configuring anything' => sub {

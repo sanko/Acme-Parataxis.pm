@@ -37,6 +37,23 @@ sub socket_pairs ($n) {
     }
     return ( \@writers, \@waiters );
 }
+
+# How many pairs to actually ask for, given a target. Every pair holds two descriptors open for the whole subtest, and
+# the soft RLIMIT_NOFILE is not the same on every platform this runs on: Haiku and the BSDs ship far below the Linux
+# default, so a fixed 300 used to die partway through the build with EMFILE and take the whole leg red. Rather than
+# ask each OS what its limit is, try the real thing - open the pairs, and halve on EMFILE/ENFILE until one size fits.
+# The probe runs in this same process against this same soft limit, so the number it settles on is the number that
+# will still be there when the subtest asks for it.
+sub pairs_that_fit ($want) {
+    my $n = $want;
+    while ( $n > 8 ) {
+        my ($probe) = eval { socket_pairs($n) };
+        return $n if $probe;
+        die $@ unless $!{EMFILE} || $!{ENFILE};
+        $n = int( $n / 2 );
+    }
+    return $n;
+}
 ok !Acme::Parataxis->loop,                             'no driver before any attach';
 ok !Acme::Parataxis->attach_loop( Mojo::IOLoop->new ), 'attach_loop returns undef the first time';
 my $drv = Acme::Parataxis->loop;
@@ -132,8 +149,9 @@ my $orig_submit_job = \&Acme::Parataxis::_submit_job;
 # fd_set at 64, so the reactor goes silent as soon as any watched fd reaches 64 (5 watches woke 5/5 at maxfd 13,
 # 5 watches after 70 dummy fds woke 0/5), IO::Select never crashes but reports at most 64 ready handles, and the
 # pure-Mojo stack crashes the interpreter above 128 pairs on perl 5.42.3. 24 pairs keep every fd under 64, which
-# is enough to exercise the whole driver path on Windows; other platforms keep the full 300.
-my $N = $^O eq 'MSWin32' ? 24 : 300;
+# is enough to exercise the whole driver path on Windows; other platforms ask for the full 300, less whatever their
+# descriptor limit cannot hold (see pairs_that_fit).
+my $N = pairs_that_fit( $^O eq 'MSWin32' ? 24 : 300 );
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     Acme::Parataxis->attach_loop( Mojo::IOLoop->new );

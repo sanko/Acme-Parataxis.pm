@@ -35,6 +35,23 @@ sub socket_pairs ($n) {
     }
     return ( \@writers, \@waiters );
 }
+
+# How many pairs to actually ask for, given a target. Every pair holds two descriptors open for the whole subtest, and
+# the soft RLIMIT_NOFILE is not the same on every platform this runs on: Haiku and the BSDs ship far below the Linux
+# default, so a fixed 300 used to die partway through the build with EMFILE and take the whole leg red. Rather than
+# ask each OS what its limit is, try the real thing - open the pairs, and halve on EMFILE/ENFILE until one size fits.
+# The probe runs in this same process against this same soft limit, so the number it settles on is the number that
+# will still be there when the subtest asks for it.
+sub pairs_that_fit ($want) {
+    my $n = $want;
+    while ( $n > 8 ) {
+        my ($probe) = eval { socket_pairs($n) };
+        return $n if $probe;
+        die $@ unless $!{EMFILE} || $!{ENFILE};
+        $n = int( $n / 2 );
+    }
+    return $n;
+}
 subtest 'attach / detach bookkeeping' => sub {
     ok !Acme::Parataxis->loop,                                'no driver before any attach';
     ok !Acme::Parataxis->attach_loop( IO::Async::Loop->new ), 'first attach returns undef';
@@ -112,8 +129,8 @@ my $orig_submit_job = \&Acme::Parataxis::_submit_job;
     no warnings 'redefine';
     *Acme::Parataxis::_submit_job = sub ( $type, $arg, $timeout ) { $submits++; $orig_submit_job->( $type, $arg, $timeout ) };
 }
-subtest 'high-volume: hundreds of concurrent await_read wake on loopback' => sub {
-    my $N = 300;
+my $N = pairs_that_fit(300);
+subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     Acme::Parataxis->attach_loop( IO::Async::Loop->new );
     $submits = 0;
