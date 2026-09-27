@@ -39,8 +39,8 @@ The barrier re-arms as it releases, so one object serves any number of rounds. R
 C<parties>, so arrivals for the next phase never mix with the phase that just closed.
 
 Reach for a L<Acme::Parataxis::Sync::WaitGroup> when you are counting work and want to wait for it to finish, and a
-L<Acme::Parataxis::Sync::Barrier> when the point is the B<boundary> rather than the end. A barrier with
-C<parties> E<gt> 1 never parks at all.
+L<Acme::Parataxis::Sync::Barrier> when the point is the B<boundary> rather than the end. A barrier with C<parties>
+E<gt> 1 never parks at all.
 
 Waits here are cooperative and interruptible, like the rest of the L<Acme::Parataxis::Sync> family: a fiber that
 arrives and is then cancelled removes itself from the queue, but see L</"An abandoned arrival still consumes a slot">
@@ -55,9 +55,9 @@ before you rely on that.
     # each phase needs 4 arrivals and 4 are still outstanding
 
 Creates a barrier requiring C<parties> arrivals per phase. C<parties> is keyword only and required, and must be at
-least 1; C<0> and a negative count croak with C<Barrier requires a positive number of parties>, as does a value that
-is not a number. It is stored as given, so see L</"parties is only checked for being at least 1"> before passing
-anything but a whole number.
+least 1; C<0> and a negative count croak with C<Barrier requires a positive number of parties>, as does a value that is
+not a number. It is stored as given, so see L</"parties is only checked for being at least 1"> before passing anything
+but a whole number.
 
 =head2 C<arrive_and_wait( )>
 
@@ -70,9 +70,9 @@ anything but a whole number.
     # and so was the second, straight away
     # the first party was released
 
-Arrives at the current phase and parks until C<parties> fibers have arrived. Returns true either way: the last
-arrival returns its own release without parking, and a released waiter returns as it wakes. Croaks outside a scheduled
-fiber with C<Barrier waits must occur inside a scheduled fiber>.
+Arrives at the current phase and parks until C<parties> fibers have arrived. Returns true either way: the last arrival
+returns its own release without parking, and a released waiter returns as it wakes. Croaks outside a scheduled fiber
+with C<Barrier waits must occur inside a scheduled fiber>.
 
 The last arrival does not yield before it returns, which is why its C<say> lands before the released party's in the
 snippet above: it enqueues the waiters on its way past and carries straight on, and the waiters only run when the
@@ -178,9 +178,9 @@ the barrier leaves the phase permanently one party short unless something else a
     # a replacement arrival: opened the phase
     # a fresh phase is armed: remaining=2
 
-With a replacement it recovers, which is why a barrier can be used with a timeout as long as a standby party is
-waiting to take the abandoned slot. Without one, the phase can never open and every later arrival parks - see
-L</"A barrier never opens on its own">.
+With a replacement it recovers, which is why a barrier can be used with a timeout as long as a standby party is waiting
+to take the abandoned slot. Without one, the phase can never open and every later arrival parks - see L</"A barrier
+never opens on its own">.
 
 =head2 parties is only checked for being at least 1
 
@@ -223,8 +223,8 @@ waiting on one is waiting for other fibers, so if they cannot all arrive the wai
 C<FATAL: deadlock detected> rather than a timeout. C<parties> is a claim about how many fibers exist, and the barrier
 does nothing to check it.
 
-A fiber cannot cover two slots of the same phase by arriving twice, either: the first arrival parks, so the second is
-a second wait rather than a shortcut.
+A fiber cannot cover two slots of the same phase by arriving twice, either: the first arrival parks, so the second is a
+second wait rather than a shortcut.
 
 =head2 waiters can over-report
 

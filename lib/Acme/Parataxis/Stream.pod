@@ -37,8 +37,8 @@ Everything rides on the scheduler's ordinary channel parks, which is what makes 
 
 =item * Backpressure is free.
 
-A bounded output channel that fills parks the stage producing into it, and that park propagates all the way upstream, so
-a slow C<consume> throttles the raw producer instead of queueing unbounded memory. No stage needs to know about it.
+A bounded output channel that fills parks the stage producing into it, and that park propagates all the way upstream,
+so a slow C<consume> throttles the raw producer instead of queueing unbounded memory. No stage needs to know about it.
 
 =item * A stream ends when its source channel shuts down.
 
@@ -65,8 +65,8 @@ transforming an existing one.
 
 C<stage_capacity> is the capacity of every bounded output channel the stages of B<this> pipeline allocate, and it
 defaults to 128. Pick it small to make backpressure bite early, large to let a burst through before any producer parks.
-It is fixed at the head and copied to every stage downstream; there is no per-stage capacity. The head never allocates a
-channel of its own - it reads C<$ch> directly, and C<$ch> is the handle that shuts the pipeline down.
+It is fixed at the head and copied to every stage downstream; there is no per-stage capacity. The head never allocates
+a channel of its own - it reads C<$ch> directly, and C<$ch> is the handle that shuts the pipeline down.
 
 Other options are ignored. C<Stream-E<gt>new( src =E<gt> $ch, cap =E<gt> $n )> is the equivalent constructor, if you
 prefer the field names.
@@ -113,19 +113,19 @@ Paces the stream to at most C<$per_s> items a second. The first item is emitted 
 held back by the remainder of a C<1000 / $per_s> millisecond period, so the rate is an upper bound reached from below.
 
 A stage held up by downstream backpressure emits as soon as it can and does not try to catch up; the next period is
-measured from the actual emission. C<$per_s> must be at least 1, so this cannot be used to slow a stream below one
-item a second.
+measured from the actual emission. C<$per_s> must be at least 1, so this cannot be used to slow a stream below one item
+a second.
 
 =head2 C<consume( sub (@items) { ... } )>
 
     my $sink = $stream->consume( sub (@batch) { db_bulk_insert(@batch) } );
 
-The terminal stage. Runs the callback on every item as it arrives, and returns the fiber handle, so you can C<await> the
-sink if you want to know the whole chain has finished. It ends when the source shuts down, at which point the pipeline
-is done.
+The terminal stage. Runs the callback on every item as it arrives, and returns the fiber handle, so you can C<await>
+the sink if you want to know the whole chain has finished. It ends when the source shuts down, at which point the
+pipeline is done.
 
-A batch - anything the stream is carrying as an arrayref - is spread into the callback's argument list; anything else is
-passed whole. That covers both single items and the groups built by C<batch> and C<batch_time>.
+A batch - anything the stream is carrying as an arrayref - is spread into the callback's argument list; anything else
+is passed whole. That covers both single items and the groups built by C<batch> and C<batch_time>.
 
 =head2 C<shutdown( )>
 
@@ -153,8 +153,8 @@ The stage capacity this pipeline was built with, shared by every stage in it.
 
 =head2 Parse, filter, pace, batch, store
 
-The full shape. Note there is only B<one> batching stage: they do not compose, see
-L</"Stacked batch stages nest, they do not merge">.
+The full shape. Note there is only B<one> batching stage: they do not compose, see L</"Stacked batch stages nest, they
+do not merge">.
 
     async {
         my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );
@@ -171,8 +171,9 @@ L</"Stacked batch stages nest, they do not merge">.
 
 =head2 Sizing the pipeline for backpressure
 
-C<stage_capacity> is the pipeline's only flow-control knob, and it is worth choosing deliberately. A small capacity with
-a slow consumer means the producer parks almost immediately; a large one lets a burst through before anything waits.
+C<stage_capacity> is the pipeline's only flow-control knob, and it is worth choosing deliberately. A small capacity
+with a slow consumer means the producer parks almost immediately; a large one lets a burst through before anything
+waits.
 
     async {
         my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );
@@ -188,8 +189,8 @@ a slow consumer means the producer parks almost immediately; a large one lets a 
         $raw->shutdown;
     };
 
-Capacity must be at least 1. C<stage_capacity =E<gt> 0> is accepted by C<from_channel> and then fails at the first stage
-you add, so a pipeline with no stages appears to work; see L</"A capacity of 0 fails late">.
+Capacity must be at least 1. C<stage_capacity =E<gt> 0> is accepted by C<from_channel> and then fails at the first
+stage you add, so a pipeline with no stages appears to work; see L</"A capacity of 0 fails late">.
 
 =head2 Batching by count, by time, or both
 
@@ -278,8 +279,8 @@ A pipeline built with no stages at all never finds out.
 
 =head2 Stacked batch stages nest, they do not merge
 
-Chaining C<batch_time> into C<batch> does not combine the two. The second stage batches the first stage's B<groups>,
-so C<consume> receives an outer group whose elements are inner groups.
+Chaining C<batch_time> into C<batch> does not combine the two. The second stage batches the first stage's B<groups>, so
+C<consume> receives an outer group whose elements are inner groups.
 
     async {
         my $raw = Acme::Parataxis::Channel->new( capacity => 16 );

@@ -51,7 +51,8 @@ Takes a permit and decrements the count, parking the calling fiber first if the 
 Waiters are released in the order they parked, one per C<up>. A fiber that is woken but finds the count at zero again
 re-parks rather than stealing the permit from someone else.
 
-Must run inside a scheduled fiber only if it would actually have to wait. See L</"Usable as a plain counter off-fiber">.
+Must run inside a scheduled fiber only if it would actually have to wait. See L</"Usable as a plain counter
+off-fiber">.
 
 =head2 C<up( )>
 
@@ -73,7 +74,8 @@ off-fiber and safe to call when you would rather do something else than wait.
     $sem->adjust(5);       # add five permits at once
     $sem->adjust(-2);      # take two away
 
-Adds C<$diff> to the count, which may be negative, and then releases up to the new count worth of waiters. Returns true.
+Adds C<$diff> to the count, which may be negative, and then releases up to the new count worth of waiters. Returns
+true.
 
 This is the bulk-release you want at shutdown, or when a producer knows exactly how much it is about to hand over. Note
 that each waiter it releases goes on to take a permit of its own, so C<< adjust(5) >> on an empty semaphore with four
@@ -84,8 +86,8 @@ waiters leaves the count at 1, not 5. A negative C<$diff> releases nobody; see L
     $sem->wait;        # block until a permit exists -- does not take one
 
 Blocks until the count is greater than zero and returns true B<without decrementing>. It is a wait for the semaphore to
-become non-empty, not an acquire, and it is the one method here whose name will mislead you; see
-L</"wait does not take a permit">.
+become non-empty, not an acquire, and it is the one method here whose name will mislead you; see L</"wait does not take
+a permit">.
 
 =head2 C<guard( )>
 
@@ -112,8 +114,8 @@ on it yourself and then letting it go out of scope releases the permit twice.
     my @ids = $sem->waiters;       # their fiber ids
 
 In scalar context, the number of fibers currently parked. In list context, their fiber ids, in the order they will be
-released. Those are the scheduler's own ids, which get recycled once a fiber is reaped, so treat them as a debugging aid
-rather than as handles to keep.
+released. Those are the scheduler's own ids, which get recycled once a fiber is reaped, so treat them as a debugging
+aid rather than as handles to keep.
 
 =head2 C<remove_waiter( $fid )>
 
@@ -153,13 +155,13 @@ anything, because the semaphore does.
         my @results = map { $_->await } @work;
     };
 
-The permits are returned explicitly rather than through a guard, because the fiber spans more than one lexical scope and
-the C<up> sits next to the work it releases.
+The permits are returned explicitly rather than through a guard, because the fiber spans more than one lexical scope
+and the C<up> sits next to the work it releases.
 
 =head2 A gate everyone waits on
 
-A semaphore with no permits is a one-way door: every fiber that arrives parks, and each C<up> admits exactly one. Set it
-to 0 and C<up> it N times to let an N-fiber group through together.
+A semaphore with no permits is a one-way door: every fiber that arrives parks, and each C<up> admits exactly one. Set
+it to 0 and C<up> it N times to let an N-fiber group through together.
 
     async {
         my $gate = Acme::Parataxis::Semaphore->new( count => 0 );
@@ -235,16 +237,16 @@ fibers can both C<wait> on a one-permit semaphore and both return.
     };
 
 The trap is a loop. Because C<wait> does not decrement, C<< while ( $s->wait ) { ... } >> against a semaphore that
-already has a permit never parks and never blocks; it is a busy loop that the scheduler will happily run forever. If you
-want a permit, you want C<down>.
+already has a permit never parks and never blocks; it is a busy loop that the scheduler will happily run forever. If
+you want a permit, you want C<down>.
 
 Nothing in the library calls C<wait> itself. It is there for "tell me when this becomes non-empty", and even that is
 racy on its own, since nothing is claimed on your behalf.
 
 =head2 Usable as a plain counter off-fiber
 
-C<down> only insists on being in a fiber when it would actually have to wait, so a semaphore with permits to spare works
-fine from the mainline, and C<up>, C<try> and C<adjust> never need a fiber at all.
+C<down> only insists on being in a fiber when it would actually have to wait, so a semaphore with permits to spare
+works fine from the mainline, and C<up>, C<try> and C<adjust> never need a fiber at all.
 
     my $s = Acme::Parataxis::Semaphore->new( count => 1 );
     $s->down;                              # fine: a permit was available
@@ -296,15 +298,15 @@ C<adjust> releases up to the new count, not up to C<$diff>, and a negative C<$di
 
 =head2 Nothing checks the count
 
-There is no validation on the C<count> argument. Negative and fractional values are both accepted, and
-C<< count => undef >> quietly becomes 1.
+There is no validation on the C<count> argument. Negative and fractional values are both accepted, and C<< count =>
+undef >> quietly becomes 1.
 
     my $neg  = Acme::Parataxis::Semaphore->new( count => -5 );
     my $frac = Acme::Parataxis::Semaphore->new( count => 2.5 );
 
-A negative count is not an error, it is a semaphore that can never be taken from without an C<adjust> or C<up> first, so
-every C<down> parks forever. A fractional one works, since C<down> only cares whether the count is above zero, but there
-is no reason to want it.
+A negative count is not an error, it is a semaphore that can never be taken from without an C<adjust> or C<up> first,
+so every C<down> parks forever. A fractional one works, since C<down> only cares whether the count is above zero, but
+there is no reason to want it.
 
 =head1 SEE ALSO
 

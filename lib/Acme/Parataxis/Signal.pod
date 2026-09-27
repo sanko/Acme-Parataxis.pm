@@ -58,8 +58,7 @@ Wakes every currently queued waiter and returns true. A waiter registered by a c
 part of it - the wake budget is fixed when the broadcast starts.
 
 Unlike C<send>, a broadcast with nobody to wake does not remember anything. It also cancels a signal that was already
-remembered, so do not use it to clear a queue you have not drained; see
-L</"broadcast cancels a pending signal">.
+remembered, so do not use it to clear a queue you have not drained; see L</"broadcast cancels a pending signal">.
 
 =head2 C<wait( )>
 
@@ -72,12 +71,12 @@ signal arrives. Always returns C<undef>; use C<awaited> to ask how many are wait
 Must run inside a scheduled fiber, unless a signal is already pending, in which case it returns without parking and
 needs no fiber at all.
 
-With a coderef, registers that callback and returns immediately B<without> parking, so it is safe to call from anywhere,
-including off-fiber. If a signal is already pending the callback runs before C<wait> returns. See
+With a coderef, registers that callback and returns immediately B<without> parking, so it is safe to call from
+anywhere, including off-fiber. If a signal is already pending the callback runs before C<wait> returns. See
 L</"Callbacks run where you send from">.
 
-Only a real coderef is treated as a callback. C<undef> means the no-argument form, and any other value - including
-C<0> - is registered as if it were a fiber id; see L</"wait takes one optional argument">.
+Only a real coderef is treated as a callback. C<undef> means the no-argument form, and any other value - including C<0>
+- is registered as if it were a fiber id; see L</"wait takes one optional argument">.
 
 =head2 C<awaited( )>
 
@@ -90,8 +89,8 @@ waiting, which is the cheapest way to ask whether a C<send> is going to be remem
 
     my $removed = $ready->remove_waiter(\&callback);
 
-Removes a callback or a fiber id from the queue and returns how many entries went away. Consumes nothing and never calls
-a callback. It does not wake anything either: a fiber you remove this way is simply never signalled again.
+Removes a callback or a fiber id from the queue and returns how many entries went away. Consumes nothing and never
+calls a callback. It does not wake anything either: a fiber you remove this way is simply never signalled again.
 
 You rarely need this. It is the hook the park installs to deregister an interrupted wait, and every Parataxis primitive
 that can park has one - a L<Acme::Parataxis::Semaphore>, a L<Acme::Parataxis::Channel>, a L<Acme::Parataxis::Future> or
@@ -101,8 +100,8 @@ any of the L<Acme::Parataxis::Sync> classes.
 
 =head2 A one-shot "the work finished" event
 
-The ordinary use: something happens once, and a fiber is waiting for it. One C<send> releases one waiter, so this is the
-shape to reach for when there is a single consumer.
+The ordinary use: something happens once, and a fiber is waiting for it. One C<send> releases one waiter, so this is
+the shape to reach for when there is a single consumer.
 
     async {
         my $finished = Acme::Parataxis::Signal->new( count => false );
@@ -227,8 +226,8 @@ L<Acme::Parataxis::Channel> when you need a count of events rather than a flag.
 
 =head2 broadcast cancels a pending signal
 
-C<broadcast> clears the flag whether or not it had anything to wake, so a signal that was remembered is discarded rather
-than delivered. The next C<wait> parks as though nothing had happened.
+C<broadcast> clears the flag whether or not it had anything to wake, so a signal that was remembered is discarded
+rather than delivered. The next C<wait> parks as though nothing had happened.
 
     async {
         my $s = Acme::Parataxis::Signal->new( count => false );
@@ -243,8 +242,8 @@ than delivered. The next C<wait> parks as though nothing had happened.
         $s->send;
     };
 
-If you want to clear the queue without losing a signal that is already banked, drain it with C<send> calls instead - one
-per waiter - because C<send> leaves the flag alone when it finds somebody to release.
+If you want to clear the queue without losing a signal that is already banked, drain it with C<send> calls instead -
+one per waiter - because C<send> leaves the flag alone when it finds somebody to release.
 
 =head2 The flag is a flag, not a counter
 

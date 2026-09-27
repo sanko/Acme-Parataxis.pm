@@ -43,8 +43,8 @@ Go-structured-concurrency pattern in Perl:
 =back
 
 A bare C<fiber>/C<spawn> inside the block creates an I<independent> fiber the block owns - it is B<not> adopted by the
-nursery and does B<not> delay the join. The L<Acme::Parataxis::CancellationToken> that the nursery hands you via
-C<< $n->token >> is public, so you can cancel the whole group yourself, or hand it to a C<with_timeout> deadline.
+nursery and does B<not> delay the join. The L<Acme::Parataxis::CancellationToken> that the nursery hands you via C<<
+$n->token >> is public, so you can cancel the whole group yourself, or hand it to a C<with_timeout> deadline.
 
 =head1 CONSTRUCTOR
 
@@ -52,11 +52,11 @@ C<< $n->token >> is public, so you can cancel the whole group yourself, or hand 
 
     my $n = Acme::Parataxis::Nursery->new( token => $tok );
 
-Normally you never call this: C<nursery( )> builds the object, runs your block in the calling fiber, joins every
-child, and throws the aggregate. C<new> is the lower-level entry point for embedding, and accepts a C<token>
-(default: a fresh L<Acme::Parataxis::CancellationToken>). Note that C<new> alone does not join - a child you
-C<spawn> through it still runs, but nothing aggregates its error or cancels its siblings; that is the private
-C<_join> that C<nursery( )> calls on your behalf.
+Normally you never call this: C<nursery( )> builds the object, runs your block in the calling fiber, joins every child,
+and throws the aggregate. C<new> is the lower-level entry point for embedding, and accepts a C<token> (default: a fresh
+L<Acme::Parataxis::CancellationToken>). Note that C<new> alone does not join - a child you C<spawn> through it still
+runs, but nothing aggregates its error or cancels its siblings; that is the private C<_join> that C<nursery( )> calls
+on your behalf.
 
 =head1 METHODS
 
@@ -117,9 +117,9 @@ The deadline cancels the nursery's own token, which cancels both children.
 
 =head2 Acme::Parataxis::Error::Nursery
 
-Thrown by C<nursery( )> when one or more children died. It is an L<Acme::Parataxis::Error> subclass, so
-C<< $@->message >>, C<< $@->kind >> (C<nursery>), and the usual accessors work. Stringifying it gives
-C<nursery failure: ...> built from the primary failure.
+Thrown by C<nursery( )> when one or more children died. It is an L<Acme::Parataxis::Error> subclass, so C<< $@->message
+>>, C<< $@->kind >> (C<nursery>), and the usual accessors work. Stringifying it gives C<nursery failure: ...> built
+from the primary failure.
 
 C<< $err->failures >> returns every child error in spawn order, including the L<Acme::Parataxis::Error::Cancelled>
 objects that the cancelled siblings threw as they unwound. C<< $err->primary >> is the first B<natural> (non-cancelled)

@@ -46,8 +46,8 @@ again before anyone has to intervene.
 
 A supervisor owns a set of children and runs one supervision fiber. Children are L<Acme::Parataxis::Actor>s or nested
 supervisors, registered with C<supervise>. Whenever a child dies, the supervision fiber learns about it through that
-child's own teardown - an actor's C<on_death> hook, or a wrapper fiber around a nested supervisor's C<run> - and applies
-the restart strategy:
+child's own teardown - an actor's C<on_death> hook, or a wrapper fiber around a nested supervisor's C<run> - and
+applies the restart strategy:
 
 =over 4
 
@@ -84,8 +84,8 @@ through their own teardown. No C, no OS threads, nothing but the scheduler's ord
         within       => 60,             # default, in seconds
     );
 
-Creates a supervisor. All three options are optional, and all three are readable afterwards - see
-L</"Configuration readers">.
+Creates a supervisor. All three options are optional, and all three are readable afterwards - see L</"Configuration
+readers">.
 
 =over 4
 
@@ -149,8 +149,8 @@ Starts the tree and supervises it until L</"stop( )"> is called or the restart b
 Either way every child is stopped and drained before this returns, so no fiber of the tree outlives it.
 
 Must be called from inside a scheduled fiber, with at least one registered child, and only once. Each of those
-violations croaks. When the budget is exhausted this dies with L<Acme::Parataxis::Error::Supervisor> after the tree
-has already been torn down.
+violations croaks. When the budget is exhausted this dies with L<Acme::Parataxis::Error::Supervisor> after the tree has
+already been torn down.
 
 =head2 C<stop( )>
 
@@ -189,8 +189,8 @@ that name. Returns C<undef> before C<run> has started anything; see L</"child is
         $sup->restarts;                # the whole tree, added up
     };
 
-With a name, how often that child has been replaced; without one, the total across the tree. Croaks on an unknown
-name. The count is not the number of crashes - see L</"restarts counts replacements, not deaths">.
+With a name, how often that child has been replaced; without one, the total across the tree. Croaks on an unknown name.
+The count is not the number of crashes - see L</"restarts counts replacements, not deaths">.
 
 =head2 C<running( )>
 
@@ -204,8 +204,8 @@ name. The count is not the number of crashes - see L</"restarts counts replaceme
 
     $sup->started;     # run() has begun at least once
 
-Distinguishes "never ran" from "ran and has finished". C<running> is true only while C<run> is on the stack;
-C<started> stays true.
+Distinguishes "never ran" from "ran and has finished". C<running> is true only while C<run> is on the stack; C<started>
+stays true.
 
 =head2 Configuration readers
 
@@ -251,8 +251,8 @@ failed there rather than hanging, so a caller waiting on a worker that crashed f
 
 =head2 Choosing a strategy
 
-The strategy is a claim about what a death invalidates. C<OneForOne> when children are independent, which is the
-common case. C<OneForAll> when they share the state the death just corrupted. C<RestForOne> when they share it but only
+The strategy is a claim about what a death invalidates. C<OneForOne> when children are independent, which is the common
+case. C<OneForAll> when they share the state the death just corrupted. C<RestForOne> when they share it but only
 downstream, which is how you ask for "this one and everything that came after".
 
     # independent workers: only the casualty is replaced
@@ -387,8 +387,8 @@ against the budget.
         say 'the reason: ', $fail->primary;               # child 'w' exited cleanly
     };
 
-The message is the tell: C<child 'w' exited cleanly> is a death report with no error attached. If a supervised child
-is meant to finish and stay finished, it does not belong under a supervisor.
+The message is the tell: C<child 'w' exited cleanly> is a death report with no error attached. If a supervised child is
+meant to finish and stay finished, it does not belong under a supervisor.
 
 =head2 supervised =E<gt> 1 is what makes supervision work
 

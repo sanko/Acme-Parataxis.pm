@@ -28,9 +28,9 @@ Acme::Parataxis::Sync::Mutex - Non-reentrant mutex with true owner tracking
 
 =head1 DESCRIPTION
 
-A mutual-exclusion lock shared between fibers. The lock knows B<which> fiber holds it, and that fiber is the only
-one allowed to release it. It is not reentrant, so a fiber that tries to take it twice is a mistake the lock reports
-rather than something it quietly allows.
+A mutual-exclusion lock shared between fibers. The lock knows B<which> fiber holds it, and that fiber is the only one
+allowed to release it. It is not reentrant, so a fiber that tries to take it twice is a mistake the lock reports rather
+than something it quietly allows.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber];
@@ -46,9 +46,9 @@ rather than something it quietly allows.
     # fiber 1 has the lock, 0 queued behind it
 
 Everything is cooperative. A C<lock> that finds the lock taken parks the calling fiber until the owner releases, and
-the release hands the lock B<directly> to the longest-waiting fiber, so the queue is served in arrival order and
-nobody can cut in line. The hand-off is atomic - C<owner> is set before the waiter is woken - so there is no instant
-at which the lock looks free and a third fiber can steal it.
+the release hands the lock B<directly> to the longest-waiting fiber, so the queue is served in arrival order and nobody
+can cut in line. The hand-off is atomic - C<owner> is set before the waiter is woken - so there is no instant at which
+the lock looks free and a third fiber can steal it.
 
 A parked C<lock> is an ordinary interruptible park, so a deadline bounds it and a cancellation aborts it. See
 L<"Bounding a wait">.
@@ -63,8 +63,8 @@ L<"Bounding a wait">.
     say 'a fresh lock is free, with ', $lock->waiters, ' queued';
     # a fresh lock is free, with 0 queued
 
-Creates a free lock. Takes no arguments: an unknown key or a stray positional argument croaks with
-C<Unrecognized parameters for "Acme::Parataxis::Sync::Mutex" constructor>.
+Creates a free lock. Takes no arguments: an unknown key or a stray positional argument croaks with C<Unrecognized
+parameters for "Acme::Parataxis::Sync::Mutex" constructor>.
 
 =head2 C<lock( )>
 
@@ -80,8 +80,8 @@ C<Unrecognized parameters for "Acme::Parataxis::Sync::Mutex" constructor>.
     };
     # this fiber holds it, and lock() returned true: yes
 
-Takes the lock, parking until it is handed over, and returns true. Croaks off a fiber, and croaks if the calling
-fiber already holds the lock.
+Takes the lock, parking until it is handed over, and returns true. Croaks off a fiber, and croaks if the calling fiber
+already holds the lock.
 
 =head2 C<try_lock( )>
 
@@ -100,9 +100,8 @@ fiber already holds the lock.
     # on a free lock: taken
     # on a held lock: refused
 
-Takes the lock only if it is free, returning true. Returns false without parking when another fiber holds it,
-which is what makes it the non-blocking half of C<lock> - nothing is taken on the false path, so there is nothing to
-give back.
+Takes the lock only if it is free, returning true. Returns false without parking when another fiber holds it, which is
+what makes it the non-blocking half of C<lock> - nothing is taken on the false path, so there is nothing to give back.
 
 C<try_lock> croaks rather than returning false when the B<calling> fiber already holds the lock, exactly as C<lock>
 does. To ask whether this fiber is the holder, compare C<owner> yourself.
@@ -144,12 +143,12 @@ locked at all, and croaks if the calling fiber is not the owner.
     # inside the block it is held: yes
     # and released at the end of it: yes
 
-Takes the lock and returns an opaque guard object that releases it when the guard is destroyed. Returns as soon as
-the lock is held, so a guard waits exactly as C<lock> does. Because the release is at destruction, an exception
-part-way through the block still gives the lock back.
+Takes the lock and returns an opaque guard object that releases it when the guard is destroyed. Returns as soon as the
+lock is held, so a guard waits exactly as C<lock> does. Because the release is at destruction, an exception part-way
+through the block still gives the lock back.
 
-The guard has no methods. It is not a lock and it does not expose the mutex it wraps; its only job is to run
-C<unlock> at destruction, which makes it a plain scope handle and nothing more.
+The guard has no methods. It is not a lock and it does not expose the mutex it wraps; its only job is to run C<unlock>
+at destruction, which makes it a plain scope handle and nothing more.
 
 =head2 C<owner>
 
@@ -193,20 +192,20 @@ well as on one. The id is a plain integer, directly comparable to C<< Acme::Para
 
 How many fibers are queued for the lock. Also a reader, so it works off a fiber.
 
-The count is the B<queue>, not the number of fibers still to be given the lock. C<unlock> takes the next waiter off
-the queue as it hands over, so the count drops before that fiber has run - which is why the third line above can name
-a fiber that has not executed a single statement yet.
+The count is the B<queue>, not the number of fibers still to be given the lock. C<unlock> takes the next waiter off the
+queue as it hands over, so the count drops before that fiber has run - which is why the third line above can name a
+fiber that has not executed a single statement yet.
 
 =head1 How It Works
 
-Three fields and two methods carry the whole primitive. C<owner> is the holding fiber's id or C<undef>; C<@waiters>
-is the queue of ids, oldest first. Taking the lock is either a plain assignment, or a push followed by a park that
-returns only once C<unlock> has handed the lock over - which is why C<lock> always returns true.
+Three fields and two methods carry the whole primitive. C<owner> is the holding fiber's id or C<undef>; C<@waiters> is
+the queue of ids, oldest first. Taking the lock is either a plain assignment, or a push followed by a park that returns
+only once C<unlock> has handed the lock over - which is why C<lock> always returns true.
 
-Releasing is the mirror image, and the release walks the queue until it finds an id that still belongs to a live
-fiber. That loop is what makes a waiter which died while parked harmless: its id is skipped instead of being handed a
-lock nobody will come back to collect. The two things that follow from it are both visible from the outside: the
-queue is served in arrival order, and a hand-off is never lost to a fiber that is no longer there.
+Releasing is the mirror image, and the release walks the queue until it finds an id that still belongs to a live fiber.
+That loop is what makes a waiter which died while parked harmless: its id is skipped instead of being handed a lock
+nobody will come back to collect. The two things that follow from it are both visible from the outside: the queue is
+served in arrival order, and a hand-off is never lost to a fiber that is no longer there.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep];
@@ -238,8 +237,8 @@ queue is served in arrival order, and a hand-off is never lost to a fiber that i
 
 =head2 Guarding a shared structure
 
-The shape to reach for. Take the guard at the top of the block, do the work, and let the block give the lock back -
-so an exception part-way through cannot leave it held.
+The shape to reach for. Take the guard at the top of the block, do the work, and let the block give the lock back - so
+an exception part-way through cannot leave it held.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber];
@@ -262,8 +261,7 @@ so an exception part-way through cannot leave it held.
 
 =head2 Excluding a fiber that arrives late
 
-C<try_lock> never parks, so it is the way to give a fiber a single attempt and send it on its way if the lock is
-busy.
+C<try_lock> never parks, so it is the way to give a fiber a single attempt and send it on its way if the lock is busy.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep];
@@ -284,9 +282,8 @@ busy.
 =head2 Bounding a wait
 
 A parked C<lock> is an ordinary park, so C<with_timeout( $ms, ... )> bounds it. Catching the timeout is the point,
-because an uncaught one takes the run down. After a catch the mutex is exactly as it was: the timed-out fiber was
-taken off the queue on its way out, so a retry starts from a clean queue and a measured 50ms budget fires in about
-50ms.
+because an uncaught one takes the run down. After a catch the mutex is exactly as it was: the timed-out fiber was taken
+off the queue on its way out, so a retry starts from a clean queue and a measured 50ms budget fires in about 50ms.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep];
@@ -308,8 +305,8 @@ taken off the queue on its way out, so a retry starts from a clean queue and a m
 
 C<with_timeout> runs its block on a child fiber, and the deadline interrupts whatever that child is parked in. The
 equivalent with a token is C<Acme::Parataxis::with_cancel( sub ($token) { ... } )>, which raises
-L<Acme::Parataxis::Error::Cancelled> in the parked fiber instead. Cancelling a token that a waiting fiber published
-is also how you take a waiter out of the queue deliberately.
+L<Acme::Parataxis::Error::Cancelled> in the parked fiber instead. Cancelling a token that a waiting fiber published is
+also how you take a waiter out of the queue deliberately.
 
 =head1 Behavior Notes
 
@@ -333,10 +330,10 @@ the lock held, and the next fiber to ask parks on a lock nobody is ever going to
     # a later attempt: gave up
     # and the lock is stranded: still held
 
-There is no API to take a lock back, so the recovery is to stop using that primitive. The habit that prevents it is
-the guard in L<"Guarding a shared structure">: held in a lexical, taken at the top of the body, released by scope
-exit whatever happens. That covers an exception, and it covers a fiber that returns early. It does not cover a fiber
-that is torn down without unwinding.
+There is no API to take a lock back, so the recovery is to stop using that primitive. The habit that prevents it is the
+guard in L<"Guarding a shared structure">: held in a lexical, taken at the top of the body, released by scope exit
+whatever happens. That covers an exception, and it covers a fiber that returns early. It does not cover a fiber that is
+torn down without unwinding.
 
 Fiber ids are recycled the moment a fiber finishes, and that is what turns this failure into a confusing one. A fiber
 that takes a lock and then dies frees its id, so a later fiber can be handed the same number - and is then told it
@@ -345,9 +342,9 @@ already holds the lock, which is a reentrancy error rather than the real problem
 =head2 A guard must not outlive its fiber
 
 A guard releases the lock from whichever fiber destroys it, and every release checks that the releasing fiber is the
-one that took it. A guard handed out of its fiber therefore cannot release: the release croaks, the croak is
-swallowed along with the handle that carried the guard, and the lock is stranded. The only symptom is a lock that is
-permanently busy.
+one that took it. A guard handed out of its fiber therefore cannot release: the release croaks, the croak is swallowed
+along with the handle that carried the guard, and the lock is stranded. The only symptom is a lock that is permanently
+busy.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep];
@@ -367,9 +364,9 @@ explicitly, from inside the acquiring fiber, rather than the guard.
 
 =head2 Dropping a waiter's handle does not dequeue it
 
-A parked waiter stays in the queue even if every reference to its fiber handle goes away. The scheduler holds the
-fiber itself, so letting go of the handle changes nothing: the fiber is still parked, still queued, and still next in
-line for the lock.
+A parked waiter stays in the queue even if every reference to its fiber handle goes away. The scheduler holds the fiber
+itself, so letting go of the handle changes nothing: the fiber is still parked, still queued, and still next in line
+for the lock.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep];
@@ -389,11 +386,11 @@ line for the lock.
     # still queued: 1
     # handed to fiber 1
 
-To take a waiter out of the queue, interrupt it: a C<with_timeout> deadline or a cancelled token, as in
-L<"Bounding a wait">. An interrupted waiter has already removed itself by the time a release reaches it, which is why
-the release can afford to skip ids whose fibers are no longer live.
+To take a waiter out of the queue, interrupt it: a C<with_timeout> deadline or a cancelled token, as in L<"Bounding a
+wait">. An interrupted waiter has already removed itself by the time a release reaches it, which is why the release can
+afford to skip ids whose fibers are no longer live.
 
-=head1 See Also
+=head1 SEE ALSO
 
 L<Acme::Parataxis::Sync>, L<Acme::Parataxis::Sync::RwLock>, L<Acme::Parataxis::Sync::WaitGroup>,
 L<Acme::Parataxis::Sync::Barrier>, L<Acme::Parataxis::Sync::Once>, L<Acme::Parataxis::Error::Timeout>,
@@ -411,3 +408,4 @@ This library is free software; you can redistribute it and/or modify it under th
 2.
 
 =cut
+

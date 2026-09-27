@@ -73,23 +73,23 @@ of work.
 
     $token->register;    # returns this fiber's id
 
-Registers the calling fiber so that C<cancel> can interrupt it, and returns its fiber id. Registering twice from
-the same fiber does not add a second entry, so the count in C<< $token->waiters >> stays honest.
+Registers the calling fiber so that C<cancel> can interrupt it, and returns its fiber id. Registering twice from the
+same fiber does not add a second entry, so the count in C<< $token->waiters >> stays honest.
 
-Registering against a token that has already been cancelled does not queue anything: it marks the fiber so its
-very next wait throws immediately, which turns a lost race into an error rather than a hang. Croaks outside a
-scheduled fiber, and it is the fiber that calls it that gets registered, so a helper has to call it on the fiber
-you want interrupted.
+Registering against a token that has already been cancelled does not queue anything: it marks the fiber so its very
+next wait throws immediately, which turns a lost race into an error rather than a hang. Croaks outside a scheduled
+fiber, and it is the fiber that calls it that gets registered, so a helper has to call it on the fiber you want
+interrupted.
 
 =head2 C<unregister( )>
 
     $token->unregister;    # returns this fiber's id
 
 Removes the calling fiber, so a later C<cancel> leaves it alone. Worth doing once the work you wanted stopped is over
-but the fiber still has cleanup of its own to finish - and see L</"A leaked registration arms the next fiber"> for
-why leaving it out is worse than it looks. Safe to call any number of times, and it needs no fiber, so a
-destructor or an off-fiber cleanup can still call it. L</"Cancelling waits you cannot pass a token to"> has the tidy
-C<defer> form.
+but the fiber still has cleanup of its own to finish - and see the "A leaked registration arms the next fiber" note
+under L</"Behavior Notes"> for why leaving it out is worse than it looks. Safe to call any number of times, and it
+needs no fiber, so a destructor or an off-fiber cleanup can still call it. L</"Cancelling waits you cannot pass a token
+to"> has the tidy C<defer> form.
 
 =head2 C<waiters( )>
 
@@ -144,8 +144,7 @@ and a nursery is a good home for work that all shares one fate:
     } );
 
 The C<defer> is not tidiness. Without it the fiber stays in the token's list after its work is done, and because fiber
-ids are recycled the next C<cancel> lands on whatever fiber has since been given that id - see
-L</"A leaked registration arms the next fiber">.
+ids are recycled the next C<cancel> lands on whatever fiber has since been given that id - see L</"Behavior Notes">.
 
 =head2 A deadline you can move
 
@@ -162,9 +161,9 @@ Anything that can C<cancel> a token can then push a deadline around: hand it to 
 set it from a config reload. C<kind> is the whole difference - the mechanics are a cancellation's, only the exception
 arriving at the wait is L<Acme::Parataxis::Error::Timeout> instead.
 
-Catch it inside the fiber, as above, when the fiber itself has to survive and report; the timeout then stays
-local to it. Let it escape and the fiber dies with it, and the error travels on to whoever is awaiting that fiber -
-so the deadline still works, it just fails further up the stack than you wrote it.
+Catch it inside the fiber, as above, when the fiber itself has to survive and report; the timeout then stays local to
+it. Let it escape and the fiber dies with it, and the error travels on to whoever is awaiting that fiber - so the
+deadline still works, it just fails further up the stack than you wrote it.
 
 =head1 Tokens You Get for Free
 
@@ -175,15 +174,15 @@ so the deadline still works, it just fails further up the stack than you wrote i
 Runs the block under a fresh scope token and passes it in, so a fiber the block starts can cancel the block's waits.
 C<with_cancel> hands that token back as its return value - on its own in scalar or void context, prepended to the
 return list in list context - but that is for inspecting C<< ->cancelled >> afterwards, not for stopping the scope: see
-L</"With with_cancel, the return is the token">.
+the "With with_cancel, the return is the token" note under L</"Behavior Notes">.
 
 =item * L<with_timeout|Acme::Parataxis::with_timeout> - C<with_timeout( $ms, $code )>,
 or C<with_timeout( $ms, $token, $code )>
 
 A token in second position cancels C<$code> exactly as its own deadline would, and whichever fires first ends the wait.
 A token that is already cancelled fails fast, without running C<$code> at all. The token is optional; the runtime picks
-the second argument apart by class, so anything that is not a token is taken as the code - which is why
-C<< with_timeout( 10, undef, sub { ... } ) >> reports C<with_timeout() requires a CODE ref>.
+the second argument apart by class, so anything that is not a token is taken as the code - which is why C<<
+with_timeout( 10, undef, sub { ... } ) >> reports C<with_timeout() requires a CODE ref>.
 
 =item * C<< $nursery-E<gt>token >>
 
@@ -222,11 +221,11 @@ a kind of cancellation, so C<< $err-E<gt>isa('...::Cancelled') >> is false for o
 reliable test: C<'cancelled'> or C<'timeout'>. Note that C<'cancelled'> is not the token's C<'cancel'>, so do not
 compare the two directly.
 
-C<< $err-E<gt>wait_reason >> is the C<[ reason, file, line, backtrace ]> the interrupted wait parked with, and
-its first element names the wait: C<'fiber await'>, C<'await_sleep'>, C<'Future await'>, C<'Channel select'>,
-C<'Signal wait'>, C<'STM retry'>, or C<'Semaphore down'> unless the caller passed a reason of its own. On the
-fail-fast path - where no park was ever entered - the first element is C<'cancel'> or C<'timeout'> instead, and
-the backtrace slot is left empty.
+C<< $err-E<gt>wait_reason >> is the C<[ reason, file, line, backtrace ]> the interrupted wait parked with, and its
+first element names the wait: C<'fiber await'>, C<'await_sleep'>, C<'Future await'>, C<'Channel select'>, C<'Signal
+wait'>, C<'STM retry'>, or C<'Semaphore down'> unless the caller passed a reason of its own. On the fail-fast path -
+where no park was ever entered - the first element is C<'cancel'> or C<'timeout'> instead, and the backtrace slot is
+left empty.
 
 =item * A leaked registration arms the next fiber
 
@@ -238,13 +237,13 @@ C<defer>, so it happens on the cancellation path too - is what closes this.
 
 =item * With with_cancel, the return is the token
 
-C<< with_cancel( sub ($t) { 'my result' } ) >> returns the token; the block's own return value is only
-reachable in list context, after the token. The ordering makes the token useless for stopping its own scope: it
-does not exist as a return value until the block has finished, so a caller that tried to cancel from outside
-would be cancelling a scope that is already over.
+C<< with_cancel( sub ($t) { 'my result' } ) >> returns the token; the block's own return value is only reachable in
+list context, after the token. The ordering makes the token useless for stopping its own scope: it does not exist as a
+return value until the block has finished, so a caller that tried to cancel from outside would be cancelling a scope
+that is already over.
 
-Cancel from inside - hand C<$t> to a fiber the block starts - which is the shape the
-L</"Tokens You Get for Free"> entry above is for.
+Cancel from inside - hand C<$t> to a fiber the block starts - which is the shape the L</"Tokens You Get for Free">
+entry above is for.
 
 =item * Not a signal
 

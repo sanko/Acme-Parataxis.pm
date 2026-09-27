@@ -24,16 +24,16 @@ Acme::Parataxis::Generator - Stackful, Lazily-pulled Iterator
 
 =head1 DESCRIPTION
 
-A generator runs its body in a private fiber and pulls it one value at a time. The body is ordinary synchronous code: it
-can loop, C<return>, call other subroutines and recurse deeply, and C<< $y->(...) >> works from any depth. Each
-C<< $y->($value) >> suspends the body exactly where it stands - every lexical, every loop counter, the whole call stack
-is still there - and the next C<< ->next >> picks it up from that same point.
+A generator runs its body in a private fiber and pulls it one value at a time. The body is ordinary synchronous code:
+it can loop, C<return>, call other subroutines and recurse deeply, and C<< $y->(...) >> works from any depth. Each C<<
+$y->($value) >> suspends the body exactly where it stands - every lexical, every loop counter, the whole call stack is
+still there - and the next C<< ->next >> picks it up from that same point.
 
 Nothing in the body runs until the first C<next>, so a generator over an expensive source costs nothing until you start
 pulling, and an infinite sequence is fine as long as you stop pulling.
 
-Two things the body must not do: park (see L</"Parking inside a body injects a bogus value">), and pull the generator it
-is itself running in (see L</"Re-entrant next ends the generator">). Everything else is plain Perl.
+Two things the body must not do: park (see L</"Parking inside a body injects a bogus value">), and pull the generator
+it is itself running in (see L</"Re-entrant next ends the generator">). Everything else is plain Perl.
 
 You can pull from the mainline, from a run's main fiber, from a C<fiber> you spawned, or from a nursery child, in any
 order. The first generator a process builds may be created wherever you like; nothing needs to be primed first.
@@ -78,8 +78,8 @@ In list context this returns a one-element list.
 
     while ( !$gen->is_done ) { handle( $gen->next ) }
 
-Returns C<1> once the body has finished, whether it returned or threw, and C<0> before that. This is the reliable way to
-drain a sequence that can contain C<undef>.
+Returns C<1> once the body has finished, whether it returned or threw, and C<0> before that. This is the reliable way
+to drain a sequence that can contain C<undef>.
 
 =head1 Recipes
 
@@ -98,8 +98,8 @@ drain a sequence that can contain C<undef>.
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for undef, 'after' } );
     my @got = drain($gen);                      # ( undef, 'after' )
 
-The C<while ( defined( my $v = $gen->next ) )> form used in L</SYNOPSIS> stops at the first C<undef>, so a sequence that
-contains one silently truncates.
+The C<while ( defined( my $v = $gen->next ) )> form used in L</SYNOPSIS> stops at the first C<undef>, so a sequence
+that contains one silently truncates.
 
 =head2 Take only the first few values
 
@@ -158,8 +158,8 @@ until the first pull.
 
 =head2 A yielded C<undef> is the end of the sequence as far as C<next> is concerned
 
-C<next> cannot tell a body that yielded C<undef> from a body that has finished; both return C<undef>. The usual
-C<while ( defined( my $v = $gen->next ) )> loop therefore stops at the first C<undef> the body produces:
+C<next> cannot tell a body that yielded C<undef> from a body that has finished; both return C<undef>. The usual C<while
+( defined( my $v = $gen->next ) )> loop therefore stops at the first C<undef> the body produces:
 
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for undef, 'after' } );
     my @got;
@@ -170,8 +170,8 @@ Test for the end with C<is_done> instead, as L</"Drain a generator without stopp
 
 =head2 The body's return value is discarded
 
-A generator's last value always comes from a C<< $y->(...) >> call. If the body returns without yielding again, the next
-C<next> returns C<undef> and the generator is finished, whatever the body returned:
+A generator's last value always comes from a C<< $y->(...) >> call. If the body returns without yielding again, the
+next C<next> returns C<undef> and the generator is finished, whatever the body returned:
 
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->(1); return 'final' } );
     say $gen->next;                            # 1
@@ -212,8 +212,8 @@ C<await_sleep>, say - cannot do that, so the fiber is torn down and everything a
     }
     say $reached;                              # never
 
-The drain marker is a private scalar ref rather than a sentinel string, so no value a body yields can be mistaken for it
-and drained silently.
+The drain marker is a private scalar ref rather than a sentinel string, so no value a body yields can be mistaken for
+it and drained silently.
 
 =head2 The constructor is strict
 

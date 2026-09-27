@@ -47,8 +47,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         croak "Supervisor->new: strategy must be OneForOne, OneForAll or RestForOne (got '$strategy')"
             unless defined $strategy && ( $strategy eq 'OneForOne' || $strategy eq 'OneForAll' || $strategy eq 'RestForOne' );
         croak 'Supervisor->new: max_restarts must be a non-negative integer'     unless defined $max_restarts && $max_restarts =~ /\A\d+\z/;
-        croak 'Supervisor->new: within must be a non-negative number of seconds'
-            unless defined $within && $within =~ /\A[0-9]+(?:\.[0-9]+)?\z/;
+        croak 'Supervisor->new: within must be a non-negative number of seconds' unless defined $within       && $within =~ /\A[0-9]+(?:\.[0-9]+)?\z/;
         $deaths = Acme::Parataxis::Channel->new( capacity => 4096 );
     }
 

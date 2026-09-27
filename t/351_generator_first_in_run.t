@@ -11,7 +11,6 @@ $|++;
 # deadlock detector counted it as live run work and killed the process as that run ended - after correct
 # output. A run's own main fiber already holds fid 0 before the body executes, so no reserved fiber is
 # needed here and none is created.
-
 subtest 'the first generator in a process, built inside a run, does not wedge the run' => sub {
     my @collected;
     my $fid;
@@ -24,17 +23,15 @@ subtest 'the first generator in a process, built inside a run, does not wedge th
     ok $fid >= 1, "the generator's fiber is not fid 0 (fid $fid)";
     is Acme::Parataxis::get_live_fiber_count(), 0, 'no fiber was parked permanently';
 };
-
 subtest 'a later run can build and pull a generator too' => sub {
     my @collected;
     async {
         my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 'x' .. 'z' } );
         while ( defined( my $v = $gen->next ) ) { push @collected, $v }
     };
-    is "@collected", 'x y z', 'every value arrived';
-    is Acme::Parataxis::get_live_fiber_count(), 0, 'still nothing parked permanently';
+    is "@collected",                            'x y z', 'every value arrived';
+    is Acme::Parataxis::get_live_fiber_count(), 0,       'still nothing parked permanently';
 };
-
 subtest 'the first generator in a run, pulled from a spawned child fiber' => sub {
     my @collected;
     my $done = 0;
@@ -46,10 +43,9 @@ subtest 'the first generator in a run, pulled from a spawned child fiber' => sub
         };
         yield until $done;
     };
-    is "@collected", '1 2 3', 'the child fiber pulled every value';
-    is Acme::Parataxis::get_live_fiber_count(), 0, 'nothing parked permanently';
+    is "@collected",                            '1 2 3', 'the child fiber pulled every value';
+    is Acme::Parataxis::get_live_fiber_count(), 0,       'nothing parked permanently';
 };
-
 subtest 'the first generator in a run, pulled from a nursery child' => sub {
     my @collected;
     async {
@@ -64,24 +60,22 @@ subtest 'the first generator in a run, pulled from a nursery child' => sub {
             }
         );
     };
-    is "@collected", '7 14 21', 'the nursery child pulled every value';
-    is Acme::Parataxis::get_live_fiber_count(), 0, 'nothing parked permanently';
+    is "@collected",                            '7 14 21', 'the nursery child pulled every value';
+    is Acme::Parataxis::get_live_fiber_count(), 0,         'nothing parked permanently';
 };
-
 subtest 'a generator built on the mainline still reserves fid 0' => sub {
+
     # The mainline is the one place that does still need the reserved fiber: nothing else has allocated a
     # fiber yet, so without it this generator would be fid 0 and hit the Windows resume-die escape.
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 1 .. 2 } );
     ok $gen->{fiber}->fid >= 1, "the generator's fiber is not fid 0 (fid " . $gen->{fiber}->fid . ')';
     is Acme::Parataxis::get_live_fiber_count(), 1, 'the reserved fiber now exists and is parked';
-    is $gen->next, 1, 'and the generator still works';
+    is $gen->next,                              1, 'and the generator still works';
 };
-
 subtest 'a run after the mainline reserved fiber is clean' => sub {
     my $ran = 0;
     async { $ran = 1 };
     is $ran, 1, 'the run completed';
 };
-
 #
 done_testing;

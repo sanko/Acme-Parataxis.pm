@@ -91,8 +91,8 @@ interrupted wait would be woken later against a fiber that is not the one that p
 
 =back
 
-The primitives know nothing about each other. Nesting a C<write_lock> inside a C<read_lock>, or a C<Once> whose
-action takes a lock the caller already holds, is your bug to avoid, and it is a deadlock rather than a diagnostic.
+The primitives know nothing about each other. Nesting a C<write_lock> inside a C<read_lock>, or a C<Once> whose action
+takes a lock the caller already holds, is your bug to avoid, and it is a deadlock rather than a diagnostic.
 
 =head1 METHODS
 
@@ -157,8 +157,8 @@ The five primitives use six wait reasons between them: C<Mutex lock>, C<RwLock r
 C<WaitGroup wait>, C<Barrier arrive> and C<Once init>. They surface in a C<PARATAXIS_TRACE> diagnostic and in the
 C<wait_reason> of an L<Acme::Parataxis::Error::Timeout>.
 
-C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see
-L</"How It Works">.
+C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see L</"How It
+Works">.
 
 =item C<_wake( $waiter )>
 
@@ -170,7 +170,8 @@ rather than fired at whatever fiber now holds it.
 
 =head1 How It Works
 
-A contended wait is a four-step cycle, and all five of the family's waits are the same cycle with different bookkeeping.
+A contended wait is a four-step cycle, and all five of the family's waits are the same cycle with different
+bookkeeping.
 
 =over 4
 
@@ -187,8 +188,8 @@ return immediately without touching the scheduler. Nothing parks that does not h
 
 B<Otherwise queue the id and park.> The id goes on the primitive's own FIFO list together with a deregistration
 callback, and then the fiber parks. If the park is interrupted - by a C<with_timeout> deadline, by a cancellation
-token, or by a scope that has already fired - the scheduler runs the callback and the fiber unwinds with nothing
-behind it.
+token, or by a scope that has already fired - the scheduler runs the callback and the fiber unwinds with nothing behind
+it.
 
 =item 4 4
 
@@ -207,8 +208,8 @@ stays exactly where it was. See L</"A lock outlives the fiber that took it">.
 
 Second, the deregistration callback for a contended lock does more than dequeue. Because hand-off is atomic, a release
 may have granted the lock to a fiber an instant before an interrupt fired at its park site, and that grant is never
-collected: the fiber is already unwinding. The callback therefore hands the lock straight on to the next waiter
-rather than leaving it on an id that is about to be reused.
+collected: the fiber is already unwinding. The callback therefore hands the lock straight on to the next waiter rather
+than leaving it on an id that is about to be reused.
 
 =head1 Recipes
 
@@ -258,7 +259,8 @@ returns nothing - so read the variable the action assigned, or C<done>, rather t
     sub connect_to_the_database { bless {}, 'Database' }
 
 The action runs in whichever fiber won the race, so it cannot assume anything about the caller. It must also not block
-on a primitive that caller is holding: an action that cannot complete is still marked done, and nothing ever retries it.
+on a primitive that caller is holding: an action that cannot complete is still marked done, and nothing ever retries
+it.
 
 =head2 A barrier between pipeline stages
 
@@ -301,8 +303,8 @@ as it was, because the interrupted fiber was dequeued on its way out.
     };
 
 The equivalent with a token is C<Acme::Parataxis::with_cancel(token =E<gt> sub { ... })>, which raises
-L<Acme::Parataxis::Error::Cancelled> in the parked fiber instead. Retry loops are safe because of the deregistration:
-a fiber that times out does not leave itself in the queue, so a second attempt starts clean.
+L<Acme::Parataxis::Error::Cancelled> in the parked fiber instead. Retry loops are safe because of the deregistration: a
+fiber that times out does not leave itself in the queue, so a second attempt starts clean.
 
 =head1 Behavior Notes
 
@@ -335,9 +337,9 @@ is no API to steal a lock back, so the recovery is to stop using that primitive.
 =head2 A guard must not outlive its fiber
 
 A C<guard>, C<read_guard> or C<write_guard> releases the lock from whichever fiber destroys it, and every release
-checks that the releasing fiber is the one that took it. A guard handed out of its fiber therefore cannot release:
-the release croaks, the croak is swallowed along with the handle that carried the guard, and the lock is stranded. The
-only symptom is a lock that is permanently busy.
+checks that the releasing fiber is the one that took it. A guard handed out of its fiber therefore cannot release: the
+release croaks, the croak is swallowed along with the handle that carried the guard, and the lock is stranded. The only
+symptom is a lock that is permanently busy.
 
 Keep the guard in the fiber that acquired the lock. If the work has to be handed to another fiber, hand over the lock
 explicitly, from inside the acquiring fiber, rather than the guard.
@@ -368,9 +370,9 @@ Two shapes fail without the primitives themselves pointing at the cause.
 
 =item *
 
-Upgrading a read hold to a write hold. C<write_lock> croaks rather than park, and so does C<try_write_lock>. This is the
-one case in the family that names the mistake, and it is a deliberate choice: parking would deadlock, because the queued
-writer this fiber is waiting for is itself.
+Upgrading a read hold to a write hold. C<write_lock> croaks rather than park, and so does C<try_write_lock>. This is
+the one case in the family that names the mistake, and it is a deliberate choice: parking would deadlock, because the
+queued writer this fiber is waiting for is itself.
 
 =item *
 

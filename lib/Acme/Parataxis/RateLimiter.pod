@@ -23,13 +23,14 @@ Acme::Parataxis::RateLimiter - Token-bucket rate limiter for fibers
 =head1 DESCRIPTION
 
 An app-wide speed limit for anything that talks to a rate-limited service. The limiter is a token bucket: it starts
-holding C<burst> tokens, every request spends one, and a background refill puts tokens back at C<rate> per second up
-to the ceiling. When the bucket runs dry, C<acquire> parks the calling fiber and hands it a token the moment one comes
+holding C<burst> tokens, every request spends one, and a background refill puts tokens back at C<rate> per second up to
+the ceiling. When the bucket runs dry, C<acquire> parks the calling fiber and hands it a token the moment one comes
 free.
 
-The bucket is an ordinary L<Acme::Parataxis::Semaphore>, so C<acquire> is a plain C<down>. That is the point of building
-it this way: the park already goes through the scheduler's usual path, which means a blocked acquire is interruptible by
-C<with_timeout> and by cancellation tokens, removes itself from the bucket when interrupted, and never busy-waits.
+The bucket is an ordinary L<Acme::Parataxis::Semaphore>, so C<acquire> is a plain C<down>. That is the point of
+building it this way: the park already goes through the scheduler's usual path, which means a blocked acquire is
+interruptible by C<with_timeout> and by cancellation tokens, removes itself from the bucket when interrupted, and never
+busy-waits.
 
 Refills are driven by a L<Acme::Parataxis::Ticker> waking the refill loop C<rate> times a second. Each wake credits
 every whole token accrued since the previous one on the wall clock and carries the fraction over, so the delivered rate
@@ -44,14 +45,14 @@ is what lets the run return.
 
 C<burst> decides how much of the traffic can arrive at once, and it is worth choosing deliberately.
 
-The bucket starts full, so with C<< burst => B >> the first C<B> requests go through immediately and only the ones after
-that wait. C<burst> therefore buys front-end latency, not throughput: the long-run average is C<rate> per second either
-way, and the guarantee over any window is unchanged,
+The bucket starts full, so with C<< burst => B >> the first C<B> requests go through immediately and only the ones
+after that wait. C<burst> therefore buys front-end latency, not throughput: the long-run average is C<rate> per second
+either way, and the guarantee over any window is unchanged,
 
     rate x (window seconds) + burst
 
-no matter how large C<B> is. C<< burst => 1 >> is the gentlest shape for whatever is on the other end, and it still lets
-the very first request straight through.
+no matter how large C<B> is. C<< burst => 1 >> is the gentlest shape for whatever is on the other end, and it still
+lets the very first request straight through.
 
 Set C<burst> to the concurrency spike you actually want to absorb, so a batch of 50 parallel fetches does not queue for
 50 periods when you would have sent 50 at once. Keep in mind that most rate-limited APIs enforce a burst limit of their
@@ -90,8 +91,8 @@ stopped> if the limiter is no longer running.
 
 Because this parks through the ordinary wait path, an enclosing C<with_timeout> or a cancellation token interrupts it
 cleanly, and the interrupted waiter removes itself from the bucket so a later refill never wakes a fiber that no longer
-wants the token. Tokens it had already spent are not refunded, but the bucket refills on its own schedule regardless and
-recovers within one period.
+wants the token. Tokens it had already spent are not refunded, but the bucket refills on its own schedule regardless
+and recovers within one period.
 
 =head2 C<stop( )>
 
@@ -136,8 +137,8 @@ The values the limiter was constructed with.
 
 =head2 Sharing one limiter across a fan-out
 
-Build it once inside the run and hand the same object to every worker. The bucket is shared, so the limit applies to the
-whole group rather than per fiber.
+Build it once inside the run and hand the same object to every worker. The bucket is shared, so the limit applies to
+the whole group rather than per fiber.
 
     use experimental 'defer';
 
@@ -159,8 +160,8 @@ whole group rather than per fiber.
     };
 
 Nothing here needs a lock or a counter: C<acquire> is the whole protocol. Pairing the C<defer> with the construction is
-worth the habit, because an unstopped limiter is a run that never returns - see
-L</"A running limiter keeps its run open">.
+worth the habit, because an unstopped limiter is a run that never returns - see L</"A running limiter keeps its run
+open">.
 
 =head2 Bounding a whole batch, not one request
 
@@ -273,8 +274,8 @@ simply the shape with fewer moving parts.
 
     RateLimiter::acquire() must be called from inside a scheduled fiber
 
-The check happens before the bucket is consulted, so it fires even when tokens are available. The mainline of a run is a
-fiber, so a plain C<async> block is fine; a bare top-level call is not.
+The check happens before the bucket is consulted, so it fires even when tokens are available. The mainline of a run is
+a fiber, so a plain C<async> block is fine; a bare top-level call is not.
 
 =head2 C<acquire> is not atomic, and an interrupted one keeps what it took
 

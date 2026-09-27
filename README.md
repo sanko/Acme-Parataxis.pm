@@ -671,7 +671,8 @@ and never ordered; instead, each transaction journals its reads and writes, and 
 TVar it read still holds its committed value before flushing its writes all at once:
 
 ```perl
-use Acme::Parataxis qw[async fiber await atomically retry];
+use v5.40;
+use Acme::Parataxis qw[async fiber await yield atomically retry];
 use Acme::Parataxis::TVar;
 
 # A deadlock-proof 50-coin transfer between two accounts:
@@ -699,7 +700,7 @@ and re-running, never by deadlocking, because commit is all-or-nothing and no tr
 partial state. `retry()` aborts the transaction and parks the fiber until any TVar it read changes, then re-runs it
 from the top, and nested `atomically` blocks join the enclosing transaction so their writes commit together. The block
 may run many times, so it must not have irreversible side effects - no printing, file I/O, or channel `put` inside a
-transaction (see [Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar) for the full SIDE EFFECTS warning).
+transaction (see ["The block may run many times" in Acme::Parataxis::TVar](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3ATVar#The-block-may-run-many-times) for the full warning).
 
 # Thread Pool Configuration
 
