@@ -130,10 +130,10 @@ caller. That contract is small enough to write a primitive from:
     async {
         $gate->take;
         fiber { $gate->take; say 'the second fiber got it' };
-        await_sleep(0.01);
+        await_sleep(1);
         say 'the gate is held, with ', $gate->waiters, ' waiter(s) queued';
         $gate->give;
-        await_sleep(0.01);
+        await_sleep(1);
         say 'once handed over: ', $gate->waiters, ' waiter(s) queued';
     };
     say 'off a fiber, take() croaks: ', ( eval { $gate->take; 1 } ? 'no' : 'yes' );
@@ -284,20 +284,20 @@ opened.
 
 =head2 Bounding a wait
 
-Every wait in the family is a park, so C<with_timeout> bounds it and a cancellation token aborts it. Catching the
-timeout is the point - an uncaught one takes the run down - and after a catch the primitive is exactly as it was,
-because the interrupted fiber was dequeued on its way out.
+Every wait in the family is a park, so a C<with_timeout( $ms, ... )> deadline bounds it and a cancellation token aborts
+it. Catching the timeout is the point - an uncaught one takes the run down - and after a catch the primitive is exactly
+as it was, because the interrupted fiber was dequeued on its way out.
 
     my $lock = Acme::Parataxis::Sync::Mutex->new;
     async {
         $lock->lock;                                # this fiber now holds it
         fiber {
-            my $got = eval { Acme::Parataxis::with_timeout( 0.05, sub { $lock->lock } ) };
+            my $got = eval { Acme::Parataxis::with_timeout( 50, sub { $lock->lock } ) };
             say 'the waiter gave up: ', ( $got ? 'no' : 'yes' );
             say 'the lock is still held:  ', ( defined $lock->owner ? 'yes' : 'no' );
             say 'and nobody is queued:    ', $lock->waiters;
         };
-        await_sleep(0.2);
+        await_sleep(200);
     };
 
 The equivalent with a token is C<Acme::Parataxis::with_cancel(token =E<gt> sub { ... })>, which raises
@@ -320,7 +320,7 @@ held the lock.
     async {
         fiber { $lock->lock };                     # takes the lock, then finishes
         fiber {
-            my $got = eval { Acme::Parataxis::with_timeout( 0.05, sub { $lock->lock } ) };
+            my $got = eval { Acme::Parataxis::with_timeout( 50, sub { $lock->lock } ) };
             say 'a later lock attempt: ', ( $got ? 'got it' : $@ =~ s/ at .*//sr );
             say 'and the mutex is stuck: ', $lock->waiters, ' queued, owner still set';
         };
