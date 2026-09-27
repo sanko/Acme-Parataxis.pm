@@ -68,6 +68,10 @@ subtest 'configuration and registration are validated' => sub {
     ok !eval { Acme::Parataxis::Supervisor->new( strategy     => 'Whatever' );                               1 }, 'an unknown strategy is rejected';
     ok !eval { Acme::Parataxis::Supervisor->new( max_restarts => -1 );                                       1 }, 'a negative budget is rejected';
     ok !eval { Acme::Parataxis::Supervisor->new( within       => -5 );                                       1 }, 'a negative window is rejected';
+    ok !eval { Acme::Parataxis::Supervisor->new( within       => 'soon' );                                   1 }, 'a non-numeric window is rejected';
+    ok !eval { Acme::Parataxis::Supervisor->new( within       => '1e3' );                                    1 }, 'so is an exponent, which is not a number of seconds';
+    ok !eval { Acme::Parataxis::Supervisor->new( within       => undef );                                    1 }, 'and so is no window at all';
+    ok eval  { Acme::Parataxis::Supervisor->new( within       => 0.5 );                                      1 }, 'a fractional window is accepted';
     ok eval  { Acme::Parataxis::Supervisor->new( strategy => 'RestForOne', max_restarts => 0, within => 0 ); 1 }, 'a valid configuration is accepted';
     my $reg = Acme::Parataxis::Supervisor->new;
     ok !eval { $reg->supervise('not a child');                              1 }, 'supervise() rejects something that is not a child';
