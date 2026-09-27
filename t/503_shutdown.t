@@ -34,18 +34,16 @@ subtest 'on_shutdown option plumbing' => sub {
     is $r3,        1,      'plain run returns its value';
     is $SIG{INT},  $int0,  'a plain run without on_shutdown leaves SIGINT untouched';
     is $SIG{TERM}, $term0, 'a plain run without on_shutdown leaves SIGTERM untouched';
-    my $e1 = eval {
+    my $e1 = dies {
         run( foo => 1, code => sub { } );
-        1;
     };
-    like( $e1 ? '' : $@, qr/unknown option/, 'an unknown run() option croaks' );
-    my $e2 = eval {
+    like( $e1, qr/unknown option/, 'an unknown run() option croaks' );
+    my $e2 = dies {
         run( code => sub { }, on_shutdown => [] );
-        1;
     };
-    like( $e2 ? '' : $@, qr/on_shutdown/, 'a non-code on_shutdown ref croaks' );
-    my $e3 = eval { run( on_shutdown => 1 ); 1 };
-    like( $e3 ? '' : $@, qr/code/, 'on_shutdown without code croaks' );
+    like( $e2, qr/on_shutdown/, 'a non-code on_shutdown ref croaks' );
+    my $e3 = dies { run( on_shutdown => 1 ) };
+    like( $e3, qr/code/, 'on_shutdown without code croaks' );
     is $SIG{INT},  $int0,  'SIGINT untouched after the croaks';
     is $SIG{TERM}, $term0, 'SIGTERM untouched after the croaks';
     my $inner = run(
@@ -105,11 +103,10 @@ subtest 'shutdown via the on_shutdown token (portable)' => sub {
     is $r4,        5,      'the scheduler is reusable after a token-driven shutdown';
     is $SIG{INT},  $int0,  'SIGINT untouched after the reuse run';
     is $SIG{TERM}, $term0, 'SIGTERM untouched after the reuse run';
-    my $e4 = eval {
+    my $e4 = dies {
         run( code => sub { }, on_shutdown => bless( {}, 'Nope::NotaToken' ) );
-        1;
     };
-    like( $e4 ? '' : $@, qr/on_shutdown/, 'an unrelated object as on_shutdown croaks' );
+    like( $e4, qr/on_shutdown/, 'an unrelated object as on_shutdown croaks' );
 };
 
 # The rest is a subprocess harness: a child perl installs run()'s handlers, sleeps, and the parent delivers real OS

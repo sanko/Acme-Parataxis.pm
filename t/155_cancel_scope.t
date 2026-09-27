@@ -30,8 +30,7 @@ subtest 'an interior park is interrupted by the scope token' => sub {
         sem_parked_at($sem);
         is $sem->waiters, 1, 'the interior wait parked under the scope';
         $tok->cancel;
-        my $ok     = eval { $w->await; 1 };
-        my $caught = $@;
+        my $caught = dies { $w->await };
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'scope cancel interrupted the interior wait';
         is $caught->kind,             'cancelled',      'kind() is "cancelled"';
         is $caught->wait_reason->[0], 'Semaphore down', 'the error names the parked wait';
@@ -49,10 +48,10 @@ subtest 'a wait entered after the scope is cancelled fails fast, leaving no stal
                 sub {
                     my ($t) = @_;
                     $tok = $t;
-                    eval { $sem->down };
-                    $first = ref($@) && $@->isa('Acme::Parataxis::Error::Cancelled');
-                    eval { $ch->get };
-                    $second   = ref($@) && $@->isa('Acme::Parataxis::Error::Cancelled');
+                    my $e1 = dies { $sem->down };
+                    $first = ref($e1) && $e1->isa('Acme::Parataxis::Error::Cancelled');
+                    my $e2  = dies { $ch->get };
+                    $second = ref($e2) && $e2->isa('Acme::Parataxis::Error::Cancelled');
                     $block_rv = 'done';
                     return $block_rv;
                 }
@@ -93,7 +92,7 @@ subtest 'nested scopes: an inner cancel only kills inner waits' => sub {
                     my ($ot) = @_;
                     $outer_tok = $ot;
                     my $inner_err;
-                    eval {
+                    $inner_err = dies {
                         with_cancel(
                             sub {
                                 my ($it) = @_;
@@ -102,7 +101,6 @@ subtest 'nested scopes: an inner cancel only kills inner waits' => sub {
                             }
                         );
                     };
-                    $inner_err    = $@;
                     $caught_inner = ref($inner_err) && $inner_err->isa('Acme::Parataxis::Error::Cancelled');
                     $sem_out->down;
                     $outer_val = 'outer-ok';
@@ -127,14 +125,13 @@ subtest 'composition with with_timeout: the deadline beats the scope' => sub {
     my $sem = Acme::Parataxis::Semaphore->new( count => 0 );
     my $caught;
     async {
-        eval {
+        $caught = dies {
             with_cancel(
                 sub {
                     with_timeout( 20, sub { $sem->down } );
                 }
             );
         };
-        $caught = $@;
     };
     ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Timeout'), 'the deadline won over the (unfired) scope';
     is $sem->waiters, 0, 'the timed-out waiter was deregistered';
@@ -143,7 +140,7 @@ subtest 'composition with with_timeout: the scope beats a still-armed deadline' 
     my $sem = Acme::Parataxis::Semaphore->new( count => 0 );
     my ( $tok, $caught );
     async {
-        eval {
+        $caught = dies {
             with_cancel(
                 sub {
                     my ($t) = @_;
@@ -153,7 +150,6 @@ subtest 'composition with with_timeout: the scope beats a still-armed deadline' 
                 }
             );
         };
-        $caught = $@;
     };
     ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'),    'the scope cancel won over the unexpired deadline';
     ok !( ref($caught) && $caught->isa('Acme::Parataxis::Error::Timeout') ), 'not reported as a timeout';
@@ -184,9 +180,8 @@ subtest 'no stale registrations leak from normal or thrown exits' => sub {
         };
         sem_parked_at($sem);
         $sem->up;
-        my $ok     = eval { $w2->await; 1 };
-        my $caught = $@;
-        ok !$ok, 'the dying block exited through its throw';
+        my $caught = dies { $w2->await };
+        ok $caught, 'the dying block exited through its throw';
         like "$caught", qr/boom/, 'the real error propagated, not a cancel';
         is $toks[1]->waiters, 0, 'no registrations after a thrown exit';
         my ( $t3, $v3 ) = with_cancel( sub { await_sleep(1); 'fresh' } );

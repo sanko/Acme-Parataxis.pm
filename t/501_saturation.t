@@ -51,11 +51,10 @@ async {
     my $waiters = 0;
     my $full_err;
     for ( 1 .. $MAX_FIBERS + 2 ) {
-        my $ok = eval {
+        my $died = dies {
             fiber { $sig->wait };
-            1;
         };
-        if ( !$ok ) { $full_err = $@; last }
+        if ($died) { $full_err = $died; last }
         $waiters++;
     }
     ok defined $full_err && $full_err =~ /fiber table is full/, 'fiber table: spawning past capacity croaks with "fiber table is full"' or

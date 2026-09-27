@@ -27,7 +27,7 @@ subtest 'a supervised crash also releases the name' => sub {
             name       => 'flaky'
         );
         my $reply = $actor->ask('boom');
-        ok !eval { $reply->await; 1 }, 'the ask failed';
+        ok( dies { $reply->await }, 'the ask failed' );
         while ( $actor->is_alive ) {yield}
         is Acme::Parataxis->actor('flaky'), undef, 'the crashed actor released its name';
     };
@@ -49,12 +49,11 @@ subtest 'spawn name collision croaks like Erlang register' => sub {
 subtest 'bad names are rejected; undef means unnamed' => sub {
     async {
         for my $bad ( '', {}, [] ) {
-            my $err = eval {
+            my $died = dies {
                 Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { }, 4, name => $bad );
-                1;
             };
-            ok !$err, 'a non-string name croaks';
-            like "$@", qr/non-empty string/, 'with the reason';
+            ok $died, 'a non-string name croaks';
+            like "$died", qr/non-empty string/, 'with the reason';
         }
         my $u = Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { return $msg }, 4, name => undef );
         is $u->name, undef, 'name => undef leaves the actor unnamed';

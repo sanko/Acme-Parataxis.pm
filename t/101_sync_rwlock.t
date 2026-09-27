@@ -129,13 +129,11 @@ subtest 'write_unlock from a non-owner croaks; the true writer still releases' =
         my $a = fiber {
             $rw->write_lock;
             my $b = fiber {
-                eval { $rw->write_unlock };
-                $foreign = $@;
+                $foreign = dies { $rw->write_unlock };
                 await_sleep(1)
             };
             $b->await;
-            eval { $rw->write_unlock };
-            $owner_ok = $@;
+            $owner_ok = dies { $rw->write_unlock };
             my $c = fiber { $rw->write_lock; $rw->write_unlock; 1 };
             $usable = $c->await;
         };
@@ -211,10 +209,9 @@ subtest 'an interrupted write_lock unregisters and the lock stays usable' => sub
     my $err;
     async {
         my $holder = fiber { $rw->write_lock; await_sleep(2000); $log .= 'H'; $rw->write_unlock };
-        eval {
+        $err = dies {
             with_timeout( 10, sub { $rw->write_lock; $log .= 'SHOULD-NOT' } );
         };
-        $err = $@;
         is $rw->write_waiters, 0, 'the timed-out writer removed itself from the queue';
         my $next = fiber { $rw->write_lock; $log .= 'N'; $rw->write_unlock };
         $holder->await;
@@ -232,10 +229,9 @@ subtest 'an interrupted read_lock unregisters and the lock stays usable' => sub 
     my $err;
     async {
         my $w = fiber { $rw->write_lock; await_sleep(2000); $rw->write_unlock; $log .= 'W' };
-        eval {
+        $err = dies {
             with_timeout( 10, sub { $rw->read_lock; $log .= 'SHOULD-NOT' } );
         };
-        $err = $@;
         is $rw->read_waiters, 0, 'the timed-out reader removed itself from the queue';
         my $r = fiber { $rw->read_lock; $log .= 'R'; $rw->read_unlock };
         $w->await;

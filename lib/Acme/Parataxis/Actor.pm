@@ -44,7 +44,9 @@ package Acme::Parataxis::Actor v0.1.1 {
             # The loop is guarded so teardown is reached on *every* exit path: an interrupt (a
             # cancellation token or a with_timeout deadline landing on this fiber) thrown from a
             # parked wait inside a handler escapes the loop and must not skip the drain below.
-            my $ok = eval {
+            my $ok  = 1;
+            my $interrupt;
+            try {
                 while (1) {
                     my $env = $mb->get;    # Park it here without holding $self
                     my ( $reply, $value ) = @$env;
@@ -55,9 +57,9 @@ package Acme::Parataxis::Actor v0.1.1 {
                     my $err = $actor->_dispatch( $reply, $value );
                     if ( defined $err && $actor->{supervised} ) { $crash = $err; last }
                 }
-                1;
-            };
-            $crash = $@ unless $ok;
+            }
+            catch ($e) { $ok = 0; $interrupt = $e }
+            $crash = $interrupt unless $ok;
             if ( my $actor = $weak ) { $actor->_finish($crash) }
         };
         $Acme::Parataxis::ACTOR_REGISTRY{$name} = $self if defined $name;    # only a spawned actor is registered
@@ -80,10 +82,11 @@ package Acme::Parataxis::Actor v0.1.1 {
         # The drain is best effort: a watcher must learn about this death even if an interrupt lands
         # on this fiber mid-teardown, or whoever is waiting for the report waits forever.
         my $msg = defined $crash ? "$crash" : 'actor stopped before this message was handled!';
-        eval { $self->_fail_queued($msg); 1 } or warn "Acme::Parataxis::Actor: drain failed: $@";
+        try { $self->_fail_queued($msg) } catch ($e) { warn "Acme::Parataxis::Actor: drain failed: $e" }
         my $hooks = delete $self->{on_death} // [];
         for my $cb (@$hooks) {
-            warn "Acme::Parataxis::Actor: death hook died: $@" unless eval { $cb->( $self, $self->{error} ); 1 };
+            try { $cb->( $self, $self->{error} ) }
+            catch ($e) { warn "Acme::Parataxis::Actor: death hook died: $e" }
         }
         return;
     }
@@ -103,7 +106,8 @@ package Acme::Parataxis::Actor v0.1.1 {
                 my ($reply) = @$env;
                 next unless defined $reply;
                 next if $reply->is_ready;
-                eval { $reply->set_error($msg); 1 } or warn 'Acme::Parataxis::Actor: failed to fail a queued ask: ' . $@;
+                try { $reply->set_error($msg) }
+                catch ($e) { warn 'Acme::Parataxis::Actor: failed to fail a queued ask: ' . $e }
                 next;
             }
             $idle++;
@@ -130,13 +134,16 @@ package Acme::Parataxis::Actor v0.1.1 {
 
     sub _dispatch ( $self, $reply, $value ) {
         my $err;
-        my $ok = eval {
+        my $ok = 1;
+        try {
             my $rv = $self->{code}->( $self, $value );
             $reply->set_result($rv) if defined $reply;
-            1;
-        };
+        }
+        catch ($e) {
+            $ok  = 0;
+            $err = $e;
+        }
         if ( !$ok ) {
-            $err = $@;
             if ( defined $reply ) {
                 try {
                     $reply->set_error($err);

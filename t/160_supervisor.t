@@ -47,7 +47,8 @@ sub wait_for ($cond) {
 
 sub all_alive ( $sup, @names ) {
     for my $name (@names) {
-        my $child = eval { $sup->child($name) };
+        my $child;
+        lives { $child = $sup->child($name) };
         return 0 unless $child && $child->is_alive;
     }
     return 1;
@@ -55,7 +56,7 @@ sub all_alive ( $sup, @names ) {
 
 # Await a future the way a caller sees a failure: returns the error, or undef if it answered.
 sub ask_err ($future) {
-    return undef if eval { $future->await; 1 };
+    return undef if lives { $future->await };
     return "$@";
 }
 subtest 'configuration and registration are validated' => sub {
@@ -65,38 +66,43 @@ subtest 'configuration and registration are validated' => sub {
     is $sup->within,       60,          'default window in seconds';
     ok !$sup->running,  'a fresh supervisor is not running';
     ok !$sup->stopping, 'and has not been stopped';
-    ok !eval { Acme::Parataxis::Supervisor->new( strategy     => 'Whatever' ); 1 }, 'an unknown strategy is rejected';
-    ok !eval { Acme::Parataxis::Supervisor->new( max_restarts => -1 );         1 }, 'a negative budget is rejected';
-    ok !eval { Acme::Parataxis::Supervisor->new( within       => -5 );         1 }, 'a negative window is rejected';
-    ok !eval { Acme::Parataxis::Supervisor->new( within       => 'soon' );     1 }, 'a non-numeric window is rejected';
-    ok !eval { Acme::Parataxis::Supervisor->new( within       => '1e3' );      1 }, 'so is an exponent, which is not a number of seconds';
-    ok !eval { Acme::Parataxis::Supervisor->new( within       => undef );      1 }, 'and so is no window at all';
-    ok eval  { Acme::Parataxis::Supervisor->new( within       => 0.5 );        1 }, 'a fractional window is accepted';
-    ok eval  { Acme::Parataxis::Supervisor->new( strategy => 'RestForOne', max_restarts => 0, within => 0 ); 1 }, 'a valid configuration is accepted';
+    ok( dies { Acme::Parataxis::Supervisor->new( strategy => 'Whatever' ) }, 'an unknown strategy is rejected' );
+    ok( dies { Acme::Parataxis::Supervisor->new( max_restarts => -1 ) }, 'a negative budget is rejected' );
+    ok( dies { Acme::Parataxis::Supervisor->new( within => -5 ) }, 'a negative window is rejected' );
+    ok( dies { Acme::Parataxis::Supervisor->new( within => 'soon' ) }, 'a non-numeric window is rejected' );
+    ok( dies { Acme::Parataxis::Supervisor->new( within => '1e3' ) }, 'so is an exponent, which is not a number of seconds' );
+    ok( dies { Acme::Parataxis::Supervisor->new( within => undef ) }, 'and so is no window at all' );
+    ok( lives { Acme::Parataxis::Supervisor->new( within => 0.5 ) }, 'a fractional window is accepted' );
+    ok( lives { Acme::Parataxis::Supervisor->new( strategy => 'RestForOne', max_restarts => 0, within => 0 ) }, 'a valid configuration is accepted' );
     my $reg = Acme::Parataxis::Supervisor->new;
-    ok !eval { $reg->supervise('not a child');                              1 }, 'supervise() rejects something that is not a child';
-    ok eval  { $reg->supervise( make_child('a'), name => 'a' );             1 }, 'and accepts a factory';
-    ok !eval { $reg->supervise( make_child('b'), name => 'a' );             1 }, 'a duplicate child name is rejected';
-    ok !eval { $reg->supervise( make_child('b'), name => 'b', bogus => 1 ); 1 }, 'an unknown option is rejected';
+    ok( dies { $reg->supervise('not a child') }, 'supervise() rejects something that is not a child' );
+    ok( lives { $reg->supervise( make_child('a'), name => 'a' ) }, 'and accepts a factory' );
+    ok( dies { $reg->supervise( make_child('b'), name => 'a' ) }, 'a duplicate child name is rejected' );
+    ok( dies { $reg->supervise( make_child('b'), name => 'b', bogus => 1 ) }, 'an unknown option is rejected' );
     is [ $reg->children ], ['a'], 'the accepted child is the only one registered';
-    ok !eval { $sup->run; 1 }, 'run() outside a scheduled fiber is rejected';
-    like "$@", qr/scheduled fiber/, 'and says why';
+    my $off_loop = dies { $sup->run };    # dies localises $@, so the reason has to be taken from its return
+    ok $off_loop,                        'run() outside a scheduled fiber is rejected';
+    like "$off_loop", qr/scheduled fiber/, 'and says why';
     async {
         my $childless = Acme::Parataxis::Supervisor->new;
-        ok !eval { $childless->run; 1 }, 'run() with nothing to supervise is rejected';
-        like "$@", qr/at least one supervised child/, 'instead of blocking forever';
+        my $no_kids   = dies { $childless->run };
+        ok $no_kids,                                     'run() with nothing to supervise is rejected';
+        like "$no_kids", qr/at least one supervised child/, 'instead of blocking forever';
         my $again = Acme::Parataxis::Supervisor->new;
         $again->supervise( make_child('a'), name => 'a' );
         fiber {
             wait_for( sub { all_alive( $again, 'a' ) } );
-            ok !eval { $again->supervise( make_child('b'), name => 'b' ); 1 }, 'a child cannot be added mid-run';
-            like "$@", qr/once run/, 'and says why';
+            my $mid_run = dies { $again->supervise( make_child('b'), name => 'b' ) };
+            ok $mid_run,             'a child cannot be added mid-run';
+            like "$mid_run", qr/once run/, 'and says why';
             $again->stop;
         };
-        my $returned = eval { $again->run };
-        ok defined $returned,        'run() returns after a stop' or diag $@;
-        ok !eval { $again->run; 1 }, 'but only once';
-        like "$@", qr/only be called once/, 'with the reason';
+        my $returned;
+        lives { $returned = $again->run };    # lives sets $@, so the diag below still has the reason
+        ok defined $returned, 'run() returns after a stop' or diag $@;
+        my $twice = dies { $again->run };    # dies localises $@, so the reason has to be taken from its return
+        ok $twice,            'but only once';
+        like "$twice", qr/only be called once/, 'with the reason';
     };
 };
 subtest 'OneForOne restarts the child that died and never touches its siblings' => sub {
@@ -200,17 +206,15 @@ subtest 'an already-spawned actor is adopted, a factory builds one when the tree
 subtest 'restart budget exhaustion fails the tree with an aggregate error' => sub {
     my $base = Acme::Parataxis::get_live_fiber_count();
     my $sup1;
-    my $err = eval {
+    my $survived = lives {
         async {
             $sup1 = Acme::Parataxis::Supervisor->new( max_restarts => 2, within => 60 );
             $sup1->supervise( make_suicide(), name => 'kamikaze' );
             $sup1->run;
-            1;
         };
-        1;
     };
     my $e = $@;
-    ok !$err, 'run() died once the budget ran out' or diag $err;
+    ok !$survived, 'run() died once the budget ran out' or diag $e;
     isa_ok $e, 'Acme::Parataxis::Error::Supervisor';
     is $e->child, 'kamikaze',   'naming the child that blew the budget';
     is $e->kind,  'supervisor', 'kind is supervisor';
@@ -225,7 +229,7 @@ subtest 'restart budget exhaustion fails the tree with an aggregate error' => su
 
     # Control: the identical crash loop under a budget nobody can exhaust never fails.
     my $sup;
-    my $ok = eval {
+    my $ok = lives {
         async {
             $sup = Acme::Parataxis::Supervisor->new( max_restarts => 50, within => 60 );
             $sup->supervise( make_suicide(), name => 'kamikaze' );
@@ -234,9 +238,7 @@ subtest 'restart budget exhaustion fails the tree with an aggregate error' => su
                 $sup->stop;
             };
             $sup->run;
-            1;
         };
-        1;
     };
     ok $ok, 'the control run returned normally instead of failing' or diag $@;
     cmp_ok $sup->restarts, '>=', 3, 'with the restarts to prove it was really crashing';
@@ -244,7 +246,7 @@ subtest 'restart budget exhaustion fails the tree with an aggregate error' => su
 };
 subtest 'within => 0 keeps nothing in the window, so the same budget never trips' => sub {
     my $sup;
-    my $ok = eval {
+    my $ok = lives {
         async {
             $sup = Acme::Parataxis::Supervisor->new( max_restarts => 2, within => 0 );
             $sup->supervise( make_suicide(), name => 'kamikaze' );
@@ -253,25 +255,21 @@ subtest 'within => 0 keeps nothing in the window, so the same budget never trips
                 $sup->stop;
             };
             $sup->run;
-            1;
         };
-        1;
     };
     ok $ok, 'run() returned instead of failing, because the window expired every restart' or diag $@;
     cmp_ok $sup->restarts, '>=', 4, 'it really did restart past the budget';
 };
 subtest 'a child factory that dies counts as a death of that child' => sub {
-    my $err = eval {
+    my $survived = lives {
         async {
             my $sup = Acme::Parataxis::Supervisor->new( max_restarts => 1, within => 60 );
             $sup->supervise( sub { die 'the factory itself exploded' }, name => 'bad' );
             $sup->run;
-            1;
         };
-        1;
     };
     my $e = $@;
-    ok !$err, 'the tree gave up on a child that cannot even be started' or diag $err;
+    ok !$survived, 'the tree gave up on a child that cannot even be started' or diag $e;
     isa_ok $e, 'Acme::Parataxis::Error::Supervisor';
     is $e->child, 'bad', 'naming the child';
     my @failures = $e->failures;
@@ -327,9 +325,11 @@ subtest 'asks in flight at the moment of death are failed, never hung or silentl
             ok wait_for( sub { $sup->restarts('w') >= 1 } ), 'the child was restarted';
             my $fresh = $sup->child('w');
             ok $fresh != $dying, 'the replacement is a different actor';
-            my $answer = eval { $fresh->ask('hi')->await };
+            my $answer;
+            lives { $answer = $fresh->ask('hi')->await };
+            my $ask_err = $@;
             $check = [ defined $e1 ? "$e1" : 'NO ERROR', defined $e2 ? "$e2" : 'NO ERROR', defined $e3 ? "$e3" : 'NO ERROR' ];
-            push @$check, defined $answer ? $answer : 'ASK FAILED: ' . ( $@ || 'unknown' );
+            push @$check, defined $answer ? $answer : 'ASK FAILED: ' . ( $ask_err || 'unknown' );
             $sup->stop;
         };
         $sup->run;
@@ -353,7 +353,8 @@ subtest 'a sender parked on a full mailbox is woken and failed, not stranded' =>
             my $f2    = $dying->ask('parked');                   # the mailbox is full, so this one parks mid-send
             my ( $e1, $e2 ) = ( ask_err($f1), ask_err($f2) );
             ok wait_for( sub { $sup->restarts('w') >= 1 } ), 'the child was restarted';
-            my $answer = eval { $sup->child('w')->ask('hi')->await };
+            my $answer;
+            lives { $answer = $sup->child('w')->ask('hi')->await };
             $check = [ defined $e1 ? "$e1" : 'NO ERROR', defined $e2 ? "$e2" : 'NO ERROR', defined $answer ? $answer : 'ASK FAILED' ];
             $sup->stop;
         };
@@ -387,8 +388,9 @@ subtest 'stop() takes the whole tree down and leaves no fiber behind' => sub {
     for my $name (qw[a b c]) {
         ok !$sup->child($name)->is_alive, "child $name is gone";
     }
-    ok !eval { $sup->child('a')->ask('hi'); 1 }, 'and asking a stopped child croaks';
-    like "$@", qr/no longer running/, 'instead of parking forever';
+    my $croak = dies { $sup->child('a')->ask('hi') };    # dies localises $@, so the reason comes from its return
+    ok $croak,                   'and asking a stopped child croaks';
+    like "$croak", qr/no longer running/, 'instead of parking forever';
 };
 #
 done_testing;

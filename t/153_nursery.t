@@ -31,7 +31,7 @@ subtest 'a failing child cancels its siblings and the nursery throws an aggregat
     my ( $s1, $s2 ) = ( 0, 0 );
     my $err;
     async {
-        eval {
+        $err = dies {
             nursery(
                 sub ($n) {
                     $n->spawn( sub { await_sleep(50); $s1 = 1 } );
@@ -40,7 +40,6 @@ subtest 'a failing child cancels its siblings and the nursery throws an aggregat
                 }
             );
         };
-        $err = $@;
     };
     ok ref($err) && $err->isa('Acme::Parataxis::Error::Nursery'), 'a Nursery aggregate error was thrown';
     like "$err", qr/^nursery failure: boom\b/, 'the aggregate stringifies to its primary (natural) failure';
@@ -106,7 +105,7 @@ subtest 'the nursery token is public: cancelling it cancels the children' => sub
 subtest 'a block error cancels its children, drains them, and rethrows the block error' => sub {
     my ( $block_err, $done ) = ( undef, 0 );
     async {
-        eval {
+        $block_err = dies {
             nursery(
                 sub ($n) {
                     $n->spawn( sub { await_sleep(50); $done = 1 } );
@@ -114,7 +113,6 @@ subtest 'a block error cancels its children, drains them, and rethrows the block
                 }
             );
         };
-        $block_err = $@;
     };
     like "$block_err", qr/^block died/, 'the block error propagates unchanged';
     ok !$done, 'the child was cancelled, not left running';
@@ -122,7 +120,7 @@ subtest 'a block error cancels its children, drains them, and rethrows the block
 subtest 'a nursery inside with_timeout propagates the timeout and drains its children' => sub {
     my ( $t_err, $done ) = ( undef, 0 );
     async {
-        eval {
+        $t_err = dies {
             with_timeout(
                 10,
                 sub {    # deadline shorter than the join, so the enclosing timeout must win
@@ -135,7 +133,6 @@ subtest 'a nursery inside with_timeout propagates the timeout and drains its chi
                 }
             );
         };
-        $t_err = $@;
     };
     ok ref($t_err) && $t_err->isa('Acme::Parataxis::Error::Timeout'), 'the enclosing timeout wins over the join';
     ok !$done,                                                        'the children were cancelled and drained, not left running';

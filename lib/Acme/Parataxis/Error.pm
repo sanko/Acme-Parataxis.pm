@@ -50,7 +50,8 @@ package Acme::Parataxis::Error v0.1.1 {
             my $failures = delete $args{failures};
             $failures = [] unless ref $failures eq 'ARRAY';
             my @natural = grep {
-                my $k = eval { $_->kind };
+                my $k;
+                try { $k = $_->kind } catch ($e) { }    # plain string or object without ->kind
                 !defined($k) || $k ne 'cancelled'
             } @$failures;
             my $primary = $natural[0] // $failures->[0];

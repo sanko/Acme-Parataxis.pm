@@ -48,10 +48,9 @@ subtest 'an init that dies still completes the Once' => sub {
     my $o   = Acme::Parataxis::Sync::Once->new;
     my $err = '';
     async {
-        eval {
+        $err = dies {
             $o->do( sub { await_sleep(2); die 'boom' } );
         };
-        $err = $@;
         my $late = fiber {
             $o->do( sub { die 'nope' } )
         };
@@ -65,14 +64,13 @@ subtest 'do() is not reentrant and wants a CODE ref' => sub {
     async {
         like dies { $o->do('not-code') }, qr/CODE reference/, 'a non-code argument croaks';
         my $err;
-        eval {
+        $err = dies {
             $o->do(
                 sub {
                     $o->do( sub {1} );
                 }
             );
         };
-        $err = $@;
         like $err, qr/not reentrant/, 'an init calling do() again on the same fiber croaks';
     };
 };

@@ -88,7 +88,7 @@ subtest 'a mapper death cancels the pool and is rethrown' => sub {
     my @attempted;
     my $err;
     async {
-        eval {
+        $err = dies {
             pmap(
                 { concurrency => 3 },
                 sub ($x) {
@@ -101,7 +101,6 @@ subtest 'a mapper death cancels the pool and is rethrown' => sub {
             );
             1;
         };
-        $err = $@;
     };
     like $err, qr/map-fail-2/, 'the first failure was rethrown';
     ok !grep( { $_ > 2 } @attempted ), 'nothing past the failing item was mapped (the pool cancelled)';

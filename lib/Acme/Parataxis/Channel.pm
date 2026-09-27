@@ -1,6 +1,6 @@
 use v5.40;
 use feature 'class';
-no warnings 'experimental::class', 'recursion';
+no warnings 'experimental::class', 'experimental::try', 'recursion';
 #
 class Acme::Parataxis::Channel v0.1.1 {
     use Acme::Parataxis qw[fiber await_sleep];
@@ -33,16 +33,15 @@ class Acme::Parataxis::Channel v0.1.1 {
         my $ms = $timeout;
         fiber {
             $deadline->register;
-            eval { await_sleep($ms); $deadline->cancel; 1 };
+            try { await_sleep($ms); $deadline->cancel } catch ($e) { }    # swallows its own interrupt
         };
         my ( $ok, $err, @rv );
+        $ok = 1;
         if (wantarray) {
-            $ok  = eval { @rv = $op->() };
-            $err = $@;
+            try { @rv = $op->() } catch ($e) { $ok = 0; $err = $e }
         }
         else {
-            $ok  = eval { $rv[0] = $op->() };
-            $err = $@;
+            try { $rv[0] = $op->() } catch ($e) { $ok = 0; $err = $e }
         }
         $deadline->unregister;
         $deadline->cancel;
@@ -220,7 +219,7 @@ class Acme::Parataxis::Channel v0.1.1 {
                     # recall it when a case commits first instead of leaving a worker parked for the full $ms.
                     Acme::Parataxis::fiber {
                         $deadline->register;
-                        eval { Acme::Parataxis::await_sleep($ms); $deadline->cancel; 1 };
+                        try { Acme::Parataxis::await_sleep($ms); $deadline->cancel } catch ($e) { }
                     };
                     $timer_armed = 1;
                 }
@@ -229,9 +228,11 @@ class Acme::Parataxis::Channel v0.1.1 {
                 for my $case (@cases) { $case->[0]->_unregister_select_waiter($fid) }
                 $deadline->unregister if defined $deadline;
             };
-            my $ok = eval { Acme::Parataxis::_park( 'Channel select', 1, $dereg ); 1 };
-            $dereg->();    # idempotent: on interrupt _park already ran it; on a natural wake this is the cleanup
-            my $err = $@;
+            my $ok = 1;
+            my $err;
+            try { Acme::Parataxis::_park( 'Channel select', 1, $dereg ) }
+            catch ($e) { $ok = 0; $err = $e }
+            finally { $dereg->() }    # idempotent: on interrupt _park already ran it; on a natural wake this is the cleanup
             if ( !$ok ) {
 
                 # Our own deadline fired -> the API is (undef, undef) on timeout. A timeout sent by an *enclosing*

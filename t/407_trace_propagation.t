@@ -122,12 +122,11 @@ subtest 'the spawn wrapper does not disturb spawn-level croaks or results' => su
         $trace->set('x');
         my $ok = fiber { return 42 };
         is $ok->await, 42, 'an inherited fiber still returns its value';
-        my $bad = eval {
+        my $bad = dies {
             fiber { die "boom\n" };
-            1;
         };
-        ok !$bad, 'a dying inherited fiber still fails at spawn';
-        like $@, qr/boom/, 'with its own error, not a seeding artifact';
+        ok $bad, 'a dying inherited fiber still fails at spawn';
+        like $bad, qr/boom/, 'with its own error, not a seeding artifact';
     };
 };
 done_testing();

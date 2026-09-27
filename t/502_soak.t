@@ -130,10 +130,10 @@ while ( time - $t0 < $SECONDS && $waves < $MAX_WAVES ) {
     my $scale = 1 + $waves % 3;
     $max_scale = $scale if $scale > $max_scale;
     my $out;
-    eval {
+    my $croak = dies {
         $out = async { one_wave( $seed, $scale ) }
     };
-    if ($@)                   { @problems_out = ( @problems_out, "wave $waves (seed $seed, scale $scale) croak escaped: $@" ); $fails++; last }
+    if ($croak)               { @problems_out = ( @problems_out, "wave $waves (seed $seed, scale $scale) croak escaped: $croak" ); $fails++; last }
     if ( ref $out ne 'HASH' ) { @problems_out = ( @problems_out, "wave $waves (seed $seed) async returned nothing" );          $fails++; last }
     my $plan = $out->{plan};
     my $inv  = $out->{inv};

@@ -29,10 +29,9 @@ run(
     code    => sub {
         my $err;
         my $f = fiber {
-            my $out = eval {
+            $err = dies {
                 with_timeout( 3_600_000, sub { await_sleep( 3_600_000 * 2 ); 'ok' } );
             };
-            $err = $@;
         };
         yield;
         Acme::Parataxis->advance(3_600_000);
@@ -117,8 +116,7 @@ run(
         subtest 'Channel get bound fires on advance' => sub {
             my $ch = Acme::Parataxis::Channel->new( capacity => 1, timeout => 50 );
             fiber {
-                eval { $ch->get };
-                $got_err = $@;
+                $got_err = dies { $ch->get };
                 $done    = 1;
             };
             yield;
@@ -179,6 +177,6 @@ ok !defined Acme::Parataxis->virtual_now, 'no virtual clock leaks out of a plain
 my $again = run( virtual => 1, code => sub { await_sleep(10); return 'tick' } );
 is $again, 'tick', 'another virtual run works after a plain one';
 ok !defined Acme::Parataxis->virtual_now, 'virtual clock restored to off after a virtual run';
-my $adv_msg = eval { Acme::Parataxis->advance(1); 1 };
-ok !defined $adv_msg && $@ =~ /virtual/, 'advance() outside a virtual run croaks about the mode';
+my $err = dies { Acme::Parataxis->advance(1) };
+ok $err && $err =~ /virtual/, 'advance() outside a virtual run croaks about the mode';
 done_testing;

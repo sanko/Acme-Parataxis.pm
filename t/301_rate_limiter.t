@@ -85,10 +85,9 @@ subtest 'a deadline interrupts a parked acquire and the waiter unregisters' => s
         my $rl = Acme::Parataxis::RateLimiter->new( rate => 2, burst => 1 );    # one token, then one per 500ms
         $rl->acquire(1);
         my $f = fiber {
-            eval {
+            $err = dies {
                 with_timeout( 80, sub { $rl->acquire(1) } );
             };
-            $err = $@
         };
         my $n = 0;
         yield while $rl->waiters == 0 && $n++ < 20_000;
@@ -136,8 +135,7 @@ subtest 'stop() lets a parked acquirer through instead of stranding it' => sub {
         $st1 = $rl->stop;
         $f->await;
         $st2 = $rl->stop;
-        eval { $rl->acquire(1) };
-        $post = $@;
+        $post = dies { $rl->acquire(1) };
     };
     ok $released, 'the parked acquire was released when the limiter stopped, so the run could end';
     ok $st1,      'stop() reports it did work the first time';

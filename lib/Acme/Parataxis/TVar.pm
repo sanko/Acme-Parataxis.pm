@@ -1,5 +1,5 @@
 use v5.40;
-no warnings qw[experimental::class recursion];
+no warnings qw[experimental::class experimental::try recursion];
 use feature 'class';
 #
 # STM (software transactional memory). A TVar is a versioned mutable cell whose
@@ -95,19 +95,29 @@ class Acme::Parataxis::TVar v0.1.1 {
         my $txn = { reads => {}, writes => {}, reads_list => [] };
         $stash->{$TXN_KEY} = $txn;
         my @r;
-        my $loop_ok = eval {
+        my $loop_ok = 1;
+        my $loop_err;
+
+        # The finally is load-bearing: the stash entry must be cleared on *every* exit, including
+        # the abort path where a real error (or an interrupt out of _park_on_reads) throws out of
+        # the loop, so a later atomically never inherits a stale transaction.
+        try {
             while (1) {
-                my $run_ok = eval {
+                my $run_ok = 1;
+                my $err;
+
+                # Note the shape: catch()'s own variable is scoped to the catch block, so the error
+                # has to be handed to the enclosing lexical *inside* the block or $err stays undef.
+                try {
                     if   ($want) { @r    = $cb->() }
                     else         { $r[0] = $cb->() }
-                    1;
-                };
+                }
+                catch ($caught) { $run_ok = 0; $err = $caught }
                 if ($run_ok) {
                     last if Acme::Parataxis::TVar::_commit($txn);
                     _wipe($txn);    # commit conflict: rerun from a clean slate
                     next;
                 }
-                my $err = $@;
                 if ( ref($err) && $err->isa('Acme::Parataxis::Error::STM_Retry') ) {
                     Acme::Parataxis::TVar::_park_on_reads($txn);
                     _wipe($txn);
@@ -115,10 +125,10 @@ class Acme::Parataxis::TVar v0.1.1 {
                 }
                 die $err;    # any real error: abort the transaction, surface it unchanged
             }
-            1;
-        };
-        delete $stash->{$TXN_KEY};    # guaranteed on every exit so a later atomically is fresh
-        die $@ unless $loop_ok;
+        }
+        catch ($caught) { $loop_ok = 0; $loop_err = $caught }
+        finally          { delete $stash->{$TXN_KEY} }
+        die $loop_err unless $loop_ok;
         return $want ? @r : $r[0];
     }
 
@@ -156,13 +166,18 @@ class Acme::Parataxis::TVar v0.1.1 {
         $_->_add_waiter($fid) for @tv;
         my $dereg = sub { $_->_remove_waiter($fid) for @tv };
         $RETRY_REGS{$fid} = $dereg;
-        my $ok = eval {
-            Acme::Parataxis::_park( 'STM retry', 3, $dereg );
-            1;
-        };
-        delete $RETRY_REGS{$fid};
-        $dereg->();           # a commit wake already unregistered; strip any lists that did not change (idempotent)
-        die $@ unless $ok;    # interrupt (timeout/cancel): the transaction aborts
+        my $ok = 1;
+        my $err;
+        try { Acme::Parataxis::_park( 'STM retry', 3, $dereg ) }
+        catch ($caught) { $ok = 0; $err = $caught }
+
+        # Both cleanups must run even when the park throws (an interrupt), or a cancelled
+        # transaction would leave a stale fid on every TVar in its read set.
+        finally {
+            delete $RETRY_REGS{$fid};
+            $dereg->();    # a commit wake already unregistered; strip any lists that did not change (idempotent)
+        }
+        die $err unless $ok;    # interrupt (timeout/cancel): the transaction aborts
         return;
     }
 

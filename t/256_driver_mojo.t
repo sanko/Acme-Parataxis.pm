@@ -114,10 +114,9 @@ subtest 'an enclosing with_timeout still interrupts a driver read' => sub {
     my ( $err, $after );
     Acme::Parataxis::run(
         sub {
-            eval {
+            $err = dies {
                 with_timeout( 30, sub { await_read( $b, 2000 ) } );
             };
-            $err   = $@;
             $after = 'ran-on';
         }
     );

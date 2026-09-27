@@ -46,17 +46,17 @@ subtest 'exhaustion: next returns undef and stays undef, is_done flips' => sub {
 subtest 'a body error is rethrown at the next call, then the generator is done' => sub {
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->(42); die 'boom from generator' } );
     is $gen->next, 42, 'values before the failure still deliver';
-    my $err = eval { $gen->next; 1 };
-    ok !$err, 'the failure throws at the caller';
-    like "$@", qr/boom from generator/, 'the original message is rethrown';
+    my $err = dies { $gen->next };
+    ok $err, 'the failure throws at the caller';
+    like "$err", qr/boom from generator/, 'the original message is rethrown';
     ok $gen->is_done,          'the generator is done after the failure';
     ok !defined( $gen->next ), 'later next calls are undef';
 };
 subtest 'an error before the first yield also surfaces at the caller' => sub {
     my $gen = Acme::Parataxis::Generator->new( sub ($y) { die 'early boom' } );
-    my $err = eval { $gen->next; 1 };
-    ok !$err, 'throws on the first next';
-    like "$@", qr/early boom/, 'message preserved';
+    my $err = dies { $gen->next };
+    ok $err, 'throws on the first next';
+    like "$err", qr/early boom/, 'message preserved';
 };
 subtest 'yields from nested subroutines (deep call stack inside the fiber)' => sub {
     my $gen = Acme::Parataxis::Generator->new(
@@ -138,9 +138,9 @@ subtest 'a body that dies with the old sentinel string still surfaces (no silent
         }
     );
     is $gen->next, 'ok', 'the first value delivers';
-    my $err = eval { $gen->next; 1 };
-    ok !$err, 'the die surfaces instead of being mistaken for a drain';
-    like "$@", qr/__PARATAXIS_GENERATOR_DRAIN__/, 'the exact message is preserved';
+    my $err = dies { $gen->next };
+    ok $err, 'the die surfaces instead of being mistaken for a drain';
+    like "$err", qr/__PARATAXIS_GENERATOR_DRAIN__/, 'the exact message is preserved';
     ok $gen->is_done, 'the generator is done after the failure';
 };
 subtest 'yielding the sentinel lookalike string is ordinary data' => sub {

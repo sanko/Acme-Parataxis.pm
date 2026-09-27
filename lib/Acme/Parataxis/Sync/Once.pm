@@ -23,15 +23,15 @@ class Acme::Parataxis::Sync::Once v0.1.1 : isa(Acme::Parataxis::Sync) {
         }
         $owner = $fid;
         my $rv;
-        my $ok  = eval { $rv = $code->(); 1 };
-        my $err = $@;
+        my $err;
+        try { $rv = $code->() } catch ($e) { $err = $e }
         $owner = undef;
         $done  = 1;
         my @w = @waiters;
         @waiters = ();
         $self->_wake($_) for @w;
         die $err if $err;
-        return $ok ? $rv : undef;
+        return $rv;
     }
     method waiters { scalar @waiters }
 

@@ -73,8 +73,7 @@ subtest 'await: dies with the stored error' => sub {
             yield;
             $f->set_error('ouch');
         };
-        eval { $f->await; 1 };
-        $err = $@;
+        $err = dies { $f->await; 1 };
     };
     like $err, qr[ouch], 'awaiter dies with the producer error';
 };

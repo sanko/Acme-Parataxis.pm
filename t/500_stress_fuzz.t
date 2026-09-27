@@ -124,11 +124,11 @@ my ( $pass, $fails ) = ( 0, 0 );
 my @problems_out;
 for my $iter ( 1 .. $ITERS ) {
     my $seed = $BASE_SEED + $iter;
-    my ( $out, $err );
-    eval {
+    my $out;
+    my $croak = dies {
         $out = async { one_iteration($seed) }
     };
-    if ($@)                   { @problems_out = ( @problems_out, "iter $iter (seed $seed) croak escaped: $@" );      next }
+    if ($croak)               { @problems_out = ( @problems_out, "iter $iter (seed $seed) croak escaped: $croak" );      next }
     if ( ref $out ne 'HASH' ) { @problems_out = ( @problems_out, "iter $iter (seed $seed) async returned nothing" ); next }
     my $plan = $out->{plan};
     my $inv  = $out->{inv};

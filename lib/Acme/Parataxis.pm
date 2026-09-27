@@ -417,7 +417,7 @@ package Acme::Parataxis v0.1.1 {
                             if $ENV{PARATAXIS_TRACE};
                         fiber {
                             $tok->register;
-                            eval { await_sleep($left); $tok->cancel; 1 };
+                            try { await_sleep($left); $tok->cancel } catch ($e) { }
                         };
                         $fiber->[F_DEADLINE_ARMED] = $eff->{abs};
                     }
@@ -613,8 +613,9 @@ package Acme::Parataxis v0.1.1 {
             $cf->[F_DEADLINE_SCOPES] = defined $scope_abs ? [ @$inherited, { abs => $scope_abs, tok => $deadline, own => 1 } ] : $inherited;
             $deadline->register;
             $tok->register if $tok ne $deadline;
-            my $val = eval { $code->() };
-            my $err = $@;
+            my $val;
+            my $err;
+            try { $val = $code->() } catch ($e) { $err = $e }
             $deadline->unregister;
             $tok->unregister                  if $tok ne $deadline;
             pop @{ $cf->[F_DEADLINE_SCOPES] } if defined $scope_abs;    # leave the stack for any enclosing scope
@@ -629,8 +630,9 @@ package Acme::Parataxis v0.1.1 {
             return $child->result;
         }
         my $rv;
-        my $ok  = eval { $rv = $child->await; 1 };
-        my $err = $@;
+        my $ok  = 1;
+        my $err;
+        try { $rv = $child->await } catch ($e) { $ok = 0; $err = $e }
         warn "with_timeout teardown: ok=$ok child_done=" .
             $child->is_done .
             " child_error=" .
@@ -703,13 +705,13 @@ package Acme::Parataxis v0.1.1 {
         $tok->register;    # block-wide: this fiber stays registered while the scope is open
         my @val;
 
+        my $err;
         if (wantarray) {
-            @val = eval { $code->($tok) }
+            try { @val = $code->($tok) } catch ($e) { $err = $e }
         }
         else {
-            $val[0] = eval { $code->($tok) }
+            try { $val[0] = $code->($tok) } catch ($e) { $err = $e }
         }
-        my $err = $@;
         $tok->unregister;
         pop @{ $fiber->[F_CANCEL_SCOPES] };
         if ($err) {
@@ -770,8 +772,9 @@ package Acme::Parataxis v0.1.1 {
         state $have_nursery = do { require Acme::Parataxis::Nursery; 1 };
         my $nursery = Acme::Parataxis::Nursery->new;
         my $rv;
-        my $ok  = eval { $rv = $code->($nursery); 1 };
-        my $err = $@;
+        my $ok  = 1;
+        my $err;
+        try { $rv = $code->($nursery) } catch ($e) { $ok = 0; $err = $e }
 
         # The block died: its children must not be orphaned, so cancel them and drain below.
         $nursery->token->cancel unless $ok;
@@ -831,10 +834,12 @@ package Acme::Parataxis v0.1.1 {
                     my ( $i, $val ) = @$job;
                     last if $i < 0;
                     next if $tok->cancelled;
-                    my $rv = eval { $code->($val) };
-                    if ( my $err = $@ ) {
-                        $first_error //= $err;    # the first mapper error wins
-                        $tok->cancel;             # fail fast: siblings stop at their next item boundary
+                    my $rv;
+                    my $map_err;
+                    try { $rv = $code->($val) } catch ($e) { $map_err = $e }
+                    if ($map_err) {
+                        $first_error //= $map_err;    # the first mapper error wins
+                        $tok->cancel;                 # fail fast: siblings stop at their next item boundary
                         last;
                     }
                     $results[$i] = $rv;
@@ -856,14 +861,17 @@ package Acme::Parataxis v0.1.1 {
             }
             $wg->done;
         };
-        my $ok  = eval { $wg->wait; 1 };
-        my $err = $@;
+        my $ok  = 1;
+        my $err;
+        try { $wg->wait } catch ($e) { $ok = 0; $err = $e }
         unless ($ok) {
 
             # The caller was interrupted while parked (an enclosing nursery/with_timeout): cancel the pool and
             # drain it so no worker outlives the caller, then rethrow the caller's own error.
             $tok->cancel;
-            eval { $wg->wait; 1 };
+
+            # A separate variable on purpose: $err is the caller's own error and is rethrown below.
+            try { $wg->wait } catch ($drain_err) { }
             die $err;
         }
         die $first_error if defined $first_error;
@@ -1041,7 +1049,8 @@ package Acme::Parataxis v0.1.1 {
         # better message than anything invented here, so an answer of undef means "no descriptor to check" and
         # the handle goes on to the driver as it always did. An in-memory file answers -1, which is under any
         # ceiling, and needs no watch anyway.
-        my $fd = eval { fileno $fh };
+        my $fd;
+        try { $fd = fileno $fh } catch ($e) { }    # not a handle at all: no descriptor to check
         if ( defined $fd && $fd >= Acme::Parataxis::fd_setsize() ) {
             warn "Acme::Parataxis: $reason() refused: descriptor $fd is at or past this platform's FD_SETSIZE (" .
                 Acme::Parataxis::fd_setsize() .
@@ -1070,9 +1079,11 @@ package Acme::Parataxis v0.1.1 {
             $driver->cancel_timer($timer_id) if defined $timer_id;
             $deadline->unregister            if defined $deadline;
         };
-        my $ok = eval { Acme::Parataxis::_park( $reason, 1, $dereg ); 1 };
-        $dereg->();    # idempotent: on an interrupt _park already ran it, on a natural wake this is the cleanup
-        my $err = $@;
+        my $ok = 1;
+        my $err;
+        try { Acme::Parataxis::_park( $reason, 1, $dereg ) }
+        catch ($e) { $ok = 0; $err = $e }
+        finally { $dereg->() }    # idempotent: on an interrupt _park already ran it, on a natural wake this is the cleanup
         if ( !$ok ) {
             if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
                 $out = -1;    # this wait's own deadline expired; the pool path resumes (not throws) on timeout
@@ -1232,7 +1243,10 @@ package Acme::Parataxis v0.1.1 {
             $on_shutdown = $opt{on_shutdown};
             if ( defined $on_shutdown && ref $on_shutdown ) {
                 require Acme::Parataxis::CancellationToken;
-                my $is_tok = ref $on_shutdown eq 'CODE' ? 0 : eval { $on_shutdown->isa('Acme::Parataxis::CancellationToken') }       || 0;
+                my $is_tok = 0;
+                if ( ref $on_shutdown ne 'CODE' ) {
+                    try { $is_tok = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) { $is_tok = 0 }
+                }
                 croak 'run() on_shutdown must be a true value, a code ref, or a CancellationToken' unless ref $on_shutdown eq 'CODE' || $is_tok;
             }
         }
@@ -1290,7 +1304,10 @@ package Acme::Parataxis v0.1.1 {
         };
         if ($on_shutdown) {
             require Acme::Parataxis::CancellationToken;
-            my $is_shutdown_token = ref $on_shutdown eq 'CODE' ? 0 : eval { $on_shutdown->isa('Acme::Parataxis::CancellationToken') } || 0;
+            my $is_shutdown_token = 0;
+            if ( ref $on_shutdown ne 'CODE' ) {
+                try { $is_shutdown_token = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) { $is_shutdown_token = 0 }
+            }
             $shutdown_token  = $is_shutdown_token         ? $on_shutdown : Acme::Parataxis::CancellationToken->new;
             $shutdown_cb     = ref $on_shutdown eq 'CODE' ? $on_shutdown : undef;
             $shutdown_status = 130;
@@ -1320,7 +1337,9 @@ package Acme::Parataxis v0.1.1 {
             $SIG{TERM} = sub { $sig_pending ||= 'TERM' };
         }
         _enqueue($main_fiber);
-        my $run_ok = eval {
+        my $run_ok = 1;
+        my $run_failure;
+        try {
             while ($IS_RUNNING) {
 
                 # Process a deferred signal at (and only at) this checkpoint - the one place in the loop
@@ -1428,12 +1447,12 @@ package Acme::Parataxis v0.1.1 {
                 }
             }
 
-            # Explicit success marker. Without it the eval yields the while loop's own last expression, which is
-            # perfectly capable of being false on a *clean* exit; that made $run_failure a defined-but-empty string
-            # and turned every normal run into die '' ("Died at ...").
-            1;
-        };
-        my $run_failure = $run_ok ? undef : $@;
+            # No success marker is needed here, and deliberately so. This used to be an eval whose return
+            # value was read as the success flag, so a *clean* exit whose last expression happened to be
+            # false produced a defined-but-empty $@ that was then rethrown -- every normal run ended in
+            # die '' ("Died at ..."). The catch below is the only thing that can set $run_failure.
+        }
+        catch ($e) { $run_ok = 0; $run_failure = $e }
         $IS_RUNNING = 0;              # always leave the scheduler reusable, even when a fiber blew up
         $DRIVER->reset if $DRIVER;    # unwind every watch/timer this run left on the attached loop
         if ($on_shutdown) {           # the handler table is global: restore it no matter how the run ended

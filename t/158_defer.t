@@ -32,7 +32,7 @@ async {
         is \@log, [ 'd2', 'd1' ], 'the block ran LIFO exactly once';
     };
     subtest 'defer runs when the body dies' => sub {
-        my ( @log, $ok, $caught );
+        my ( @log, $caught );
         my $sem = Acme::Parataxis::Semaphore->new( count => 0 );
         my $w   = fiber {
             defer { push @log, 'ran' };
@@ -41,32 +41,29 @@ async {
         };
         sem_parked_at($sem);    # let the body park at the semaphore
         $sem->up;               # resume it into its death
-        $ok     = eval { $w->await; 1 };
-        $caught = $@;
+        $caught = dies { $w->await };
         is \@log, ['ran'], 'the defer ran on the throw path';
-        ok !$ok, 'the await did not succeed';
+        ok $caught, 'the await did not succeed';
         like "$caught", qr/boom/, 'the body error was delivered to the awaiter';
     };
     subtest 'defer runs when a cancellation token interrupts the parked wait' => sub {
-        my ( @log, $ok, $caught );
+        my ( @log, $caught );
         my $sem = Acme::Parataxis::Semaphore->new( count => 0 );
         my $tok = Acme::Parataxis::CancellationToken->new;
         my $w   = fiber {
             defer { push @log, 'cancelled' };
             $tok->register;
             my $e;
-            eval { $sem->down };
-            $e = $@;
+            $e = dies { $sem->down };
             $tok->unregister;
             die $e if $e;
             return 'survived';
         };
         sem_parked_at($sem);
         $tok->cancel;
-        $ok     = eval { $w->await; 1 };
-        $caught = $@;
+        $caught = dies { $w->await };
         is \@log, ['cancelled'], 'the defer ran on the cancel path';
-        ok !$ok,                                                              'the cancelled fiber did not return normally';
+        ok $caught,                                                              'the cancelled fiber did not return normally';
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'await rethrows Error::Cancelled';
     };
     subtest 'defer runs when a deadline cuts the parked wait' => sub {
@@ -82,7 +79,7 @@ async {
         is \@log, ['d'], 'the defer ran when with_timeout fired';
     };
     subtest 'a defers own death folds into the awaiter error' => sub {
-        my ( @log, $ok, $caught );
+        my ( @log, $caught );
         my $sem = Acme::Parataxis::Semaphore->new( count => 0 );
         my $w   = fiber {
             defer { push @log, 'bad'; die "defer-death\n" };
@@ -91,10 +88,9 @@ async {
         };
         sem_parked_at($sem);
         $sem->up;          # resume: the body returns, the defer dies at scope exit
-        $ok     = eval { $w->await; 1 };
-        $caught = $@;
+        $caught = dies { $w->await };
         is \@log, ['bad'], 'the defer ran and died';
-        ok !$ok, 'the await did not succeed';
+        ok $caught, 'the await did not succeed';
         like "$caught", qr/defer-death/, 'the defer death became the awaiter error';
     };
     subtest 'a body that dies after a defer ran chains the value, a defer that ran twice stays LIFO' => sub {

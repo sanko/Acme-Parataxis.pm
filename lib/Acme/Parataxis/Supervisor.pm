@@ -118,8 +118,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         croak 'Supervisor->run() requires at least one supervised child' unless @children;
         croak 'Supervisor->run() may only be called once' if $started;
         $started = $running = true;
-        my $ok  = eval { $self->_supervise_loop; 1 };
-        my $err = $@;
+        my $ok  = 1;
+        my $err;
+        try { $self->_supervise_loop } catch ($e) { $ok = 0; $err = $e }
         $self->_shutdown;
         $running = false;
         die $err unless $ok;
@@ -157,7 +158,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         for my $child (@children) {
             next unless $child->{pending};    # not running: never started, already reported, or failed to start
             my $inst = $child->{instance} or next;
-            warn "Acme::Parataxis::Supervisor: stopping child '$child->{name}' failed: $@" unless eval { $inst->stop; 1 };
+            try { $inst->stop } catch ($e) { warn "Acme::Parataxis::Supervisor: stopping child '$child->{name}' failed: $e" }
         }
         return;
     }
@@ -208,8 +209,10 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     # started with, so it is dropped instead of being mistaken for a new crash.
     method _restart_child ($child) {
         if ( $child->{pending} && defined $child->{instance} ) {
-            warn "Acme::Parataxis::Supervisor: restarting '$child->{name}' but stopping the old instance failed: $@"
-                unless eval { $child->{instance}->stop; 1 };
+            try { $child->{instance}->stop }
+            catch ($e) {
+                warn "Acme::Parataxis::Supervisor: restarting '$child->{name}' but stopping the old instance failed: $e"
+            }
         }
         $self->_spawn($child);
         $child->{restarts}++;    # every child this strategy replaced counts, not only the one that died
@@ -227,8 +230,8 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         # is what makes a restart a fresh instance instead of a second run of a dead one.
         if ( defined $child->{initial} ) { ( $inst, $ok ) = ( delete $child->{initial}, 1 ) }
         else {
-            $ok  = eval { $inst = $child->{factory}->(); 1 };
-            $err = $@ unless $ok;
+            $ok = 1;
+            try { $inst = $child->{factory}->() } catch ($e) { $ok = 0; $err = $e }
         }
         croak "Supervisor child '$child->{name}' factory must return an Acme::Parataxis::Actor or an Acme::Parataxis::Supervisor"
             if $ok && ( !blessed($inst) || ( !$inst->isa('Acme::Parataxis::Actor') && !$inst->isa('Acme::Parataxis::Supervisor') ) );
@@ -240,22 +243,25 @@ class Acme::Parataxis::Supervisor v0.1.1 {
             $deaths->put( [ $child, $token, $err ] );
             return;
         }
-        my $hooked = eval {
+        my $hooked = 1;
+        my $hook_err;
+        try {
             if ( $inst->isa('Acme::Parataxis::Supervisor') ) {
                 fiber {
-                    my $ok2 = eval { $inst->run; 1 };
-                    $self->_report( $child, $token, $ok2 ? undef : $@ );
+                    my $ok2 = 1;
+                    my $run_err;
+                    try { $inst->run } catch ($e) { $ok2 = 0; $run_err = $e }
+                    $self->_report( $child, $token, $ok2 ? undef : $run_err );
                 };
             }
             else {
                 $inst->on_death( sub ( $actor, $e ) { $self->_report( $child, $token, $e ) } );
             }
-            1;
-        };
+        }
+        catch ($e) { $hooked = 0; $hook_err = $e }
         unless ($hooked) {    # could not watch it (e.g. no fiber slot left): report and give up on it
-            my $e = $@;
             $child->{instance} = undef;
-            $deaths->put( [ $child, $token, $e ] );
+            $deaths->put( [ $child, $token, $hook_err ] );
         }
         return;
     }

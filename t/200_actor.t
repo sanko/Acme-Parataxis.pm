@@ -55,9 +55,9 @@ subtest 'a handler die fails its own ask, and the actor keeps running' => sub {
             }
         );
         my $reply = $actor->ask( { cmd => 'boom' } );
-        my $err   = eval { $reply->await; 1 };
-        ok !$err, 'the ask threw';
-        like "$@", qr/handler exploded/, 'the handler message is preserved';
+        my $err = dies { $reply->await };
+        ok $err, 'the ask threw';
+        like "$err", qr/handler exploded/, 'the handler message is preserved';
         is $actor->ask( { cmd => 'ok' } )->await, 'ok', 'the actor survived and still answers';
         $actor->stop;
     };
@@ -87,11 +87,10 @@ subtest 'with_timeout aborts an ask, and the actor is untouched' => sub {
             }
         );
         my $reply = $actor->ask( { cmd => 'slow' } );
-        my $err   = eval {
+        my $err = dies {
             with_timeout( 10, sub { $reply->await } );
-            1;
         };
-        ok !$err, 'the ask timed out';
+        ok $err, 'the ask timed out';
         is $actor->ask( { cmd => 'ok' } )->await, 'fast', 'the actor never noticed the aborted ask';
         $actor->stop;
     };
@@ -107,17 +106,16 @@ subtest 'stop drains what was already queued, then the actor is gone' => sub {
         $actor_ref = $actor;
     };
     ok !$actor_ref->is_alive, 'dead once the drain finished';
-    my $err = eval { $actor_ref->send( { n => 99 } ); 1 };
-    ok !$err, 'send() after death croaks';
-    like "$@", qr/no longer running/, 'the message says why';
+    my $err = dies { $actor_ref->send( { n => 99 } ) };
+    ok $err, 'send() after death croaks';
+    like "$err", qr/no longer running/, 'the message says why';
 };
 subtest 'spawn outside a scheduled fiber croaks' => sub {
-    my $err = eval {
+    my $err = dies {
         Acme::Parataxis::Actor->spawn( sub ( $self, $msg ) { } );
-        1;
     };
-    ok !$err, 'rejected';
-    like "$@", qr/scheduled fiber/, 'with the reason';
+    ok $err, 'rejected';
+    like "$err", qr/scheduled fiber/, 'with the reason';
 };
 subtest 'no fiber leaks: an actor that stops returns the live count to baseline' => sub {
     my $base = Acme::Parataxis::get_live_fiber_count();

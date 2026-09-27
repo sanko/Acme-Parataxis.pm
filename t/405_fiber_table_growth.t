@@ -21,15 +21,14 @@ BEGIN {
 my $BASE = Acme::Parataxis::get_live_fiber_count();
 sub live () { Acme::Parataxis::get_live_fiber_count() }
 
-# Spawn up to $n fibers parked on a shared signal, stopping at the first croak. Returns the count made and $@.
+# Spawn up to $n fibers parked on a shared signal, stopping at the first croak. Returns the count made and that error.
 sub spawn_parked ( $n, $sig ) {
     my ( $made, $err ) = ( 0, undef );
     for ( 1 .. $n ) {
-        my $ok = eval {
+        my $died = dies {
             fiber { $sig->wait };
-            1;
         };
-        if ( !$ok ) { $err = $@; last }
+        if ($died) { $err = $died; last }
         $made++;
     }
     return ( $made, $err );

@@ -69,13 +69,11 @@ subtest 'releasing from a non-owner croaks; the owner still releases' => sub {
         my $a = fiber {
             $m->lock;
             my $b = fiber {
-                eval { $m->unlock };
-                $foreign = $@;
+                $foreign = dies { $m->unlock };
                 await_sleep(1);    # hang around a moment as a live non-owner
             };
             $b->await;
-            eval { $m->unlock };
-            $owner_ok = $@;
+            $owner_ok = dies { $m->unlock };
             my $c = fiber { $m->lock; $m->unlock; 1 };
             $usable = $c->await;
         };
@@ -128,10 +126,9 @@ subtest 'an interrupted lock() unregisters so the next holder is served' => sub 
             $log .= 'A';
             $m->unlock;
         };
-        eval {
+        $err = dies {
             with_timeout( 10, sub { $m->lock; $log .= 'B' } );
         };
-        $err = $@;
         is $m->waiters, 0, 'the timed-out waiter removed itself from the queue';
         my $c = fiber {
             $m->lock;

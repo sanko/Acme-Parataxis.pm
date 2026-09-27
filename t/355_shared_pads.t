@@ -34,7 +34,7 @@ sub single ( $ch, $ready_ref, $name ) {
     my $lex = "lex:$name";
     $$ready_ref = 1;
     my ( $got, $err );
-    eval { $got = $ch->get; 1 } or $err = $@;
+    lives { $got = $ch->get } or $err = $@;
     report( $name, $lex, $got, $err );
 }
 
@@ -48,7 +48,7 @@ sub staged ( $ch1, $ch2, $ready_ref, $go_ref, $name ) {
     spin( sub {$$go_ref}, "the go flag for $name" );
     $entered++;
     my ( $got, $err );
-    eval { $got = $ch2->get; 1 } or $err = $@;
+    lives { $got = $ch2->get } or $err = $@;
     report( $name, $lex, $got, $err );
 }
 my $base = Acme::Parataxis::get_live_fiber_count();
@@ -59,7 +59,7 @@ my $chC1 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chC2 = Acme::Parataxis::Channel->new( capacity => 4 );
 my $chD  = Acme::Parataxis::Channel->new( capacity => 4 );
 my ( $rA, $rB, $rC, $rD ) = ( 0, 0, 0, 0 );
-my $ran = eval {
+my $ran = lives {
     async {
         fiber { staged( $chA1, $chA2, \$rA, \$goA, 'A' ) };
         spin( sub {$rA}, 'A to park' );
@@ -92,7 +92,6 @@ my $ran = eval {
         $chA2->put('wakeA2');
         spin( sub { exists $REPORT{A} }, 'A to report' );
     };
-    1;
 };
 ok $ran, 'the choreography ran to completion' or diag $@;
 for my $spec ( [ A => 'wakeA2' ], [ B => 'wakeB' ], [ C => 'wakeC2' ], [ D => 'wakeD' ] ) {

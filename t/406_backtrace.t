@@ -117,7 +117,7 @@ subtest 'the snapshot and the human report carry the chain' => sub {
 subtest 'the FATAL deadlock report shows each parked fiber\'s chain back to user code' => sub {
     my $dead;
     ok(
-        !eval {
+        $dead = dies {
             run(
                 sub {
                     my $deadlock = sub { Acme::Parataxis::Channel->new( capacity => 1 )->get; 1 };
@@ -125,10 +125,8 @@ subtest 'the FATAL deadlock report shows each parked fiber\'s chain back to user
                     1;
                 }
             );
-            1;
         }
     );
-    $dead = $@ // '';
     like $dead, qr/FATAL: deadlock detected/,   'the message announces the deadlock';
     like $dead, qr/Channel get/,                'it names the parked wait';
     like $dead, qr/        at \Q$0\E:\d+\s+\S/, 'and the chain back to user code';

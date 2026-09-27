@@ -126,7 +126,7 @@ subtest 'with_timeout aborts a parked transaction cleanly' => sub {
     my $caught;
     async {
         my $f = fiber {
-            eval {
+            $caught = dies {
                 with_timeout(
                     30,
                     sub {
@@ -139,7 +139,6 @@ subtest 'with_timeout aborts a parked transaction cleanly' => sub {
                     }
                 );
             };
-            $caught = $@;
         };
         $f->await;
     };

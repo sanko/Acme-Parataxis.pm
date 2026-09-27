@@ -31,9 +31,7 @@ subtest 'wait_all: rejects fast on the first failure' => sub {
     async {
         fiber { yield; $g->set_error('kaput') };
         $h->set_result('late');
-        my $err;
-        eval { $all->await; 1 };
-        like $@, qr/kaput/, 'the first failure surfaces through await';
+        like dies { $all->await }, qr/kaput/, 'the first failure surfaces through await';
     };
 };
 subtest 'wait_all: a pre-resolved failure settles the group inline, no fiber needed' => sub {
@@ -96,9 +94,7 @@ subtest 'wait_any: copies the first failure wholesale' => sub {
         my $child = fiber { $g->set_error('boom') };
         $child->await;
         $h->set_result('irrelevant');
-        my $err;
-        eval { $any->await; 1 };
-        like $@, qr/boom/, 'the loser future stays unresolved and untouched';
+        like dies { $any->await }, qr/boom/, 'the loser future stays unresolved and untouched';
     };
 };
 subtest 'wait_any: an already-ready input wins immediately' => sub {
@@ -131,9 +127,7 @@ subtest 'wait_any: class-callable form Acme::Parataxis->wait_any' => sub {
         my $child = fiber { $g->set_error('halt') };
         $child->await;
         $h->set_result('late');
-        my $err;
-        eval { $any->await; 1 };
-        like $@, qr/halt/, 'class form copies the first failure wholesale';
+        like dies { $any->await }, qr/halt/, 'class form copies the first failure wholesale';
     };
 };
 #

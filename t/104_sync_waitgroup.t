@@ -75,10 +75,9 @@ subtest 'an interrupted wait() unregisters and later waits still work' => sub {
     my $err;
     async {
         $wg->add(1);    # a unit that will never be done within the timeout
-        eval {
+        $err = dies {
             with_timeout( 10, sub { $wg->wait } );
         };
-        $err = $@;
         is $wg->waiters, 0, 'the timed-out waiter removed itself';
         $wg->done;      # drain the stuck unit; nothing stale to wake
         my $f = fiber { $wg->wait };

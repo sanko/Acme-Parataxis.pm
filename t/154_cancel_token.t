@@ -40,17 +40,15 @@ subtest 'cancel wakes a parked fiber with Error::Cancelled' => sub {
         my $tok = Acme::Parataxis::CancellationToken->new;
         my $w   = fiber {
             $tok->register;
-            my $val = eval { wait_sem($sem) };
-            my $e   = $@;
+            my $e = dies { wait_sem($sem) };
             $tok->unregister;
             die $e if $e;
         };
         yield;    # let the fiber park on the semaphore
         is $sem->waiters, 1, 'one fiber parked on the semaphore';
         $tok->cancel;
-        my $ok     = eval { $w->await; 1 };
-        my $caught = $@;
-        ok !$ok,                                                              'cancelled fiber did not return normally';
+        my $caught = dies { $w->await };
+        ok $caught,                                                          'cancelled fiber did not return normally';
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'await rethrows Error::Cancelled to the parent';
         is $sem->waiters, 0, 'cancelled waiter was deregistered from the semaphore';
     };
@@ -72,8 +70,8 @@ subtest 'a cancelled token interrupts the next park of a running fiber' => sub {
             $tok->register;
             $got .= 'A';
             yield;    # running, between parks
-            my $val = eval { wait_sem($sem) };
-            $got .= ( $@ && ref $@ && $@->isa('Acme::Parataxis::Error::Cancelled') ) ? 'B' : 'C';
+            my $e = dies { wait_sem($sem) };
+            $got .= ( $e && ref $e && $e->isa('Acme::Parataxis::Error::Cancelled') ) ? 'B' : 'C';
             $tok->unregister;
             return;    # the fiber survives; only the interrupted wait died
         };
@@ -108,16 +106,14 @@ subtest 'error surface: wait_reason and kind' => sub {
         my $tok = Acme::Parataxis::CancellationToken->new;
         my $w   = fiber {
             $tok->register;
-            my $val = eval { wait_sem($sem) };
-            my $e   = $@;
+            my $e = dies { wait_sem($sem) };
             $tok->unregister;
             die $e if $e;
             return;
         };
         yield;
         $tok->cancel;
-        my $ok     = eval { $w->await; 1 };
-        my $caught = $@;
+        my $caught = dies { $w->await };
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'Error::Cancelled delivered';
         is $caught->kind,             'cancelled',      'kind() is "cancelled"';
         is $caught->wait_reason->[0], 'Semaphore down', 'wait_reason names the parked wait';
@@ -153,15 +149,15 @@ subtest 'destructors run while a cancelled wait unwinds' => sub {
             $tok->register;
             my $tx = Local::Txn->new( out => \$trace, seq => 1 );
             $tx->act;                             # a1
-            my $val = eval { wait_sem($sem) };    # parked here when cancelled
+            my $e = dies { wait_sem($sem) };    # parked here when cancelled
             $tok->unregister;
-            die $@ if $@;
+            die $e if $e;
             return;
         };
         yield;
         $tok->cancel;
-        my $ok = eval { $w->await; 1 };
-        ok !$ok, 'wait aborted by the cancel';
+        my $caught = dies { $w->await };
+        ok $caught, 'wait aborted by the cancel';
     };
     like $trace, qr/^a1d1/, 'the in-scope destructor ran during the unwind';
 };
@@ -172,16 +168,16 @@ subtest 'channel: blocking getter is cancelled cleanly' => sub {
         my $tok = Acme::Parataxis::CancellationToken->new;
         my $w   = fiber {
             $tok->register;
-            eval { push @got, $ch->get; () };
+            my $e = dies { push @got, $ch->get; () };
             $tok->unregister;
-            die $@ if $@;
+            die $e if $e;
             return;
         };
         yield;
         is $ch->size, 0, 'channel empty: getter is parked';
         $tok->cancel;
-        my $ok = eval { $w->await; 1 };
-        ok !$ok, 'blocked getter cancelled';
+        my $caught = dies { $w->await };
+        ok $caught, 'blocked getter cancelled';
         my $z = fiber { push @got, $ch->get; 'z' };
         $ch->put('fresh');
         $z->await;

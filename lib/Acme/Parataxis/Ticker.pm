@@ -45,7 +45,9 @@ class Acme::Parataxis::Ticker v0.1.1 {
 
             # stop() interrupts the sleep below (which also recalls the armed pool job, so a stopped ticker never
             # keeps the run alive); the interrupt surfaces as an exception out of await_sleep and unwinds here.
-            my $ok = eval {
+            # The catch is deliberately empty: that throw is how stop() gets in, and a real fault in the loop has
+            # always been swallowed rather than escalated to the fiber's owner.
+            try {
                 $stop_token->register;
                 while ($running) {
                     my $remain = $next_at - Acme::Parataxis::mock_time();
@@ -67,12 +69,12 @@ class Acme::Parataxis::Ticker v0.1.1 {
                     # fired == dropped + pending + consumed (Ticker.pod) stays exact on hosts that wake timers late.
                     while ( $next_at <= Acme::Parataxis::mock_time() ) { $next_at += $interval_s; $skipped++ }
                 }
-                1;
-            };
+            }
+            catch ($e) { }
 
             # A finished fiber must not stay registered on the token, or a later stop() would interrupt an id that
             # no longer names a live waiter.
-            eval { $stop_token->unregister };
+            try { $stop_token->unregister } catch ($e) { }
             ();
         };
     }

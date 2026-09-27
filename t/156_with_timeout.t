@@ -32,10 +32,9 @@ subtest 'a parking block that finishes under the deadline returns its value' => 
 subtest 'deadline fires: Error::Timeout is thrown in the caller and the run continues' => sub {
     my ( $caught, $after );
     async {
-        eval {
+        $caught = dies {
             with_timeout( 20, sub { sem_block() } );
         };
-        $caught = $@;
         $after  = 'ran-on';
     };
     ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Timeout'), '::Timeout thrown by with_timeout';
@@ -67,7 +66,7 @@ subtest 'repeated timeouts after catching one still work' => sub {
             # heavily loaded CI runner cannot let the block finish before the 20ms
             # timer fires (macOS flake: 100ms slept out under a 20ms bound).
             my $inner = ( $i % 2 ) ? 2000 : 1;
-            eval {
+            push @errors, dies {
                 with_timeout(
                     $bound,
                     sub {
@@ -76,7 +75,6 @@ subtest 'repeated timeouts after catching one still work' => sub {
                     }
                 );
             };
-            push @errors, $@;
         }
     };
     ok $errors[0] && $errors[0]->isa('Acme::Parataxis::Error::Timeout'), 'first too-short bound timed out';
@@ -100,10 +98,9 @@ subtest 'a pre-cancelled token fails fast without running the block' => sub {
     async {
         my $tok = Acme::Parataxis::CancellationToken->new;
         $tok->cancel;
-        eval {
+        $caught = dies {
             with_timeout( 2000, $tok, sub { $ran++; 'no' } );
         };
-        $caught = $@;
     };
     ok !$ran,                                                             'block not run';
     ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'fast-fail ::Cancelled';
@@ -111,10 +108,9 @@ subtest 'a pre-cancelled token fails fast without running the block' => sub {
 subtest 'genuine errors from the block propagate unchanged' => sub {
     my $caught;
     async {
-        eval {
+        $caught = dies {
             with_timeout( 2000, sub { die 'real-bug' } );
         };
-        $caught = $@;
     };
     like $caught, qr[real-bug], 'the block die is not mistaken for a timeout';
     ok !( ref $caught && $caught->isa('Acme::Parataxis::Error::Timeout') ), 'not a ::Timeout';
@@ -129,10 +125,9 @@ subtest 'a timed-out Future await then a working one' => sub {
     my ( $err, $later );
     async {
         my $f = Acme::Parataxis::Future->new;
-        eval {
+        $err = dies {
             with_timeout( 20, sub { $f->await; 'f' } );
         };
-        $err = $@;
         my $g = Acme::Parataxis::Future->new;
         my $w = fiber { $g->await };
         $g->set_result('now');

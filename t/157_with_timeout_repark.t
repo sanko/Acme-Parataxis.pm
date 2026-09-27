@@ -19,7 +19,7 @@ subtest 'a nursery cancelling a child parked in a with_timeout await reaps the g
     my ( $err, $inner_done ) = ( undef, 0 );
     my $base = Acme::Parataxis::get_live_fiber_count();
     async {
-        eval {
+        $err = dies {
             nursery(
                 sub ($n) {
                     $n->spawn(
@@ -31,7 +31,6 @@ subtest 'a nursery cancelling a child parked in a with_timeout await reaps the g
                 }
             );
         };
-        $err = $@;
     };
     ok ref($err) && $err->isa('Acme::Parataxis::Error::Nursery'), 'the nursery aggregate is thrown';
     like "$err", qr/^nursery failure: boom\b/, 'the real failure is the primary';
@@ -42,7 +41,7 @@ subtest 'the enclosing deadline fires while the child is parked in an inner nurs
     my ( $err, $done ) = ( undef, 0 );
     my $base = Acme::Parataxis::get_live_fiber_count();
     async {
-        eval {
+        $err = dies {
             with_timeout(
                 20,
                 sub {    # outer deadline: fires while the inner child is still parked
@@ -60,7 +59,6 @@ subtest 'the enclosing deadline fires while the child is parked in an inner nurs
                 }
             );
         };
-        $err = $@;
     };
     ok ref($err) && $err->isa('Acme::Parataxis::Error::Timeout'), 'the outer timeout propagates to the caller';
     ok !$done,                                                    'the deepest grandchild was cancelled and drained by the teardown';
@@ -97,7 +95,7 @@ subtest 'innermost deadline wins, the outermost acts as backstop' => sub {
     my $ch = Acme::Parataxis::Channel->new;
     async {
         my $t0 = time;
-        eval {
+        $err = dies {
             with_timeout(
                 20,
                 sub {
@@ -105,7 +103,6 @@ subtest 'innermost deadline wins, the outermost acts as backstop' => sub {
                 }
             );
         };
-        $err     = $@;
         $elapsed = ( time - $t0 ) * 1000;
     };
     ok ref($err) && $err->isa('Acme::Parataxis::Error::Timeout'), 'the outer 20ms bound aborts the inner 2000ms bound';
@@ -119,14 +116,12 @@ subtest 'the outer deadline still kills a re-park after the inner fires' => sub 
             300,
             sub {
                 my $t0 = time;
-                eval {
+                $inner_err = dies {
                     with_timeout( 30, sub { $ch->get } );
                 };
-                $inner_err = $@;
-                $inner_at  = ( time - $t0 ) * 1000;
+                $inner_at = ( time - $t0 ) * 1000;
                 my $t1 = time;
-                eval { $ch->get };
-                $repark_err = $@;
+                $repark_err = dies { $ch->get };
                 $repark_at  = ( time - $t1 ) * 1000;
             }
         );
@@ -142,11 +137,9 @@ subtest 're-parking after the deadline fired fails fast instead of deadlocking' 
         with_timeout(
             50,
             sub {
-                eval { $ch->get };
-                $e1 = $@;
+                $e1 = dies { $ch->get };
                 my $t1 = time;
-                eval { $ch->get };
-                $e2      = $@;
+                $e2 = dies { $ch->get };
                 $elapsed = ( time - $t1 ) * 1000;
             }
         );
@@ -169,11 +162,9 @@ subtest 'a re-park reuses the armed timer instead of arming a second one' => sub
             with_timeout(
                 700, $tok,
                 sub {
-                    eval { $ch->get };
-                    $first_err = $@;
+                    $first_err = dies { $ch->get };
                     my $t0 = time;
-                    eval { $ch->get };
-                    $repark_err = $@;
+                    $repark_err = dies { $ch->get };
                     $repark_at  = ( time - $t0 ) * 1000;
                 }
             );
@@ -197,10 +188,9 @@ subtest 'a cancel scope and a with_timeout deadline coexist on one park' => sub 
         my $tok = Acme::Parataxis::CancellationToken->new;
         fiber {
             $tok->register;
-            eval {
+            $err = dies {
                 with_timeout( 2000, sub { $ch->get } );
             };
-            $err  = $@;
             $done = 1;
         };
         await_sleep(20);

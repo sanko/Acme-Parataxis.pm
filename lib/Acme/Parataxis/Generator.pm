@@ -47,14 +47,13 @@ package Acme::Parataxis::Generator v0.1.1 {
             return;
         };
 
-        # The fiber runs the body inside a fiber-local eval. A die raised by the body on a
+        # The fiber runs the body inside a fiber-local try/catch. A die raised by the body on a
         # resumed trip is caught here (the scheduler's own G_EVAL can miss it on resume, see
         # fid-0 note above) and the error string is parked in an outer lexical that ->next
         # dereferences and rethrows on the caller's stack, so no die ever crosses a transfer.
         my $err;
         my $driver = sub {
-            my $ok = eval { $code->($yield); 1 };
-            $err = $@ if !$ok;
+            try { $code->($yield) } catch ($caught) { $err = $caught }
             return;
         };
         my $gen_fiber = Acme::Parataxis->new( code => $driver );
@@ -74,7 +73,7 @@ package Acme::Parataxis::Generator v0.1.1 {
 
     # An unexhausted (suspended) fiber is drained to its natural exit instead of being torn
     # down in mid-shot: resuming it with the drain marker makes the yield closure die, the
-    # fiber-local eval absorbs it, and the fiber finishes normally (perl unwinds its own
+    # fiber-local try/catch absorbs it, and the fiber finishes normally (perl unwinds its own
     # scopes), after which coro_call reaps it. (destroy_coro mid-eval became safe with the
     # the C-level fix that made destroying a parked fiber safe, but draining is retained so the body can run its own finalization.)
     sub DESTROY ($self) {
@@ -83,8 +82,10 @@ package Acme::Parataxis::Generator v0.1.1 {
         my $fid = $fiber->fid;
         return if !defined $fid || $fid < 0;
         if ( !$fiber->is_done ) {
-            local $@;
-            eval { Acme::Parataxis::coro_call( $fid, [$DRAIN] ); 1 };
+
+            # try/catch neither reads nor writes $@, so the local $@ this used to need (to keep a
+            # failed drain from clobbering the caller's error) is gone along with the eval.
+            try { Acme::Parataxis::coro_call( $fid, [$DRAIN] ) } catch ($caught) { }
         }
         return if $fiber->is_done;
         Acme::Parataxis::destroy_coro($fid);

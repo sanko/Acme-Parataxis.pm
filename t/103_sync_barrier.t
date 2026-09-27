@@ -65,10 +65,9 @@ subtest 'an interrupted arrival unregisters without blocking the phase' => sub {
     my $b = Acme::Parataxis::Sync::Barrier->new( parties => 3 );
     my $err;
     async {
-        eval {
+        $err = dies {
             with_timeout( 10, sub { $b->arrive_and_wait } );
         };
-        $err = $@;
         is $b->waiters, 0, 'the timed-out arriver removed itself';
 
         # two arrivals are still booked for this phase; two live parties finish it
