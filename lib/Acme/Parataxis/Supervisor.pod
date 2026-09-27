@@ -49,7 +49,7 @@ supervisors, registered with C<supervise>. Whenever a child dies, the supervisio
 child's own teardown - an actor's C<on_death> hook, or a wrapper fiber around a nested supervisor's C<run> - and
 applies the restart strategy:
 
-=over 4
+=over
 
 =item *
 
@@ -84,10 +84,10 @@ through their own teardown. No C, no OS threads, nothing but the scheduler's ord
         within       => 60,             # default, in seconds
     );
 
-Creates a supervisor. All three options are optional, and all three are readable afterwards - see L</"Configuration
-readers">.
+Creates a supervisor. All three options are optional, and all three are readable afterwards - see
+L</"Configuration readers">.
 
-=over 4
+=over
 
 =item *
 
@@ -112,7 +112,7 @@ budget, and C<0> keeps nothing in the window at all, so the budget never trips.
 
 Registers a child and returns C<$self>, so registrations chain. C<$thing> may be:
 
-=over 4
+=over
 
 =item *
 

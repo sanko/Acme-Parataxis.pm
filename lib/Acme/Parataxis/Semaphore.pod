@@ -51,8 +51,7 @@ Takes a permit and decrements the count, parking the calling fiber first if the 
 Waiters are released in the order they parked, one per C<up>. A fiber that is woken but finds the count at zero again
 re-parks rather than stealing the permit from someone else.
 
-Must run inside a scheduled fiber only if it would actually have to wait. See L</"Usable as a plain counter
-off-fiber">.
+Must run inside a scheduled fiber only if it would actually have to wait. See L</"Usable as a plain counter off-fiber">.
 
 =head2 C<up( )>
 
@@ -86,8 +85,8 @@ waiters leaves the count at 1, not 5. A negative C<$diff> releases nobody; see L
     $sem->wait;        # block until a permit exists -- does not take one
 
 Blocks until the count is greater than zero and returns true B<without decrementing>. It is a wait for the semaphore to
-become non-empty, not an acquire, and it is the one method here whose name will mislead you; see L</"wait does not take
-a permit">.
+become non-empty, not an acquire, and it is the one method here whose name will mislead you; see
+L</"wait does not take a permit">.
 
 =head2 C<guard( )>
 

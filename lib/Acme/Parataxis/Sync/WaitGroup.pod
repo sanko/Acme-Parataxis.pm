@@ -37,9 +37,9 @@ calling fiber until nothing is left outstanding. It is the fan-in half of fan-ou
 when it finishes, and wait for the reports rather than for the fibers.
 
 The group holds no job state and knows no jobs at all. It is a number, and C<done> is a decrement - which is worth
-keeping in mind, because it means the group cannot tell whether the reports it received are the ones it was waiting
-for. A job that dies without reporting leaves its unit on the counter forever, and no later C<wait> returns. L</"A job
-that dies without done"> is the failure mode to design around.
+keeping in mind, because it means the group cannot tell whether the reports it received are the ones it was waiting for.
+A job that dies without reporting leaves its unit on the counter forever, and no later C<wait> returns.
+L</"A job that dies without done"> is the failure mode to design around.
 
 The counter is not a queue and the group does not order anything. Two fibers that call C<done> at the same moment are
 both accepted; what matters is only that the total reaches zero, not who got there first.

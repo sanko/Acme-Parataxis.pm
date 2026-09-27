@@ -33,8 +33,8 @@ A driver is the adapter between Parataxis and an existing CPAN event loop. With 
 L<Acme::Parataxis-E<gt>attach_loop|Acme::Parataxis> makes C<await_read>, C<await_write> and C<await_sleep> stop
 submitting a job to the OS worker pool per filehandle or sleep and instead register watches and timers on that loop.
 The benefit is readiness driven by C<epoll>, C<kqueue> or C<select> rather than a thread parked in C<select()> per
-watched socket - which also lifts the C<FD_SETSIZE> ceiling that a C<select()>-based path runs into. See L</"The
-descriptor-number ceiling is the platform's, not Parataxis's">.
+watched socket - which also lifts the C<FD_SETSIZE> ceiling that a C<select()>-based path runs into. See
+L</"The descriptor-number ceiling is the platform's, not Parataxis's">.
 
 The division of labour is deliberately narrow:
 

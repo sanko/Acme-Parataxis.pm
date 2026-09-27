@@ -153,8 +153,8 @@ The stage capacity this pipeline was built with, shared by every stage in it.
 
 =head2 Parse, filter, pace, batch, store
 
-The full shape. Note there is only B<one> batching stage: they do not compose, see L</"Stacked batch stages nest, they
-do not merge">.
+The full shape. Note there is only B<one> batching stage: they do not compose, see
+L</"Stacked batch stages nest, they do not merge">.
 
     async {
         my $raw = Acme::Parataxis::Channel->new( capacity => 1024 );

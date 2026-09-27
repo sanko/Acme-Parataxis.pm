@@ -398,7 +398,7 @@ the handler never blocks a second Ctrl+C.
 
 The option accepts one of three values:
 
-=over 4
+=over
 
 =item * a true value (C<1>) - install the handlers, use the signal-derived status;
 
@@ -428,7 +428,7 @@ can instead run a block under a virtual clock:
 
 While a virtual run is active:
 
-=over 4
+=over
 
 =item * C<await_sleep> and every other timeout arms a virtual timer instead of a kernel timeout. Nothing is scheduled
 on the operating system, so a C<3_600_000> ms sleep returns in microseconds.
@@ -509,7 +509,7 @@ interrupt / deadline cutting an in-flight wait. No library API is needed.
         ... body ...
     };
 
-=over 4
+=over
 
 =item * C<defer> blocks run B<LIFO> (inner-most first), each exactly once, before the fiber's slot is released.
 
@@ -523,7 +523,7 @@ not any scheduler hook.
 
 Two footguns to keep in mind:
 
-=over 4
+=over
 
 =item * perl's C<defer> is B<block-scoped>, not fiber-attached. A C<defer> written inside a nested block or a helper
 sub fires at B<that> scope's exit (before the fiber ends). Write it lexically inside the fiber body itself, where the

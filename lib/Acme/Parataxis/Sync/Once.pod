@@ -87,7 +87,7 @@ Runs C<$code> if it has not run before, and returns what it returned - to the fi
 already running the action this parks until that is finished, and returns nothing. Croaks off a fiber, and croaks if
 C<$code> is not a code reference.
 
-=over 4
+=over
 
 =item C<Once::do requires a CODE reference>
 

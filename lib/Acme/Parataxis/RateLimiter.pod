@@ -160,8 +160,8 @@ the whole group rather than per fiber.
     };
 
 Nothing here needs a lock or a counter: C<acquire> is the whole protocol. Pairing the C<defer> with the construction is
-worth the habit, because an unstopped limiter is a run that never returns - see L</"A running limiter keeps its run
-open">.
+worth the habit, because an unstopped limiter is a run that never returns - see
+L</"A running limiter keeps its run open">.
 
 =head2 Bounding a whole batch, not one request
 

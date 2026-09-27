@@ -36,7 +36,7 @@ cancellation behave identically whichever one you reach for.
 
 The family:
 
-=over 4
+=over
 
 =item *
 
@@ -67,7 +67,7 @@ runner finishes rather than running it again.
 
 Three things every member shares:
 
-=over 4
+=over
 
 =item *
 
@@ -138,7 +138,7 @@ caller. That contract is small enough to write a primitive from:
     };
     say 'off a fiber, take() croaks: ', ( eval { $gate->take; 1 } ? 'no' : 'yes' );
 
-=over 4
+=over
 
 =item C<_fid( $what )>
 
@@ -157,8 +157,8 @@ The five primitives use six wait reasons between them: C<Mutex lock>, C<RwLock r
 C<WaitGroup wait>, C<Barrier arrive> and C<Once init>. They surface in a C<PARATAXIS_TRACE> diagnostic and in the
 C<wait_reason> of an L<Acme::Parataxis::Error::Timeout>.
 
-C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see L</"How It
-Works">.
+C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see
+L</"How It Works">.
 
 =item C<_wake( $waiter )>
 
@@ -173,7 +173,7 @@ rather than fired at whatever fiber now holds it.
 A contended wait is a four-step cycle, and all five of the family's waits are the same cycle with different
 bookkeeping.
 
-=over 4
+=over
 
 =item 1 4
 
@@ -366,7 +366,7 @@ away anyway, but it is why a lock can look busy in a program that is merely exit
 
 Two shapes fail without the primitives themselves pointing at the cause.
 
-=over 4
+=over
 
 =item *
 

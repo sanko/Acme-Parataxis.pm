@@ -40,9 +40,9 @@ writes - it is one commit. A transfer that reads two accounts and writes two acc
 fiber working on the same accounts either sees it whole or not at all. There is no lock to take and nothing to release.
 
 The cost is that the block may not run once. It is re-run whenever a TVar it read was committed by someone else in the
-meantime, and it is abandoned and re-run from the top when it calls C<retry>. A transaction is therefore not a place
-for side effects you cannot repeat: no printing, no file handles, no C<put> on a channel. L</"The block may run many
-times"> is the habit that follows from that.
+meantime, and it is abandoned and re-run from the top when it calls C<retry>. A transaction is therefore not a place for
+side effects you cannot repeat: no printing, no file handles, no C<put> on a channel. L</"The block may run many times">
+is the habit that follows from that.
 
     use v5.40;
     use Acme::Parataxis qw[async fiber await_sleep atomically];
@@ -276,8 +276,8 @@ atomically block>. And with nothing read it croaks with C<retry with an empty re
 one TVar before retry()> - which is the useful one, because the cell it names as the reason is exactly the cell the
 caller has to read to have a condition to wait on.
 
-C<retry> inside a nested C<atomically> aborts the whole transaction, not just the inner block. See L</"A nested retry
-discards the outer block">.
+C<retry> inside a nested C<atomically> aborts the whole transaction, not just the inner block. See
+L</"A nested retry discards the outer block">.
 
 =head1 How It Works
 
@@ -291,7 +291,7 @@ read, and it is what a C<retry> parks on.
 
 C<get> and C<set> are the only two methods that touch the log, and they are deliberately asymmetric:
 
-=over 4
+=over
 
 =item *
 

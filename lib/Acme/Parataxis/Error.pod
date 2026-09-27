@@ -99,8 +99,8 @@ C<message> and C<wait_reason> from the base.
     Acme::Parataxis::Error::Timeout->throw( wait_reason => $reason );
 
 Kind C<'timeout'>. Thrown at the re-entry of a parked wait when a C<with_timeout> deadline fired before the block could
-finish. Message C<The operation timed out at ...>. Also has C<new> and C<throw>, and adds C<seconds> - but see L</"The
-seconds accessor is never populated by the framework"> before relying on it.
+finish. Message C<The operation timed out at ...>. Also has C<new> and C<throw>, and adds C<seconds> - but see
+L</"The seconds accessor is never populated by the framework"> before relying on it.
 
 This is a sibling of C<Cancelled>, not a subclass of it. Both descend directly from C<Acme::Parataxis::Error>, so C<<
 $err->isa('Acme::Parataxis::Error::Cancelled') >> is false for a timeout. Catch the base class and switch on C<kind>.
