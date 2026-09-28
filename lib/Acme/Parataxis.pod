@@ -816,6 +816,7 @@ C<set_preempt_threshold>, the fiber automatically yields.
 =head2 C<set_preempt_threshold( $val )>
 
 Sets the number of C<maybe_yield> increments before a forced yield occurs. Default is 0 (preemption disabled).
+Also callable as C<Acme::Parataxis->set_preempt_threshold( $val )>.
 
 =head1 Class Methods
 

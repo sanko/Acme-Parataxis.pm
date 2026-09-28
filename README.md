@@ -837,6 +837,7 @@ while (my $row = $sth->fetch) {
 ## `set_preempt_threshold( $val )`
 
 Sets the number of `maybe_yield` increments before a forced yield occurs. Default is 0 (preemption disabled).
+Also callable as a class method: `Acme::Parataxis->set_preempt_threshold( $val )`.
 
 # Class Methods
 

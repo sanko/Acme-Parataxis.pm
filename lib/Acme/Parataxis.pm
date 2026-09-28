@@ -173,7 +173,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'set_max_threads',                   [Int],                          Void;
         affix $l, 'get_max_fibers',                    [],                             Int;
         affix $l, 'set_max_fibers',                    [Int],                          Void;
-        affix $l, 'set_preempt_threshold',             [LongLong],                     Void;
+        affix $l, [ 'set_preempt_threshold' => '_set_preempt_threshold' ], [LongLong], Void;
         affix $l, [ 'maybe_yield' => '_maybe_yield' ], [],                             Pointer [SV];
         affix $l, 'get_preempt_count',                 [],                             LongLong;
 
@@ -1174,6 +1174,11 @@ package Acme::Parataxis v0.1.1 {
         my $result = Acme::Parataxis::_maybe_yield();
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];
+    }
+    sub set_preempt_threshold {
+        my $o   = _arg_offset( $_[0] );
+        croak 'set_preempt_threshold() expects a threshold value' unless @_ > $o;
+        Acme::Parataxis::_set_preempt_threshold( $_[ $o ] // 0 );
     }
     sub tid            { get_os_thread_id_export() }
     sub current_fid    { get_current_parataxis_id() }
