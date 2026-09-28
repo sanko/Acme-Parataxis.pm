@@ -1270,6 +1270,7 @@ static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char 
     }
 }
 
+/* ---- diagnostic: PARA_DIAG=1 dumps swap-time depth/pad state ---- */
 static int para_diag_enabled(void) {
     static int on = -1;
     if (on < 0)
@@ -1660,12 +1661,18 @@ static void para_diag_pads(pTHX_ const char * tag, PERL_SI * si) {
         I32 occ = cx->blk_sub.olddepth + 1;
         PADLIST * pl = CvPADLIST(cv);
         I32 plmax = pl ? PadlistMAX(pl) : -1;
-        SV * at_occ = (pl && occ >= 0 && occ <= plmax) ? PadlistARRAY(pl)[occ] : NULL;
-        SV * at_cd  = (pl && CvDEPTH(cv) >= 0 && CvDEPTH(cv) <= plmax) ? PadlistARRAY(pl)[CvDEPTH(cv)] : NULL;
-        PARA_DIAGF("[diag] %s i=%d cv=%p dep=%d old=%d occ=%d pad@occ=%p pad@dep=%p%s%s\n",
-            tag, i, (void*)cv, CvDEPTH(cv), cx->blk_sub.olddepth, occ, (void*)at_occ, (void*)at_cd,
+        /* This is core's own assert, restated so a mismatch can be reported instead of aborting:
+         * cx_popsub_args() wants AvARRAY(PadlistARRAY(CvPADLIST(cv))[CvDEPTH]) == PL_curpad, and
+         * PadlistARRAY yields the PAD (an AV) that holds each depth's pad. */
+        AV * pad_occ = (pl && occ >= 0 && occ <= plmax) ? (AV *)PadlistARRAY(pl)[occ] : NULL;
+        AV * pad_cd  = (pl && CvDEPTH(cv) >= 0 && CvDEPTH(cv) <= plmax) ? (AV *)PadlistARRAY(pl)[CvDEPTH(cv)] : NULL;
+        SV ** at_occ = pad_occ ? AvARRAY(pad_occ) : NULL;
+        SV ** at_cd  = pad_cd ? AvARRAY(pad_cd) : NULL;
+        PARA_DIAGF("[diag] %s i=%d cv=%p dep=%d old=%d occ=%d pad@occ=%p pad@dep=%p curpad=%p%s%s%s\n",
+            tag, i, (void*)cv, CvDEPTH(cv), cx->blk_sub.olddepth, occ, (void*)at_occ, (void*)at_cd, (void*)PL_curpad,
             (CvDEPTH(cv) != occ) ? "  <== DEPTH MISMATCH (assert would fire at pop)" : "",
-            (!at_occ || SvTYPE((SV*)at_occ) != SVt_PVAV) ? "  <== MISSING PAD" : "");
+            (at_cd != at_occ) ? "  <== DEPTH-PAD MISMATCH" : "",
+            (!at_occ || at_occ == &PL_sv_undef) ? "  <== MISSING PAD" : "");
     }
 }
 
