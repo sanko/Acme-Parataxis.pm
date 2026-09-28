@@ -112,13 +112,13 @@ package Acme::Parataxis::Compat v0.1.1 {
             no strict 'refs';
             no warnings 'redefine';
 
-            # The three closures are built here as named lexicals and the coderef is kept in @SAVED
-            # alongside the glob, so disable() hands over the very CV that was installed instead of
-            # looking it back up with *{ 'CORE::GLOBAL::read' }{CODE}. That lookup is not what was
-            # wrong on Win32 -- it returns a proper CODE ref there, measured -- so this is hardening
-            # rather than the fix, and it is kept because a name lookup into a glob slot is a fragile
-            # thing to depend on when holding the coderef costs nothing. The actual cause was the
-            # signature of the C entry point it calls; see the note on para_release_cv_depth().
+            # The three closures are built here as named lexicals and their coderefs are kept in @SAVED, so disable()
+            # can withdraw the fabricated pad depth from the CV itself instead of looking the override back up with
+            # *{ 'CORE::GLOBAL::read' }{CODE} -- a name lookup into a glob slot is a fragile thing to depend on when
+            # holding the coderef costs nothing. (That lookup was not what was wrong on Win32 either: it returns a
+            # proper CODE ref there, measured. The actual cause of the old croak was the signature of the C entry
+            # point the override calls; see the note on para_release_cv_depth().) What disable() actually restores is
+            # snapshotted just before the assignments below, so the coderef's own home glob is never the saved state.
             #
             # sleep [;$] maps to await_sleep. Fractional seconds are honored as
             # milliseconds (CORE::sleep truncates them away) and are impossible to
@@ -214,9 +214,18 @@ package Acme::Parataxis::Compat v0.1.1 {
                 }
             };
 
-            push @SAVED, [ sleep   => \*{'CORE::GLOBAL::sleep'},   $sleep_override ];
-            push @SAVED, [ read    => \*{'CORE::GLOBAL::read'},    $read_override ];
-            push @SAVED, [ sysread => \*{'CORE::GLOBAL::sysread'}, $sysread_override ];
+            # Snapshot what each glob already holds *before* the assignments below rewrite it: disable() has to hand
+            # the prior state back, and the glob itself cannot be the snapshot. \*{'CORE::GLOBAL::read'} taken here is
+            # a live reference to the very glob this block then overwrites, so a disable that "restores" it is a
+            # self-assignment -- a no-op that leaves the override in the glob once @SAVED and $INSTALLED are cleared.
+            # The sole witness is the CODE slot: an installed override is a CODE slot on the CORE::GLOBAL::%s glob, and
+            # a builtin occupies no slot at all, so undef *is* the builtin's identity and restoring is "empty the slot".
+            my $sleep_prior   = *{ 'CORE::GLOBAL::sleep' }{CODE};
+            my $read_prior    = *{ 'CORE::GLOBAL::read' }{CODE};
+            my $sysread_prior = *{ 'CORE::GLOBAL::sysread' }{CODE};
+            push @SAVED, [ sleep => $sleep_prior, $sleep_override ];
+            push @SAVED, [ read => $read_prior, $read_override ];
+            push @SAVED, [ sysread => $sysread_prior, $sysread_override ];
 
             *{'CORE::GLOBAL::sleep'}   = $sleep_override;
             *{'CORE::GLOBAL::read'}    = $read_override;
@@ -230,19 +239,31 @@ package Acme::Parataxis::Compat v0.1.1 {
         return 1 unless $INSTALLED;
         {
             no strict 'refs';
-            # Hand back the pad bookkeeping for each override before the glob assignment below.
-            # Fiber swaps fabricate a CvDEPTH for a CV some fiber is parked inside, so that the next
-            # call lands above the parked pad -- but nothing withdraws that value once the parked
-            # frame is gone, and the CV then looks permanently active to perl. Assigning over one
-            # finalises it, so a stale positive count here is a hard "Can't undef active subroutine"
-            # pointing at the *replaced* sub's own definition site, which is nowhere near the cause.
+            no warnings 'redefine';
+            # Hand back the pad bookkeeping for each override before the glob is touched. Fiber swaps fabricate a
+            # CvDEPTH for a CV some fiber is parked inside, so that the next call lands above the parked pad -- but
+            # nothing withdraws that value once the parked frame is gone, and the CV then looks permanently active to
+            # perl. Overwriting such a CV finalises it (a hard "Can't undef active subroutine" pointing at the
+            # *replaced* sub's own definition site, which is nowhere near the cause), so the count is withdrawn while
+            # nothing else is happening to the CV. $entry->[2] is the coderef install() created; see the note there
+            # for why it is held directly rather than re-looked-up, and why that was not the Win32 croak's cause.
             #
-            # $entry->[2] is the coderef install() created. See the note in install() for why, and for
-            # why that was not the cause of the Win32 croak.
+            # The restore itself is driven by the snapshot taken before install() overwrote each glob. A prior
+            # override (someone else's, present before install) is handed back as the CODE slot it was; otherwise the
+            # slot is emptied, which is the one way to tell perl the builtin is in effect again. The glob reference the
+            # old code stored was a live alias of the glob install() was about to rewrite, so restoring it was a
+            # self-assignment that uninstalled nothing.
             for my $entry (@SAVED) {
-                Acme::Parataxis::para_release_cv_depth( $entry->[2] ) if $entry->[2];
+                my ( $name, $prior, $cv ) = @$entry;
+                Acme::Parataxis::para_release_cv_depth($cv) if $cv;
+                my $glob = 'CORE::GLOBAL::' . $name;
+                if ( defined $prior && ref( $prior ) eq 'CODE' ) {
+                    *{$glob} = $prior;    # hand the override that predated install() back
+                }
+                else {
+                    undef *{$glob};    # builtin: no CODE slot is how perl knows the builtin is in effect
+                }
             }
-            *{ 'CORE::GLOBAL::' . $_->[0] } = $_->[1] for @SAVED;
         }
         @SAVED     = ();
         $INSTALLED = 0;

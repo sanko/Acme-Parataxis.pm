@@ -341,7 +341,17 @@ subtest 'disable restores the raw globals for freshly compiled code' => sub {
     is ref $first,  'ARRAY',            'freshly compiled sleep(0.05) ran';
     is $first->[0], int( $first->[0] ), '...and returned the truncated-to-integer CORE::sleep result, not the requested duration';
     ok $first->[1] < 5000, sprintf '...returned via the raw builtin (%f ms), not the scheduler', $first->[1];
+
+    # A surviving CORE::GLOBAL override delegates to the raw builtin at the top level, so behaviorally it is
+    # indistinguishable from being truly uninstalled -- which is exactly how disable() used to fail without anyone
+    # noticing (the restored \*{...} glob ref was a live alias of the glob install() rewrote, so disable was a
+    # self-assignment). The deterministic witness is the glob itself: an installed override is a CODE slot on
+    # CORE::GLOBAL::%s, and the builtin occupies no slot at all, so the override is gone exactly when the slot reads
+    # empty again.
+    no strict 'refs';
+    ok !( defined *{ "CORE::GLOBAL::$_" }{CODE} ), "CORE::GLOBAL::$_ is empty again after disable" for qw[sleep read sysread];
     is Acme::Parataxis->enable_transparent_unblocking(), 1, 're-enabling works';
+    ok   defined *{ "CORE::GLOBAL::$_" }{CODE}, "re-enable restores the CORE::GLOBAL::$_ override" for qw[sleep read sysread];
     is Acme::Parataxis->transparent_unblocking(),        1, 'and is reported installed again';
 };
 #
