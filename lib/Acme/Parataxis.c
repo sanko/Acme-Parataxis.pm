@@ -2788,8 +2788,13 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
     /* `owner` stamps which interpreter's arena owns this record, its stacks, and the SVs it references. The C tables
      * behind threads->create (perl_clone) are process-shared, so a cloned worker inherits the parent's opaque fiber
      * ids; destroy_coro() refuses a record whose owner is not the current interpreter so a worker's destruct cannot
-     * free memory that belongs to the parent's pool. A recycled record re-binds to whoever is creating now. */
+     * free memory that belongs to the parent's pool. A recycled record re-binds to whoever is creating now. aTHX is
+     * only a real expression on ithreads builds, where perl_clone (and the whole hazard) can exist at all. */
+#ifdef USE_ITHREADS
     c->owner = (void *)aTHX;
+#else
+    c->owner = NULL;
+#endif
 
     /* Reset the coderef's call depth so the fiber starts clean */
     if (user_code && user_code != &PL_sv_undef)
@@ -3220,9 +3225,12 @@ DLLEXPORT void destroy_coro(int fiber_id) {
      * The record itself, its stacks, and every SV it references were allocated in the parent interpreter's arena,
      * so the worker must not free -- or decrement a reference on -- any of it, or the CRT aborts on the cross-pool
      * free ("Free to wrong pool ... not ..."). The worker's copy is inert: the parent still owns the record and
-     * frees it when the parent's own Fiber object is destroyed. */
+     * frees it when the parent's own Fiber object is destroyed. Non-ithreads perls cannot run perl_clone at all, and
+     * aTHX is not a real expression there, so the guard is compiled out and the single interpreter owns everything. */
+#ifdef USE_ITHREADS
     if (c->owner && c->owner != (void *)aTHX)
         return;
+#endif
 
     fibers[fiber_id] = NULL;
     if (job_refcount[fiber_id] > 0) {
