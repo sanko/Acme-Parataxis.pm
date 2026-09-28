@@ -2833,6 +2833,12 @@ DLLEXPORT SV * coro_call(int fiber_id, SV * args) {
     dTHX;
     if (fiber_id < 0 || fiber_id >= fiber_capacity || !fibers[fiber_id] || fibers[fiber_id]->finished)
         return &PL_sv_undef;
+    /* A fiber whose context stack the deadlock purger tore down (started, not finished, si_cxix == -1)
+     * has no live frame to resume: perform_switch into it would run unwound perl state and underflow the
+     * context stack. Its run died with it parked, so any wait that was still registered can still try to
+     * wake it -- that wake must be a no-op. The record stays in the table (the fid must keep its slot). */
+    if (fibers[fiber_id]->started && fibers[fiber_id]->si && fibers[fiber_id]->si->si_cxix < 0)
+        return &PL_sv_undef;
     if (fibers[fiber_id]->transfer_data != args) {
         if (fibers[fiber_id]->transfer_data && fibers[fiber_id]->transfer_data != &PL_sv_undef)
             SvREFCNT_dec(fibers[fiber_id]->transfer_data);
@@ -2930,6 +2936,12 @@ DLLEXPORT int run_fiber_checked(int fiber_id, SV * args) {
         destroy_coro(fiber_id);
         return 1;
     }
+    /* A fiber torn down by the deadlock purger (started, not finished, si_cxix == -1) can never be run
+     * again: coro_call() would underflow its unwound context stack. Report "not found" so the scheduler
+     * neither re-enqueues it (status 0) nor marks it done (status 1) -- the record and its fid must stay
+     * occupied. See coro_call()'s guard for the other resume paths. */
+    if (c->started && c->si && c->si->si_cxix < 0)
+        return -1;
     SV * ret = coro_call(fiber_id, args);
     if (!fibers[fiber_id] || fibers[fiber_id]->finished) {
         destroy_coro(fiber_id);
@@ -3026,6 +3038,12 @@ DLLEXPORT SV * coro_transfer(int target_id, SV * args) {
     if (target_id < -1 || (target_id >= 0 && (target_id >= fiber_capacity || !fibers[target_id])))
         return &PL_sv_undef;
     if (target_id >= 0 && fibers[target_id]->finished)
+        return &PL_sv_undef;
+    /* Same guard as coro_call(): a fiber torn down by the deadlock purger has no live frame to
+     * transfer to, and the wait that armed this wake (a completed job, a satisfied channel) was
+     * registered before its run died. The wake is a no-op; the record stays occupied. */
+    if (target_id >= 0 && fibers[target_id]->started
+        && fibers[target_id]->si && fibers[target_id]->si->si_cxix < 0)
         return &PL_sv_undef;
     para_fiber_t * target = (target_id == -1) ? &main_context : fibers[target_id];
     if (target->transfer_data != args) {
@@ -3202,6 +3220,130 @@ DLLEXPORT void para_release_cv_depth(SV * sv) {
      * onto a slot still holding an earlier frame's @_. */
     _clean_landing_pad(aTHX_ cv, 1);
     SvREFCNT_dec(cv);
+}
+
+static void _purge_fresh_pads(pTHX_ PERL_SI * si) {
+    if (!si || !si->si_cxstack)
+        return;
+    for (I32 i = si->si_cxix; i >= 0; i--) {
+        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
+        if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
+            CV * cv = cx->blk_sub.cv;
+            if (cv && SvTYPE((SV *)cv) == SVt_PVCV) {
+                PADLIST * padlist = CvPADLIST(cv);
+                if (padlist) {
+                    I32 depth = cx->blk_sub.olddepth + 1;
+                    if (depth > 0 && depth <= PadlistMAX(padlist)) {
+                        /* Hand the abandoned frame's pad back the way a real frame pop would: perl does not reuse a
+                         * popped frame's layer, it releases it so the next call allocates fresh lexicals. The dead
+                         * fiber's parked frames are never popped, so their pad slots stay resident: the next fiber
+                         * re-invoking this CV reuses the layer as-is and can SEE the dead fiber's lexicals (a bare
+                         * `yield` is then observed to yield the parked fiber's ["WAITING"] marker, because `my @x`
+                         * reuses the slot without clearing it).
+                         *
+                         * We therefore clear only the CONTENTS of each array-valued pad slot in the resident layer.
+                         * The layer AV itself is left untouched, because freeing it -- or even NULLing one gutter
+                         * entry in a layer perl may have aliased into @_ -- leaves the defgv pointing at freed
+                         * memory and the next @_ clear (pp_entersub's Perl_clear_defarray) segfaults. Clearing the
+                         * child array alone (as if the dead frame had done `my @x = ()`) releases the stale lexicals
+                         * while keeping every pointer perl still holds valid, so the next call re-enters these CVs
+                         * with clean wait state. */
+                        AV * layer = (AV *)PadlistARRAY(padlist)[depth];
+                        if (layer && SvTYPE((SV *)layer) == SVt_PVAV) {
+                            SSize_t fill = AvFILLp(layer);
+                            if (fill >= 0) {
+                                SV ** a = PadARRAY(layer);
+                                for (SSize_t j = 0; j <= fill; j++) {
+                                    SV * old = a[j];
+                                    if (old && old != &PL_sv_undef
+                                        && SvTYPE(old) == SVt_PVAV
+                                        && SvPADMY(old)
+                                        && SvREFCNT(old) == 1)
+                                        av_clear((AV *)old);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** @brief Tear a fiber that a dying run abandons out of the parked-depth registry.
+ *
+ * A run ends with remaining fibers parked in two cases: the deadlock detector fires (the "FATAL:
+ * deadlock detected" report) or an unobserved fiber death aborts the scheduler loop. By design those
+ * parked fibers are never destroyed -- their C records keep the fids occupied so a later run cannot
+ * be misread as deadlocked -- but their parked frames have to leave the depth registry at the moment
+ * the torn-down stack is detected, exactly as destroy_coro()'s purge leaves them on destruction.
+ * Left behind, a parked claim keeps CvDEPTH fabricated above depths no live frame occupies and Pass
+ * 1c refuses to settle it while the frame still counts as live, so every later park of the same CV
+ * enters one level high (the "poisoned depth" residual: the shared CV stays inflated for good).
+ *
+ * This performs the destroy_coro() registry walk -- remove every claim on the fiber's frames -- and
+ * then marks the context stack torn down (si_cxix = -1) so the frames stop counting as live. With
+ * the claims gone and nothing live, the next swap's Pass 1c unwinds any pinned level back to perl's
+ * ordinary 0. The fiber record itself, its pads, and its fid stay exactly where the leak design
+ * expects them; nothing about this function frees or destroys the fiber, and a wake that races in
+ * afterwards is made a no-op by the guards in run_fiber_checked()/coro_call()/coro_transfer().
+ *
+ * @param fiber_id Fiber whose parked claims are to be purged.
+ */
+DLLEXPORT void para_cvreg_purge_fiber(int fiber_id) {
+    dTHX;
+    if (fiber_id < 0 || fiber_id >= fiber_capacity)
+        return;
+    para_fiber_t * c = fibers[fiber_id];
+    if (!c || !c->si || !c->si->si_cxstack || c->si->si_cxix < 0)
+        return;
+
+    /* Drop every claim the parked fiber registered, the same walk destroy_coro() performs, and
+     * collect the unique CVs it occupied so the ones left entirely unclaimed can be settled below. */
+    CV ** cvs  = NULL;
+    I32  n_cvs = 0, cap_cvs = 0;
+    for (I32 i = c->si->si_cxix; i >= 0; i--) {
+        PERL_CONTEXT * cx = &(c->si->si_cxstack[i]);
+        if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
+            CV * cv = cx->blk_sub.cv;
+            if (cv && SvTYPE((SV *)cv) == SVt_PVCV) {
+                para_cvreg_remove(cv, cx->blk_sub.olddepth + 1);
+                int dup = 0;
+                for (I32 j = 0; j < n_cvs; j++)
+                    if (cvs[j] == cv) { dup = 1; break; }
+                if (!dup) {
+                    if (n_cvs == cap_cvs) {
+                        cap_cvs = cap_cvs ? cap_cvs * 2 : 8;
+                        Renew(cvs, cap_cvs, CV *);
+                    }
+                    cvs[n_cvs++] = cv;
+                }
+            }
+        }
+    }
+
+    /* Tear the frames down for the depth registry's live-frame check: a parked fiber of a run that is
+     * ending will never resume, so its frames must stop counting as live, or Pass 1c would keep seeing
+     * this exact frame and could never settle the fabricated depth. si_cxix = -1 is also the state a
+     * finished fiber leaves behind, so every later destroy path treats the record the same way. */
+    _purge_fresh_pads(aTHX_ c->si);
+    c->si->si_cxix = -1;
+
+    /* Settle right now every CV this purge left with no claims and no live frame anywhere -- the exact
+     * state Pass 1c releases a pin in, run here so the level is unwound even if the process ends before
+     * any further swap. A CV another fiber still claims (max_depth > 0) or frames (para_cv_frame_live)
+     * is left to that fiber's own swaps. */
+    for (I32 j = 0; j < n_cvs; j++) {
+        para_cvreg_entry_t * e = para_cvreg_lookup(cvs[j], 0);
+        if (e && e->pinned && e->max_depth == 0 && !e->on_stack && !para_cv_frame_live(aTHX_ cvs[j])) {
+            PARA_DIAGF("[diag] PURGE-SETTLE fid=%d cv=%p dep=%d -> 0\n", fiber_id, (void*)cvs[j], CvDEPTH(cvs[j]));
+            CvDEPTH(cvs[j]) = 0;
+            _clean_landing_pad(aTHX_ cvs[j], 1);
+            para_cvreg_unpin(e);
+        }
+    }
+    if (cvs)
+        Safefree(cvs);
 }
 
 /**

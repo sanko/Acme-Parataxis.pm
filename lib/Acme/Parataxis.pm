@@ -155,6 +155,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'get_fiber_capacity',                [],                             Int;
         affix $l, 'destroy_coro',                      [Int],                          Void;
         affix $l, 'para_release_cv_depth',             [ Pointer [SV] ],               Void;
+        affix $l, 'para_cvreg_purge_fiber',            [Int],                          Void;
         affix $l, 'force_depth_zero',                  [ Pointer [SV] ],               Void;
         affix $l, 'cleanup',                           [],                             Void;
         affix $l, 'get_os_thread_id_export',           [],                             Int;
@@ -291,7 +292,7 @@ package Acme::Parataxis v0.1.1 {
 
     sub yield {
         my $is_self = _arg_offset( $_[0] );
-        my @deposit;
+        my @deposit = ();
         push @deposit, $_[$_] for ( $is_self ? 1 : 0 ) .. $#_;
         if ( !$is_self && @deposit && !defined $deposit[0] ) {
             shift @deposit;
@@ -1444,6 +1445,14 @@ package Acme::Parataxis v0.1.1 {
                             $body .= "  (no live fibers from this run)\n" unless @mine;
                             my $leaked = @$rows - @mine;
                             $body .= "  ($leaked previously leaked fiber(s) from an older deadlocked run, omitted)\n" if $leaked;
+
+                            # Tear the deadlocked run's own parked fibers out of the depth registry -- destroy_coro-equivalent
+                            # purging at the moment this run's torn-down stack is detected. They are parked and nothing will
+                            # ever resume them (this run is ending and the records stay leaked so their fids cannot be reused),
+                            # so their parked claims must leave now: left in place they pin CvDEPTH above depths no live frame
+                            # occupies, and every later park of the same CV enters one level high ("poisoned depth"). With the
+                            # claims gone and the frames unwound (si_cxix = -1), the next swap's Pass 1c releases any pinned level.
+                            para_cvreg_purge_fiber($_) for map { $_->{fid} } @mine;
                             die 'FATAL: deadlock detected: no runnable work and no outstanding jobs, but ' .
                                 $active_count .
                                 " live fiber(s). Parked in this run:\n" .
@@ -1460,6 +1469,18 @@ package Acme::Parataxis v0.1.1 {
             # die '' ("Died at ..."). The catch below is the only thing that can set $run_failure.
         }
         catch ($e) { $run_ok = 0; $run_failure = $e }
+
+        # An abort (an unobserved fiber death unwound the whole loop) ends the run with its remaining
+        # fibers parked, abandoned exactly like a deadlocked run's. Nothing resumes them now, so purge
+        # their parked claims the same way the deadlock branch does, before the next run can re-park in
+        # a shared CV ("poisoned depth"). The fiber records stay leaked, so only this run's OWN fibers
+        # are touched -- fibers from an older deadlocked run were already purged when their run died.
+        # A clean stop must NOT purge: its parked leftovers are still resumable (their own jobs/waits will
+        # fire), and the next run drains them -- tearing them down here would leak unusable records that
+        # pin get_live_fiber_count() forever, which the cross-run stress tests assert against.
+        if (!$run_ok) {
+            para_cvreg_purge_fiber($_) for grep { !$PRESET_FIBERS{$_} } _live_fiber_ids();
+        }
         $IS_RUNNING = 0;              # always leave the scheduler reusable, even when a fiber blew up
         $DRIVER->reset if $DRIVER;    # unwind every watch/timer this run left on the attached loop
         if ($on_shutdown) {           # the handler table is global: restore it no matter how the run ended
