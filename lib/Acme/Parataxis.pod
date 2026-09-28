@@ -748,7 +748,10 @@ See L<Acme::Parataxis::Blocking> for the full contract: the copy-in copy-out sna
 C<set_max_blocking_threads()> concurrency cap (default 4, C<PARATAXIS_SB_THREADS> overrides), the ithreads requirement,
 the mock-clock croak under C<run( virtual E<gt>=E<gt> 1 )>, and the C<perl_clone> platform warning for affected perls
 (the C<feature 'class'> C<method DESTROY> trigger and the content-independent namespace trigger, which is why the
-in-tree guard classes are classic blessed packages).
+in-tree guard classes are classic blessed packages). Also Windows-only: while any socket wait is in flight (a fiber
+parked in C<await_read> or C<await_write>), a C<spawn_blocking> call blocks until that wait returns, because
+C<perl_clone> duplicates every open descriptor and Windows stalls the duplication while a socket has an outstanding
+operation - the stall tracks the wait's remaining time, not a fixed budget.
 
 =head1 Fiber Limits
 
