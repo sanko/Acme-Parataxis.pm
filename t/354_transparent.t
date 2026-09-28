@@ -226,6 +226,114 @@ subtest 'a regular file read inside a fiber falls back to the raw builtin' => su
         close $fh;
     }
 };
+subtest 'more than one fiber can be inside a framed read at the same time' => sub {
+
+    # A CORE::GLOBAL override is a single CV, and two fibers inside one at the same call depth share its @_: the
+    # second to enter replaces the first one's slots. A framed read parks on await_read, so with its arguments
+    # still being read out of @_ *after* that park, the fiber that parked first woke up to find its handle undef -
+    # "Can't use an undefined value as a symbol reference" out of sysread, "...as filehandle reference" out of read,
+    # both on a handle that had been perfectly good a moment earlier. One fiber at a time cannot see any of that,
+    # and two fibers reading at once is the entire reason to install transparent unblocking in the first place.
+    #
+    # So every fiber here reads a *different* handle from the one it writes, which means every read genuinely parks
+    # until a sibling fiber's write lands - the sibling can run precisely because the reader parked instead of
+    # parking the OS thread - and all of them are inside the override together. The payloads are per-fiber and each
+    # buffer is checked against the neighbour's, so a handle that comes back as the wrong one is caught even in the
+    # cases where it comes back defined rather than undef.
+    my $N    = 8;
+    my $WIDE = 40;
+    for my $builtin (qw[read sysread]) {
+        my @pairs = map { [ socket_pair() ] } 1 .. $N;
+        my ( @rc, @buf );
+        async {
+            with_timeout(
+                30000,
+                sub {
+                    my @k;
+                    for my $i ( 0 .. $N - 1 ) {
+                        push @k, fiber {
+                            my $j    = ( $i + 1 ) % $N;
+                            my $mine = sprintf 'fiber-%02d-%s', $i,  'x' x $WIDE;
+                            my $late = fiber { await_sleep(10); syswrite $pairs[$i][1], $mine; 1 };
+                            my $buf  = q{};
+                            my $rc   = $builtin eq 'read'
+                                ? read( $pairs[$j][0], $buf, length $mine )
+                                : sysread( $pairs[$j][0], $buf, length $mine );
+                            $late->await;
+                            return [ $rc, $buf ];
+                        };
+                    }
+                    for my $i ( 0 .. $N - 1 ) {
+                        ( $rc[$i], $buf[$i] ) = @{ $k[$i]->await };
+                    }
+                }
+            );
+        };
+        my @expect = map { sprintf 'fiber-%02d-%s', ( $_ + 1 ) % $N, 'x' x $WIDE } 0 .. $N - 1;
+        is join( q{,}, @rc ), join( q{,}, ( length $expect[0] ) x $N ),
+            "$builtin: all $N concurrent reads returned the byte count";
+        is join( q{\0}, @buf ), join( q{\0}, @expect ),
+            "$builtin: every concurrent read filled the buffer with the right payload";
+    }
+};
+subtest 'a fiber re-entering a framed read while a sibling is still parked keeps its own buffer' => sub {
+
+    # The subtest above has every fiber read exactly once. This covers the other interleaving: fiber 0 finishes its
+    # first read and calls the override *again* while fibers 1..3 are still parked inside theirs, so the shared CV
+    # holds a live frame above one that has just parked, and the scheduler's landing-pad cleanup has to leave every
+    # occupied pad alone. Tidying a sibling's live pad takes its @_ away mid-call, and what that costs depends on when
+    # the override reads its arguments. Compat's reads them out of @_ after the park, so this dies with "Can't use an
+    # undefined value as a filehandle reference"; an override that captures the handle first and parks afterwards fills
+    # the caller's buffer correctly and then finds it emptied, because $_[1] is an alias for that buffer - a silent
+    # loss rather than a croak. One fault, two faces; the assertions are on the outcome, not on which one arrives.
+    #
+    # The writers are staggered so fiber 0 is first to wake, and the assertions are on outcomes rather than on the
+    # interleaving, so a schedule that fails to reproduce it still passes; it simply checks less.
+    my $N     = 4;
+    my @pairs = map { [ socket_pair() ] } 1 .. $N;
+    my ( @rc, @buf );
+    async {
+        with_timeout(
+            30000,
+            sub {
+                my @k;
+                for my $i ( 0 .. $N - 1 ) {
+                    push @k, fiber {
+                        my @got;
+                        for my $n ( 0, 1 ) {
+                            last if $n == 1 && $i != 0;    # only fiber 0 reads twice
+                            my $tag  = sprintf 'fiber-%02d-pass%d-%s', $i, $n, 'y' x 8;
+                            my $ms   = 10 + 5 * ( $n == 0 ? $i : $N );
+                            my $late = fiber { await_sleep($ms); syswrite $pairs[$i][1], $tag; 1 };
+                            my $b    = q{};
+                            my $rc   = read( $pairs[$i][0], $b, length $tag );
+                            $late->await;
+                            push @got, [ $rc, $b ];
+                        }
+                        return \@got;
+                    };
+                }
+                my @all;
+                for my $i ( 0 .. $N - 1 ) { push @all, @{ $k[$i]->await } }
+                @rc  = map { $_->[0] } @all;
+                @buf = map { $_->[1] } @all;
+            }
+        );
+    };
+    my ( @erc, @ebuf );
+    for my $i ( 0 .. $N - 1 ) {
+        for my $n ( 0, 1 ) {
+            next if $n == 1 && $i != 0;
+            my $tag = sprintf 'fiber-%02d-pass%d-%s', $i, $n, 'y' x 8;
+            push @erc,  length $tag;
+            push @ebuf, $tag;
+        }
+    }
+    is join( q{,}, @rc ),  join( q{,}, @erc ),
+        'every read, the re-entering one included, returned the byte count';
+    is join( q{\0}, @buf ), join( q{\0}, @ebuf ),
+        '...and each kept its own payload, so no parked sibling buffer was emptied';
+};
 subtest 'disable restores the raw globals for freshly compiled code' => sub {
     is Acme::Parataxis->disable_transparent_unblocking(), 1, 'disabling reports success';
     is Acme::Parataxis->transparent_unblocking(),         0, 'no longer installed';

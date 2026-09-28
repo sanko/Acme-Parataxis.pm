@@ -111,16 +111,21 @@ package Acme::Parataxis::Compat v0.1.1 {
         {
             no strict 'refs';
             no warnings 'redefine';
-            push @SAVED, [ sleep   => \*{'CORE::GLOBAL::sleep'} ];
-            push @SAVED, [ read    => \*{'CORE::GLOBAL::read'} ];
-            push @SAVED, [ sysread => \*{'CORE::GLOBAL::sysread'} ];
 
+            # The three closures are built here as named lexicals and the coderef is kept in @SAVED
+            # alongside the glob, so disable() hands over the very CV that was installed instead of
+            # looking it back up with *{ 'CORE::GLOBAL::read' }{CODE}. That lookup is not what was
+            # wrong on Win32 -- it returns a proper CODE ref there, measured -- so this is hardening
+            # rather than the fix, and it is kept because a name lookup into a glob slot is a fragile
+            # thing to depend on when holding the coderef costs nothing. The actual cause was the
+            # signature of the C entry point it calls; see the note on para_release_cv_depth().
+            #
             # sleep [;$] maps to await_sleep. Fractional seconds are honored as
             # milliseconds (CORE::sleep truncates them away) and are impossible to
             # signal-interrupt inside a fiber, so the return value is the requested
             # duration. The $_ default is reproduced by hand: a CORE::GLOBAL override
             # does not get the builtin's implicit argument.
-            *{'CORE::GLOBAL::sleep'} = sub : prototype(;$) {
+            my $sleep_override = sub : prototype(;$) {
                 my $secs = @_ ? $_[0] : $_;
                 $secs = 0 if !defined $secs || $secs < 0;
                 return $secs              if 0 == $secs;
@@ -141,7 +146,7 @@ package Acme::Parataxis::Compat v0.1.1 {
             # aliased), so the overrides are deliberately left WITHOUT a prototype and
             # read into a private $buf, then write the result back through _store. That
             # also keeps the `read $fh, $buf, 8` (no-parens) form working.
-            *{'CORE::GLOBAL::read'} = sub {
+            my $read_override = sub {
                 my $off = defined $_[3] ? $_[3] : 0;
                 if ( 'Acme::Parataxis'->current_fid < 0 ) {
                     my $buf = '';
@@ -183,7 +188,7 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
                 }
             };
-            *{'CORE::GLOBAL::sysread'} = sub {
+            my $sysread_override = sub {
                 my $off = defined $_[3] ? $_[3] : 0;
                 if ( 'Acme::Parataxis'->current_fid < 0 ) {
                     my $buf = '';
@@ -208,6 +213,14 @@ package Acme::Parataxis::Compat v0.1.1 {
                     return undef unless $!{EAGAIN} || $!{EWOULDBLOCK};
                 }
             };
+
+            push @SAVED, [ sleep   => \*{'CORE::GLOBAL::sleep'},   $sleep_override ];
+            push @SAVED, [ read    => \*{'CORE::GLOBAL::read'},    $read_override ];
+            push @SAVED, [ sysread => \*{'CORE::GLOBAL::sysread'}, $sysread_override ];
+
+            *{'CORE::GLOBAL::sleep'}   = $sleep_override;
+            *{'CORE::GLOBAL::read'}    = $read_override;
+            *{'CORE::GLOBAL::sysread'} = $sysread_override;
         }
         $INSTALLED = 1;
         return 1;
@@ -217,6 +230,18 @@ package Acme::Parataxis::Compat v0.1.1 {
         return 1 unless $INSTALLED;
         {
             no strict 'refs';
+            # Hand back the pad bookkeeping for each override before the glob assignment below.
+            # Fiber swaps fabricate a CvDEPTH for a CV some fiber is parked inside, so that the next
+            # call lands above the parked pad -- but nothing withdraws that value once the parked
+            # frame is gone, and the CV then looks permanently active to perl. Assigning over one
+            # finalises it, so a stale positive count here is a hard "Can't undef active subroutine"
+            # pointing at the *replaced* sub's own definition site, which is nowhere near the cause.
+            #
+            # $entry->[2] is the coderef install() created. See the note in install() for why, and for
+            # why that was not the cause of the Win32 croak.
+            for my $entry (@SAVED) {
+                Acme::Parataxis::para_release_cv_depth( $entry->[2] ) if $entry->[2];
+            }
             *{ 'CORE::GLOBAL::' . $_->[0] } = $_->[1] for @SAVED;
         }
         @SAVED     = ();

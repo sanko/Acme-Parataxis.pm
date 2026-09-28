@@ -22,6 +22,7 @@ package Acme::Parataxis v0.1.1 {
                 set_max_threads max_threads set_max_fibers max_fibers dump_fibers fd_setsize
                 backtrace_depth
                 atomically retry
+                set_preempt_threshold
                 ]
         ]
     );
@@ -153,6 +154,7 @@ package Acme::Parataxis v0.1.1 {
         affix $l, 'get_live_fiber_count',              [],                             Int;
         affix $l, 'get_fiber_capacity',                [],                             Int;
         affix $l, 'destroy_coro',                      [Int],                          Void;
+        affix $l, 'para_release_cv_depth',             [ Pointer [SV] ],               Void;
         affix $l, 'force_depth_zero',                  [ Pointer [SV] ],               Void;
         affix $l, 'cleanup',                           [],                             Void;
         affix $l, 'get_os_thread_id_export',           [],                             Int;

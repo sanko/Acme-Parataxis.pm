@@ -1297,6 +1297,14 @@ static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char 
  *   - CVs parked somewhere but absent from the resuming stack: CvDEPTH = the deepest parked
  *     depth, so the next ++CvDEPTH() lands at max + 1, strictly above every parked frame.
  *
+ * The fabricated depth is a loan, repaid only by the pops of the frames that occupy the pads
+ * it reserves, and a pop restores CvDEPTH to that frame's own olddepth -- one level too high
+ * per parker. Pass 1c settles the loan at the swap boundary: once no fiber claims the CV and
+ * no frame of it is live on the resuming stack, the fabricated depth is unwound to perl's
+ * ordinary 0 and the landing pad is made canonical again. The swap is the one reversible point
+ * this module is invoked from; a sub-return hook is not, because perl bakes op_ppaddr
+ * snapshots into every compiled op (see init_system).
+ *
  * Known limitation: a *recursive* re-entry of a CV that is on the resuming stack while other
  * fibers are parked deeper in that same CV could still climb into a parked pad (fixing that
  * would require inflating CvDEPTH above the leaving frame's depth, which breaks core's
@@ -1310,7 +1318,9 @@ typedef struct {
     I32 arr_len;         /* valid length of counts[] */
     I32 max_depth;       /* highest d with counts[d] > 0; 0 when inactive */
     I32 active_pos;      /* index into para_cvreg_active, or -1 when inactive */
-    int on_stack;        /* scratch: resuming fiber has a frame of this CV */
+    int on_stack;        /* scratch: Pass 1 saw a frame of this CV on the resuming stack */
+    int pinned;          /* CvDEPTH was fabricated above the live frame count by Pass 1b */
+    I32 pinned_pos;      /* index into para_cvreg_pinned, or -1 when not pinned */
 } para_cvreg_entry_t;
 
 static para_cvreg_entry_t * para_cvreg = NULL; /* open-addressed table; capacity is always a power of 2 */
@@ -1319,6 +1329,17 @@ static U32 para_cvreg_used = 0;
 static I32 * para_cvreg_active = NULL; /* slots with max_depth > 0, so Pass 1b is O(parked CVs) */
 static U32 para_cvreg_active_n = 0;
 static U32 para_cvreg_active_cap = 0;
+
+/* Slots whose `pinned` flag is set: CVs Pass 1b fabricated a CvDEPTH for. The list is separate from
+ * para_cvreg_active because a pin stays behind after its claims drain (max_depth back to 0), and the
+ * debt can only be settled once no frame of the CV is live anywhere -- which the swap boundary knows,
+ * and the claim cache alone does not. */
+static I32 * para_cvreg_pinned = NULL;
+static U32 para_cvreg_pinned_n = 0;
+static U32 para_cvreg_pinned_cap = 0;
+
+static void para_cvreg_pin(para_cvreg_entry_t * e);
+static void para_cvreg_unpin(para_cvreg_entry_t * e);
 
 #define PARA_CVREG_HASH(cv) (((U32)(((PTRV)(cv) >> 4) * 2654435761u)) & (para_cvreg_cap - 1))
 
@@ -1344,6 +1365,38 @@ static void para_cvreg_deactivate(para_cvreg_entry_t * e) {
     e->active_pos = -1;
 }
 
+static void para_cvreg_pin(para_cvreg_entry_t * e) {
+    dTHX;
+    if (e->pinned_pos >= 0)
+        return;
+    if (para_cvreg_pinned_n >= para_cvreg_pinned_cap) {
+        U32 new_cap = para_cvreg_pinned_cap ? para_cvreg_pinned_cap * 2 : 16;
+        Renew(para_cvreg_pinned, new_cap, I32);
+        para_cvreg_pinned_cap = new_cap;
+    }
+    /* The pin outlives every claim and every parked frame, so the registry cannot rely on a suspended
+     * fiber to keep the CV alive until Pass 1c settles the debt -- at global destruction there may be
+     * no fiber left holding it, and a bare key is no reference at all. Owning one of our own is what
+     * makes the settlement write non-fatal. */
+    SvREFCNT_inc(e->cv);
+    e->pinned = 1;
+    e->pinned_pos = (I32)para_cvreg_pinned_n;
+    para_cvreg_pinned[para_cvreg_pinned_n++] = (I32)(e - para_cvreg);
+}
+
+static void para_cvreg_unpin(para_cvreg_entry_t * e) {
+    dTHX;
+    if (e->pinned_pos < 0)
+        return;
+    I32 pos = e->pinned_pos;
+    I32 last_slot = para_cvreg_pinned[--para_cvreg_pinned_n];
+    para_cvreg_pinned[pos] = last_slot;
+    para_cvreg[last_slot].pinned_pos = pos;
+    e->pinned_pos = -1;
+    e->pinned = 0;
+    SvREFCNT_dec(e->cv);
+}
+
 static void para_cvreg_grow(void) {
     para_cvreg_entry_t * old = para_cvreg;
     U32 old_cap = para_cvreg_cap;
@@ -1360,6 +1413,8 @@ static void para_cvreg_grow(void) {
         para_cvreg[j] = old[i];
         if (old[i].active_pos >= 0)
             para_cvreg_active[old[i].active_pos] = (I32)j; /* active[] stores slots: remap after the move */
+        if (old[i].pinned_pos >= 0)
+            para_cvreg_pinned[old[i].pinned_pos] = (I32)j; /* same for the pinned list */
         para_cvreg_used++;
     }
     if (old)
@@ -1393,12 +1448,17 @@ static para_cvreg_entry_t * para_cvreg_lookup(CV * cv, int create) {
             e->max_depth = 0;
             e->active_pos = -1;
             e->on_stack = 0;
+            e->pinned = 0;
+            e->pinned_pos = -1;
             para_cvreg_used++;
             return e;
         }
         i = (i + 1) & mask;
     }
 }
+
+/* Defined below, next to the rest of the swap-time pad handling. */
+static void _clean_landing_pad(pTHX_ CV * cv, I32 depth);
 
 static void para_cvreg_add(CV * cv, I32 depth) {
     if (!cv || SvTYPE((SV *)cv) != SVt_PVCV || depth <= 0)
@@ -1412,6 +1472,7 @@ static void para_cvreg_add(CV * cv, I32 depth) {
     if (!e->counts) {
         Newxz(e->counts, depth + 1, I32);
         e->arr_len = depth + 1;
+        e->on_stack = 0; /* the stale marker must not survive a dead-key reuse */
     }
     else if (depth >= e->arr_len) {
         I32 old_len = e->arr_len;
@@ -1447,6 +1508,53 @@ static void para_cvreg_remove(CV * cv, I32 depth) {
     para_cvreg_dec(para_cvreg_lookup(cv, 0), depth);
 }
 
+/** @brief Ground truth for "is a frame of this CV live anywhere": walk the running stack and every fiber's.
+ *
+ * The registry is a cache of where parked frames are, populated on every swap (Pass 0) and drained on
+ * every resume (Pass 1). A frame that leaves without a swap in between -- a longjmp out of a cancelled
+ * or timed-out fiber body, or a fiber whose cxstack is unwound by a die -- is never drained, so the
+ * cache can claim a depth that nothing occupies. Callers that need to know whether a CV is *really*
+ * active must ask the stacks, not the cache. */
+static int para_cv_frame_live(pTHX_ CV * cv) {
+    PERL_SI * si = PL_curstackinfo;
+    if (si && si->si_cxstack) {
+        for (I32 i = 0; i <= si->si_cxix; i++) {
+            PERL_CONTEXT * cx = &si->si_cxstack[i];
+            if ((CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) && cx->blk_sub.cv == cv)
+                return 1;
+        }
+    }
+    for (int i = 0; i < fiber_capacity; i++) {
+        PERL_SI * fs = fibers[i] ? fibers[i]->si : NULL;
+        if (!fs || !fs->si_cxstack || fs == si)
+            continue;
+        for (I32 j = 0; j <= fs->si_cxix; j++) {
+            PERL_CONTEXT * cx = &fs->si_cxstack[j];
+            if ((CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) && cx->blk_sub.cv == cv)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/** @brief Drops every claim the registry holds for a CV, leaving the (dead) key in place.
+ *
+ * Withdrawing a claim is not optional once the depth it justifies is being cleared: Pass 1b pins
+ * CvDEPTH back to max_depth for every still-active entry, so a stale claim would resurrect the very
+ * value we just released on the next swap. */
+static void para_cvreg_purge(CV * cv) {
+    para_cvreg_entry_t * e = para_cvreg_lookup(cv, 0);
+    if (!e)
+        return;
+    para_cvreg_unpin(e);
+    para_cvreg_deactivate(e);
+    if (e->counts)
+        Safefree(e->counts);
+    e->counts = NULL;
+    e->arr_len = 0;
+    e->max_depth = 0;
+}
+
 /* Reset slot 0 of the pad a call would land on: slot 0 of a fresh perl pad is a REIFY-only,
  * empty AV (pad_push), so a call re-entering a shared subroutine must find its @_ slot in
  * exactly that state for pp_entersub's assert(!AvREAL(av)) / AvFILLp(av) == -1 invariants.
@@ -1455,6 +1563,14 @@ static void para_cvreg_remove(CV * cv, I32 depth) {
 static void _clean_landing_pad(pTHX_ CV * cv, I32 depth) {
     PADLIST * pl = CvPADLIST(cv);
     if (!pl || depth <= 0 || depth > PadlistMAX(pl))
+        return;
+    /* A depth the registry still counts as occupied belongs to a fiber parked *inside* this CV, which will read
+     * its @_ again on resume. Resetting it destroys the victim's live state two ways: the handle read back out
+     * of $_[0] comes back undef, and since $_[1] is an alias for the caller's buffer, the caller's buffer is
+     * emptied too -- silently, after the read itself already succeeded. Only a genuinely unoccupied depth may
+     * be reset. See the depth invariant above for why an occupied landing depth exists in the first place. */
+    para_cvreg_entry_t * e = para_cvreg_lookup(cv, 0);
+    if (e && e->counts && depth < e->arr_len && e->counts[depth] > 0)
         return;
     AV * pad = (AV *)PadlistARRAY(pl)[depth];
     if (!pad || SvTYPE((SV *)pad) != SVt_PVAV)
@@ -1499,7 +1615,8 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
 
     /* Pass 1: Restore CvDEPTH for all active frames of the resuming fiber (its own deepest
      * frame depth per CV), deregister those depths now that the frames are live again, and
-     * flag CVs on this stack so Pass 1b leaves them at their exact value. */
+     * flag CVs on this stack so Pass 1b leaves them at their exact value and Pass 1c does
+     * not settle a debt that a live frame is still entitled to. */
     for (I32 i = 0; i <= si->si_cxix; i++) {
         PERL_CONTEXT * cx = &(si->si_cxstack[i]);
         if (CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) {
@@ -1510,8 +1627,7 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
                 para_cvreg_entry_t * e = para_cvreg_lookup(cv, 0);
                 if (e) {
                     para_cvreg_dec(e, depth);
-                    if (e->active_pos >= 0)
-                        e->on_stack = 1;
+                    e->on_stack = 1; /* even once the last claim drains: Pass 1c needs this */
                 }
             }
         }
@@ -1519,15 +1635,49 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
 
     /* Pass 1b: CVs parked somewhere but absent from the resuming stack: pin CvDEPTH to the
      * deepest parked frame so the next ++CvDEPTH() lands at max + 1, above every parked pad,
-     * and clean that landing pad. */
+     * and clean that landing pad.
+     *
+     * Pinning is a loan, not a gift: the pads it reserves are released only by the pops of the frames
+     * that occupy them, and a pop restores CvDEPTH to that frame's own olddepth. So the second parker of
+     * a CV enters at 2 rather than 1 and pops back to 1, the third enters at 3 and pops back to 2 -- each
+     * pop entirely correct, yet the counter settles one level above where it started, once per parker.
+     * Pass 1c below -- run on every swap, never on a sub-return path -- is the repayment. */
     for (U32 k = 0; k < para_cvreg_active_n; k++) {
         para_cvreg_entry_t * e = &para_cvreg[para_cvreg_active[k]];
-        if (e->on_stack) {
-            e->on_stack = 0;
-            continue;
-        }
+        int was_on_stack = e->on_stack;
+        e->on_stack = 0;
+        if (was_on_stack)
+            continue; /* Pass 1 set this CV to its exact value; a pin here would gift a level */
         CvDEPTH(e->cv) = e->max_depth;
         _clean_landing_pad(aTHX_ e->cv, e->max_depth + 1);
+        para_cvreg_pin(e);
+    }
+
+    /* Pass 1c: settle the pins. The registry only knows who *claims* a depth; it cannot know whether
+     * the frame that justified a claim ever popped. The resuming stack is ground truth for one fiber,
+     * and the swap is the only place this module is invoked while perl holds every live stack in a
+     * known place, so the debt a pin represents is settled here, not from a sub-return hook.
+     *
+     * A pinned CV is released only when (a) no fiber claims a depth in it and (b) no frame of it is
+     * live on the resuming stack. That is exactly the state in which nothing can ever use the pad or
+     * the depth again, so the fabricated CvDEPTH is unwound to perl's ordinary 0 -- the same release
+     * para_release_cv_depth() performs -- and the landing pad is made canonical once more.
+     *
+     * Pops that happen to be followed by a *later* swap are always repaid there: a fiber that pops its
+     * last frame of a CV must hand control back over a swap, and that swap's Pass 1c sees the register
+     * empty and the fiber bare. */
+    for (U32 k = 0; k < para_cvreg_pinned_n; k++) {
+        para_cvreg_entry_t * e = &para_cvreg[para_cvreg_pinned[k]];
+        int was_on_stack = e->on_stack;
+        e->on_stack = 0;
+        if (e->max_depth > 0)
+            continue; /* still claimed by a parked fiber: Pass 1b repinned it this swap */
+        if (was_on_stack)
+            continue; /* a live frame is entitled to the depth Pass 1 gave it */
+        CvDEPTH(e->cv) = 0;
+        _clean_landing_pad(aTHX_ e->cv, 1);
+        para_cvreg_unpin(e); /* index k reused: do not advance */
+        k--;
     }
 
     /* Pass 2: Clean the landing pad for the NEXT call in each CV on the resuming stack. */
@@ -1933,8 +2083,7 @@ static void free_perl_stacks(pTHX_ para_fiber_t * c) {
 /** @brief Original perl OP_EXIT handler, saved when parataxis_pp_exit installs. */
 static Perl_ppaddr_t parataxis_saved_pp_exit = NULL;
 
-/**
- * @brief Fiber-aware replacement for perl's pp_exit (OP_EXIT).
+/** @brief Fiber-aware replacement for perl's pp_exit (OP_EXIT).
  *
  * perl's exit() longjmps up the JMPENV chain. A fiber resumed after a yield runs with a stale top_env
  * (the coro_call guard from its previous resume was popped), so a raw longjmp would jump to freed stack
@@ -2868,6 +3017,74 @@ static void _clear_pads_in_stack(pTHX_ PERL_SI * si) {
             }
         }
     }
+}
+
+/**
+ * @brief Releases the pad bookkeeping for a CV that is about to be replaced or finalised.
+ *
+ * Pass 1b fabricates CvDEPTH values (see the parked-frame depth registry above): a CV some fiber is
+ * parked inside gets CvDEPTH = its deepest parked depth, so the next ++CvDEPTH() lands above every
+ * parked pad. That is the right value while the parked frame exists, but nothing withdraws it once
+ * the frame is gone -- cx_popsub_common() restores depths only for frames that actually leave, and a
+ * swap resuming a fiber that holds no frame of the CV skips it entirely. The count then survives for
+ * good and the CV looks permanently active to the rest of perl: cv_undef() refuses to finalise a CV
+ * whose CvDEPTH is positive, so replacing it dies with "Can't undef active subroutine" and reports
+ * the *replaced* sub's own definition site as the location.
+ *
+ * Acme::Parataxis::Compat::disable_transparent_unblocking() retires the CORE::GLOBAL overrides it
+ * installed, which is precisely that finalisation, so it calls this on each override before handing
+ * the glob back.
+ *
+ * Safety comes from asking the stacks, not the registry. The registry is a cache drained on every
+ * resume, and a frame that leaves without a swap in between -- a cancelled or timed-out fiber body
+ * longjmp'ing out, a die unwinding a cxstack -- never drains its claim, so the cache will happily
+ * report a depth that nothing occupies and veto the release. A stale veto is a permanent croak, and
+ * a *stale* claim left in place is worse still: Pass 1b pins CvDEPTH back to max_depth for every
+ * still-active entry, so the next swap would undo the release. Both are handled by purging the
+ * entry once no live frame is found.
+ *
+ * Scoped to the named CV on purpose, too. CvDEPTH is a pad high-water mark rather than a frame
+ * count, so lowering it also decides which pad the next call reuses -- safe for a CV the caller is
+ * contractually about to free, not in general. Sweeping every CV the registry has ever seen instead
+ * trips core's cx_popsub_args() assert (AvARRAY(Padlist[CvDEPTH]) == PL_curpad) on unrelated subs;
+ * measured under a -DDEBUGGING perl, where that assert is live.
+ *
+ * @param sv A code reference whose CV is to be released. Anything else is ignored.
+ */
+/* Note the signature: no pTHX_. This is an Affix entry point, and every other function in the affix
+ * table that takes an SV follows the same shape -- DLLEXPORT, plain C parameters, dTHX inside the body
+ * (see force_depth_zero, drain_jobs, coro_yield). Written with pTHX_ it still compiled and worked on
+ * the Linux build, because there aTHX_ expands to a full "PerlInterpreter *my_perl," declaration that
+ * reads as a leading parameter; Affix is reading that signature to decide what to pass, and under
+ * Win32's expansion it then handed over something that is not the SV at all. */
+DLLEXPORT void para_release_cv_depth(SV * sv) {
+    dTHX;
+    if (!sv)
+        return;
+    /* Accept a reference to a CV or a bare CV, because either can reach here and neither should be
+     * assumed. force_depth_zero() resolves its argument the same two ways. */
+    SV * const rv = SvROK(sv) ? SvRV(sv) : sv;
+    if (SvTYPE(rv) != SVt_PVCV)
+        return;
+    CV * const cv = (CV *)rv;
+    if (CvDEPTH(cv) <= 0)
+        return;
+    /* A frame really inside the CV still owns that depth, and the CV is about to be finalised out
+     * from under it. Refusing here is right: perl's own cv_undef() would croak on exactly this, and
+     * forcing the count down would leave a live frame pointing at freed memory. */
+    if (para_cv_frame_live(aTHX_ cv))
+        return;
+    /* The purge below may hand back the pin's own reference (SvREFCNT_dec), and this entry point can be
+     * reached with no other reference in hand, so hold one across the reset. Same pattern the old
+     * sub-return hook used across its delegated pop. */
+    SvREFCNT_inc(cv);
+    para_cvreg_purge(cv);
+    CvDEPTH(cv) = 0;
+    /* Back to perl's ordinary state -- and the pad a call at depth 0+1 lands on has to be canonical
+     * again, the same treatment Pass 1b gives a landing pad. Without it the next call enters depth 1
+     * onto a slot still holding an earlier frame's @_. */
+    _clean_landing_pad(aTHX_ cv, 1);
+    SvREFCNT_dec(cv);
 }
 
 /**
