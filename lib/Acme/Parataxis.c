@@ -1270,6 +1270,19 @@ static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char 
     }
 }
 
+static int para_diag_enabled(void) {
+    static int on = -1;
+    if (on < 0)
+        on = (getenv("PARA_DIAG") != NULL);
+    return on;
+}
+
+#define PARA_DIAGF(...) do { if (para_diag_enabled()) fprintf(stderr, __VA_ARGS__); } while (0)
+
+/** @brief Monotonic swap counter, so the PARA_DIAG dumps from one swap can be told apart. */
+static unsigned long para_diag_swapno = 0;
+
+
 /* ------------------------------------------------------------------------------------------
  * Parked-frame depth registry.
  *
@@ -1515,25 +1528,71 @@ static void para_cvreg_remove(CV * cv, I32 depth) {
  * or timed-out fiber body, or a fiber whose cxstack is unwound by a die -- is never drained, so the
  * cache can claim a depth that nothing occupies. Callers that need to know whether a CV is *really*
  * active must ask the stacks, not the cache. */
+static int para_si_cx_has_frame(PERL_SI * si, CV * cv);
+static int para_si_has_frame(PERL_SI * si, CV * cv);
+
 static int para_cv_frame_live(pTHX_ CV * cv) {
     PERL_SI * si = PL_curstackinfo;
-    if (si && si->si_cxstack) {
-        for (I32 i = 0; i <= si->si_cxix; i++) {
-            PERL_CONTEXT * cx = &si->si_cxstack[i];
-            if ((CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) && cx->blk_sub.cv == cv)
-                return 1;
-        }
-    }
+    if (para_si_has_frame(si, cv))
+        return 1;
+    /* The main context (id -1) is not in fibers[], but it is parked with a live frame whenever a
+     * fiber runs, so it has to be asked directly. */
+    if (main_context.si && main_context.si != si && para_si_has_frame(main_context.si, cv))
+        return 1;
     for (int i = 0; i < fiber_capacity; i++) {
         PERL_SI * fs = fibers[i] ? fibers[i]->si : NULL;
-        if (!fs || !fs->si_cxstack || fs == si)
+        if (!fs || fs == si)
             continue;
-        for (I32 j = 0; j <= fs->si_cxix; j++) {
-            PERL_CONTEXT * cx = &fs->si_cxstack[j];
-            if ((CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) && cx->blk_sub.cv == cv)
-                return 1;
-        }
+        if (para_si_has_frame(fs, cv))
+            return 1;
     }
+    return 0;
+}
+
+/** @brief TRUE if a live CXt_SUB/CXt_FORMAT frame for cv sits in this single si's own context stack. */
+static int para_si_cx_has_frame(PERL_SI * si, CV * cv) {
+    if (!si || !si->si_cxstack)
+        return 0;
+    for (I32 i = 0; i <= si->si_cxix; i++) {
+        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
+        if ((CxTYPE(cx) == CXt_SUB || CxTYPE(cx) == CXt_FORMAT) && cx->blk_sub.cv == cv)
+            return 1;
+    }
+    return 0;
+}
+
+/** @brief TRUE if a live CXt_SUB/CXt_FORMAT frame for cv sits anywhere in this si's runlevel chain.
+ *
+ * A runlevel chain is not one context stack. push_scope()/new_stackinfo_flags() hands each nested
+ * runlevel its own si with a fresh cxstack whose si_cxix starts at -1, and links it into the current
+ * chain with si_prev/si_next. Frames created inside the nested runlevel therefore live in *its*
+ * cxstack and are absent from the outer one, so a scan of si->si_cxstack alone reports "not live"
+ * for a CV whose frame is live two runlevels down. Test2's subtest buffer is exactly such a runlevel:
+ * subtest_buffered()/run_subtest() frames sit in a nested si of the main context, which is why the
+ * settle pass used to zero CvDEPTH for a CV that had a live frame. */
+static int para_si_has_frame(PERL_SI * si, CV * cv) {
+    for (PERL_SI * s = si; s; s = s->si_prev)
+        if (para_si_cx_has_frame(s, cv))
+            return 1;
+    for (PERL_SI * s = si ? si->si_next : NULL; s; s = s->si_next)
+        if (para_si_cx_has_frame(s, cv))
+            return 1;
+    return 0;
+}
+
+/** @brief TRUE if a live frame for cv sits on the depositing (from) or resuming (to) stack.
+ *
+ * Pass 1c runs after PL_curstackinfo already points at the resuming stack, so the depositing stack is
+ * only reachable through the fiber struct. Both are asked directly, over their whole runlevel chain,
+ * because a pinned CV can still own a frame that no claim in the register accounts for. Settling such
+ * a CV to CvDEPTH 0 zeroes the depth its live frame needs, and the frame's own pop then trips core's
+ * cx_popsub_args assert (Padlist[CvDEPTH] == PL_curpad) or, in a non-debug build, reads @_ out of
+ * the wrong pad. */
+static int para_cv_live_on_swap(pTHX_ para_fiber_t * from, para_fiber_t * to, CV * cv) {
+    if (from && from->si && para_si_has_frame(from->si, cv))
+        return 1;
+    if (to && to != from && to->si && para_si_has_frame(to->si, cv))
+        return 1;
     return 0;
 }
 
@@ -1587,6 +1646,29 @@ static void _clean_landing_pad(pTHX_ CV * cv, I32 depth) {
     }
 }
 
+/* ---- diagnostic: swap-time pad dump ---- */
+static void para_diag_pads(pTHX_ const char * tag, PERL_SI * si) {
+    if (!si || !si->si_cxstack)
+        return;
+    for (I32 i = 0; i <= si->si_cxix; i++) {
+        PERL_CONTEXT * cx = &(si->si_cxstack[i]);
+        if (CxTYPE(cx) != CXt_SUB && CxTYPE(cx) != CXt_FORMAT)
+            continue;
+        CV * cv = cx->blk_sub.cv;
+        if (!cv || SvTYPE((SV *)cv) != SVt_PVCV)
+            continue;
+        I32 occ = cx->blk_sub.olddepth + 1;
+        PADLIST * pl = CvPADLIST(cv);
+        I32 plmax = pl ? PadlistMAX(pl) : -1;
+        SV * at_occ = (pl && occ >= 0 && occ <= plmax) ? PadlistARRAY(pl)[occ] : NULL;
+        SV * at_cd  = (pl && CvDEPTH(cv) >= 0 && CvDEPTH(cv) <= plmax) ? PadlistARRAY(pl)[CvDEPTH(cv)] : NULL;
+        PARA_DIAGF("[diag] %s i=%d cv=%p dep=%d old=%d occ=%d pad@occ=%p pad@dep=%p%s%s\n",
+            tag, i, (void*)cv, CvDEPTH(cv), cx->blk_sub.olddepth, occ, (void*)at_occ, (void*)at_cd,
+            (CvDEPTH(cv) != occ) ? "  <== DEPTH MISMATCH (assert would fire at pop)" : "",
+            (!at_occ || SvTYPE((SV*)at_occ) != SVt_PVAV) ? "  <== MISSING PAD" : "");
+    }
+}
+
 /**
  * @brief Restores subroutine call depths, syncs the parked-depth registry, and cleans argument pads.
  *
@@ -1596,6 +1678,7 @@ static void _clean_landing_pad(pTHX_ CV * cv, I32 depth) {
  * @param to The fiber being resumed.
  */
 static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * to) {
+    para_diag_swapno++;
     /* Pass 0: the depositing fiber is parked now, so publish its live frame depths. Runs first
      * so a CV shared by both fibers ends the swap with exactly `from` registered and `to` not. */
     if (from && from != to && from->si && from->si->si_cxstack) {
@@ -1645,9 +1728,10 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
     for (U32 k = 0; k < para_cvreg_active_n; k++) {
         para_cvreg_entry_t * e = &para_cvreg[para_cvreg_active[k]];
         int was_on_stack = e->on_stack;
-        e->on_stack = 0;
         if (was_on_stack)
-            continue; /* Pass 1 set this CV to its exact value; a pin here would gift a level */
+            continue; /* Pass 1 set this CV to its exact value; a pin here would gift a level.
+                       * Keep on_stack set so Pass 1c knows a live frame is being resumed. */
+        e->on_stack = 0;
         CvDEPTH(e->cv) = e->max_depth;
         _clean_landing_pad(aTHX_ e->cv, e->max_depth + 1);
         para_cvreg_pin(e);
@@ -1674,6 +1758,17 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
             continue; /* still claimed by a parked fiber: Pass 1b repinned it this swap */
         if (was_on_stack)
             continue; /* a live frame is entitled to the depth Pass 1 gave it */
+        /* The register only knows *claims*, never frames. A frame that is still live can be parked on
+         * either stack -- including in a nested runlevel of it, which is not visible from the si the
+         * context happens to have stored -- so ask the runlevel chains of both stacks before unwinding
+         * the fabricated depth. A live frame means nothing may use pad 0 or depth 0 until it pops, so
+         * the entry stays pinned and the next swap retries this settle. */
+        if (para_cv_live_on_swap(aTHX_ from, to, e->cv)) {
+            PARA_DIAGF("[diag] SETTLE-SKIP-LIVE swap=%lu cv=%p dep=%d\n", para_diag_swapno, (void*)e->cv, CvDEPTH(e->cv));
+            continue;
+        }
+        PARA_DIAGF("[diag] SETTLE swap=%lu from=%p to=%p cv=%p dep=%d -> 0 live=%d\n",
+            para_diag_swapno, (void*)from, (void*)to, (void*)e->cv, CvDEPTH(e->cv), para_cv_frame_live(aTHX_ e->cv));
         CvDEPTH(e->cv) = 0;
         _clean_landing_pad(aTHX_ e->cv, 1);
         para_cvreg_unpin(e); /* index k reused: do not advance */
@@ -1689,6 +1784,8 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
                 _clean_landing_pad(aTHX_ cv, CvDEPTH(cv) + 1);
         }
     }
+    para_diag_pads(aTHX_ "TO", si);
+    para_diag_pads(aTHX_ "FROM", from->si);
 }
 
 /**
