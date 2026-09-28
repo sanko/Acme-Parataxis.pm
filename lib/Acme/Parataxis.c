@@ -386,6 +386,8 @@ typedef struct para_fiber_t {
 
     SV * transfer_data; /**< Arguments or return values passed during yield/transfer */
 
+    void * owner;       /**< PerlInterpreter that allocated this record (arena ownership); NULL never matches */
+
     int id;          /**< Numeric ID of this fiber */
     int finished;    /**< Flag: 1 if the fiber has completed its entry_point */
     int started;     /**< Flag: 1 once the fiber has actually begun running */
@@ -2783,6 +2785,12 @@ DLLEXPORT int create_fiber(SV * user_code, SV * self_ref) {
 #endif
     }
 
+    /* `owner` stamps which interpreter's arena owns this record, its stacks, and the SVs it references. The C tables
+     * behind threads->create (perl_clone) are process-shared, so a cloned worker inherits the parent's opaque fiber
+     * ids; destroy_coro() refuses a record whose owner is not the current interpreter so a worker's destruct cannot
+     * free memory that belongs to the parent's pool. A recycled record re-binds to whoever is creating now. */
+    c->owner = (void *)aTHX;
+
     /* Reset the coderef's call depth so the fiber starts clean */
     if (user_code && user_code != &PL_sv_undef)
         force_depth_zero(user_code);
@@ -3206,6 +3214,16 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     para_fiber_t * c = fibers[fiber_id];
     if (!c)
         return;
+
+    /* A cloned interpreter (threads->create, and the spawn_blocking worker on top of it) duplicates the module's
+     * Fiber handles, which carry the parent's opaque fiber ids, and the worker's perl_destruct then DESTROYs them.
+     * The record itself, its stacks, and every SV it references were allocated in the parent interpreter's arena,
+     * so the worker must not free -- or decrement a reference on -- any of it, or the CRT aborts on the cross-pool
+     * free ("Free to wrong pool ... not ..."). The worker's copy is inert: the parent still owns the record and
+     * frees it when the parent's own Fiber object is destroyed. */
+    if (c->owner && c->owner != (void *)aTHX)
+        return;
+
     fibers[fiber_id] = NULL;
     if (job_refcount[fiber_id] > 0) {
         /* Keep the id out of the free list until every in-flight job it submitted has been reclaimed, so no newer
