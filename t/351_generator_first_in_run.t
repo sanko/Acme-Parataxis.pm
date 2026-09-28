@@ -15,8 +15,8 @@ subtest 'the first generator in a process, built inside a run, does not wedge th
     my @collected;
     my $fid;
     async {
-        my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 1 .. 3 } );
-        $fid = $gen->{fiber}->fid;
+        my $gen = Acme::Parataxis::Generator->new( code => sub ($y) { $y->($_) for 1 .. 3 } );
+        $fid = $gen->fiber->fid;
         while ( defined( my $v = $gen->next ) ) { push @collected, $v }
     };
     is "@collected", '1 2 3', 'every value arrived';
@@ -26,7 +26,7 @@ subtest 'the first generator in a process, built inside a run, does not wedge th
 subtest 'a later run can build and pull a generator too' => sub {
     my @collected;
     async {
-        my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 'x' .. 'z' } );
+        my $gen = Acme::Parataxis::Generator->new( code => sub ($y) { $y->($_) for 'x' .. 'z' } );
         while ( defined( my $v = $gen->next ) ) { push @collected, $v }
     };
     is "@collected",                            'x y z', 'every value arrived';
@@ -36,7 +36,7 @@ subtest 'the first generator in a run, pulled from a spawned child fiber' => sub
     my @collected;
     my $done = 0;
     async {
-        my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 1 .. 3 } );
+        my $gen = Acme::Parataxis::Generator->new( code => sub ($y) { $y->($_) for 1 .. 3 } );
         fiber {
             while ( defined( my $v = $gen->next ) ) { push @collected, $v }
             $done = 1;
@@ -49,7 +49,7 @@ subtest 'the first generator in a run, pulled from a spawned child fiber' => sub
 subtest 'the first generator in a run, pulled from a nursery child' => sub {
     my @collected;
     async {
-        my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 7, 14, 21 } );
+        my $gen = Acme::Parataxis::Generator->new( code => sub ($y) { $y->($_) for 7, 14, 21 } );
         nursery(
             sub ($n) {
                 $n->spawn(
@@ -67,8 +67,8 @@ subtest 'a generator built on the mainline still reserves fid 0' => sub {
 
     # The mainline is the one place that does still need the reserved fiber: nothing else has allocated a
     # fiber yet, so without it this generator would be fid 0 and hit the Windows resume-die escape.
-    my $gen = Acme::Parataxis::Generator->new( sub ($y) { $y->($_) for 1 .. 2 } );
-    ok $gen->{fiber}->fid >= 1, "the generator's fiber is not fid 0 (fid " . $gen->{fiber}->fid . ')';
+    my $gen = Acme::Parataxis::Generator->new( code => sub ($y) { $y->($_) for 1 .. 2 } );
+    ok $gen->fiber->fid >= 1, "the generator's fiber is not fid 0 (fid " . $gen->fiber->fid . ')';
     is Acme::Parataxis::get_live_fiber_count(), 1, 'the reserved fiber now exists and is parked';
     is $gen->next,                              1, 'and the generator still works';
 };

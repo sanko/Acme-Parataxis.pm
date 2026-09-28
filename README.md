@@ -371,12 +371,12 @@ spawned into and the inner nursery's `_join` awaits them as long as they stay re
 ## `Acme::Parataxis::Monitor`
 
 [`Acme::Parataxis::Monitor`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AMonitor) observes another fiber's death without owning it, like an
-Erlang monitor. `Monitor->new( $fiber )` (or `fid => $id`) returns a `Future`-like handle that resolves
+Erlang monitor. `Monitor->new( target => $fiber )` (or `fid => $id`) returns a `Future`-like handle that resolves
 exactly once when the target exits - `undef` for a clean end, the death error for a crash. Watching an already-dead
 target fires immediately, and the monitor never delays the target's own reaping.
 
 ```perl
-my $mon = Acme::Parataxis::Monitor->new($worker);
+my $mon = Acme::Parataxis::Monitor->new( target => $worker );
 my $err = $mon->await;    # undef, or the error the worker died with
 ```
 
@@ -1151,7 +1151,7 @@ queue, so the body is plain synchronous code and the generator works from any fi
 ```perl
 use Acme::Parataxis::Generator;
 
-my $fib = Acme::Parataxis::Generator->new( sub ($y) {
+my $fib = Acme::Parataxis::Generator->new( code => sub ($y) {
     my ( $a, $b ) = ( 0, 1 );
     while ( $a < 100 ) {
         $y->($a);

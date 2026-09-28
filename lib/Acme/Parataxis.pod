@@ -349,11 +349,11 @@ spawned into and the inner nursery's C<_join> awaits them as long as they stay r
 =head2 C<Acme::Parataxis::Monitor>
 
 L<C<Acme::Parataxis::Monitor>|Acme::Parataxis::Monitor> observes another fiber's death without owning it, like an
-Erlang monitor. C<Monitor-E<gt>new( $fiber )> (or C<fid =E<gt> $id>) returns a C<Future>-like handle that resolves
+Erlang monitor. C<Monitor-E<gt>new( target =E<gt> $fiber )> (or C<fid =E<gt> $id>) returns a C<Future>-like handle that resolves
 exactly once when the target exits - C<undef> for a clean end, the death error for a crash. Watching an already-dead
 target fires immediately, and the monitor never delays the target's own reaping.
 
-    my $mon = Acme::Parataxis::Monitor->new($worker);
+    my $mon = Acme::Parataxis::Monitor->new( target => $worker );
     my $err = $mon->await;    # undef, or the error the worker died with
 
 See L<Acme::Parataxis::Monitor> for C<await>, C<result>, C<error>, C<is_ready>, C<is_done>, C<target>, C<fid>, and
@@ -1109,7 +1109,7 @@ queue, so the body is plain synchronous code and the generator works from any fi
 
     use Acme::Parataxis::Generator;
 
-    my $fib = Acme::Parataxis::Generator->new( sub ($y) {
+    my $fib = Acme::Parataxis::Generator->new( code => sub ($y) {
         my ( $a, $b ) = ( 0, 1 );
         while ( $a < 100 ) {
             $y->($a);
