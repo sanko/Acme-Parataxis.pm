@@ -244,21 +244,27 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end ) {
 # to Mojo, or was live and the event never came back.
 sub layer_census ( $lost, $fd, $snap, $arms_at_end ) {
     return 'no mid-batch census: the sampler did not run' if !$snap;
-    my $bits = $snap->{bits};
-    return 'no mid-batch census: the sampler produced no data' if !defined $bits || !length $bits;
     my @out;
 
-    # Every lost read is classified on its own three bits. Branching on whether a *total* came out zero is worse
-    # than useless here, and has already been wrong in the field: a real failure had 2 of its 31 lost descriptors
-    # watched, which is overwhelmingly "unwatched" but not zero, so every zero-test passed and the verdict below
-    # reported all clear and named the reactor. The 29 descriptors nobody was watching out of 31 are the finding.
-    my ( %how, $k_all ) = ( (), 0 );
+    # Keyed by descriptor, never by position in the batch. An earlier per-index bit string assumed one descriptor
+    # produced exactly one bit, and a descriptor with no fileno broke that silently, so a batch index could name
+    # the wrong descriptor and the whole classification was fiction. This form has no positions to get wrong.
+    my %para   = map { $_ => 1 } grep { length } split /,/, ( $snap->{para}   // '' );
+    my %mojo   = map { $_ => 1 } grep { length } split /,/, ( $snap->{mojo}   // '' );
+    my %kernel = map { $_ => 1 } grep { length } split /,/, ( $snap->{kernel} // '' );
+    push @out, sprintf( 'mid-batch census: %d descriptors, %d of them without a fileno, driver->watch_count %d, '
+            . 'Parataxis holding %d, the reactor holding %d, the kernel calling %d readable',
+        $snap->{n}, $snap->{skipped}, $snap->{watch_ct}, scalar keys %para, scalar keys %mojo, scalar keys %kernel );
+
+    # Every lost read is classified on its own descriptor's three answers. Branching on whether a *total* came out
+    # zero is worse than useless here, and has already been wrong in the field: a real failure had 2 of its 31 lost
+    # descriptors watched, which is overwhelmingly "unwatched" but not zero, so every zero-test passed and the
+    # verdict reported all clear and named the reactor. The 29 nobody was watching out of 31 were the finding.
+    my ( %how, $k_all, $unmapped ) = ( (), 0, 0 );
     for my $i (@$lost) {
-        next if $i < 0 || $i >= length $bits;
-        my $v = ord( substr $bits, $i, 1 ) - ord('0');
-        my $p = $v & 1      ? 1 : 0;
-        my $m = $v & 2      ? 1 : 0;
-        my $k = $v & 4      ? 1 : 0;
+        my $d = $fd->[$i];
+        if ( !defined $d ) { $unmapped++; next }
+        my ( $p, $m, $k ) = ( $para{$d} ? 1 : 0, $mojo{$d} ? 1 : 0, $kernel{$d} ? 1 : 0 );
         $k_all += $k;
         $how{
             !$p && !$m ? ( $k ? 'unwatched by both layers, kernel had data'
@@ -269,9 +275,8 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end ) {
             :              'watched by both, kernel had data'
         }++;
     }
-    push @out, sprintf( 'mid-batch census over %d lost reads (%d descriptors sampled, driver->watch_count %d, '
-            . 'kernel had data for %d of the lost):',
-        scalar @$lost, $snap->{n}, $snap->{watch_ct}, $k_all );
+    push @out, sprintf( '  of the %d lost reads, %d were unmappable, and the kernel had data for %d:',
+        scalar @$lost, $unmapped, $k_all );
     push @out, "  $_: $how{$_}" for sort keys %how;
 
     # Late or never is the one thing a snapshot cannot answer by itself, so say it from the two arming tallies
@@ -374,22 +379,25 @@ sub armed_snapshot ( $loop, $waiters ) {
     my $reactor = eval { $loop->reactor };
     my $io      = ( $reactor && ref $reactor->{io} eq 'HASH' ) ? $reactor->{io} : {};
 
-    # One character per waiter, three bits each: 1 Parataxis has it in its watch table, 2 the reactor has the
-    # watch, 4 the kernel has data. A single string is what crosses back out of the fiber, and it is reduced here
-    # at the sample rather than shipped as live structures: the answer for each index is fixed at the instant the
-    # batch is fully armed, and nothing that happens afterwards can change it.
-    my $bits = '';
+    # One comma-joined, sorted descriptor list per layer, reduced here at the sample. A per-index bit string was
+    # tried first and was wrong: a descriptor with no fileno was skipped without appending, which shifts every
+    # later bit by one and makes the batch index point at the wrong descriptor, silently. Keying by descriptor
+    # assumes no positions at all, and a plain string crosses back out of the fiber intact.
+    my ( @para, @mojo, @kernel );
+    my $skipped = 0;
     for my $fh (@$waiters) {
-        my $fd = fileno($fh);
-        next unless defined $fd;
-        my $p = ( $driver && $driver->has_watch($fh) ) ? 1 : 0;
-        my $m = exists $io->{$fd}                      ? 1 : 0;
-        my $k = fd_readable($fh)                        ? 1 : 0;
-        $bits .= chr( ord('0') + $p + 2 * $m + 4 * $k );
+        my $fd = eval { fileno($fh) };
+        if ( !defined $fd ) { $skipped++; next }
+        push @para,   $fd if $driver && $driver->has_watch($fh);
+        push @mojo,   $fd if exists $io->{$fd};
+        push @kernel, $fd if fd_readable($fh);
     }
     return {
-        bits     => $bits,
+        para     => join( ',', sort { $a <=> $b } @para ),
+        mojo     => join( ',', sort { $a <=> $b } @mojo ),
+        kernel   => join( ',', sort { $a <=> $b } @kernel ),
         n        => scalar @$waiters,
+        skipped  => $skipped,
         arm_n    => $arm_n,
         watch_ct => ( $driver ? $driver->watch_count : -1 ),
         reactor  => ref($reactor) || 'none',
