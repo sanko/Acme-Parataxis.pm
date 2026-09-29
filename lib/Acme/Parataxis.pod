@@ -736,10 +736,11 @@ C<Fcntl::FD_SETSIZE()> dies at runtime.
 
 CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with
 C<threads-E<gt>create>) through C<spawn_blocking()>, which returns an C<Acme::Parataxis::Future> carrying the result.
-Because that machinery is the only part of this project that uses C<threads.pm>, it ships in its own distribution so
-this library never loads C<threads>, C<threads::shared>, or C<Thread::Queue>:
+C<Acme::Parataxis::Blocking> is the one module in this project that touches C<threads.pm>, and it keeps that lazy:
+nothing loads C<threads>, C<threads::shared>, or C<Thread::Queue> until the first C<spawn_blocking> call (they are
+C<require>d inside it), so loading any other part of this distribution stays free of any threads associations:
 
-    use Acme::Parataxis::Blocking qw[spawn_blocking];    # separate distribution
+    use Acme::Parataxis::Blocking qw[spawn_blocking];
 
     my $f = spawn_blocking( sub { heavy_parse($blob) } );
     my $parsed = $f->await;    # fibers kept running while $blob was parsed

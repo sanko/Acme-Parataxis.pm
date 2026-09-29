@@ -35,11 +35,10 @@ use Acme::Parataxis qw[:all];
 # defect cases failed 4/4 before the fix and are what this file exists to keep failing if the pin ever
 # stops being repaid.
 #
-# Known and still unfixed, tracked in TODO.md: a frame that leaves because perl *unwound* the scope rather
-# than because the sub returned -- a die propagating out of the CV, a cancelled wait -- leaves a stale claim
-# the registry never undercounts, so Pass 1c conservatively keeps the pin. In practice the fibre that died is
-# torn down and destroy_coro purges the claim, after which Pass 1c settles; only a fiber that is never
-# destroyed can leave the borrowed level standing until global destruction.
+# The unwound-path residual this file's original note called "still unfixed" is closed: a torn fiber's
+# claims are purged by destroy_coro and settled by the next swap's Pass 1c, and the never-destroyed-fiber
+# case is covered by para_cvreg_purge_fiber() at the deadlock and failed-run epilogue points (56b956e).
+# This file now only guards the two original defect cases above.
 
 sub run_child {
     my ($body) = @_;

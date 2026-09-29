@@ -750,11 +750,12 @@ Measured in C, because perl has no way to ask: `getconf FD_SETSIZE` is not a val
 
 CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with
 `threads->create`) through `spawn_blocking()`, which returns an `Acme::Parataxis::Future` carrying the result.
-Because that machinery is the only part of this project that uses `threads.pm`, it ships in its own distribution so
-this library never loads `threads`, `threads::shared`, or `Thread::Queue`:
+`Acme::Parataxis::Blocking` is the one module in this project that uses `threads.pm`, and it keeps that lazy:
+nothing loads `threads`, `threads::shared`, or `Thread::Queue` until the first `spawn_blocking` call (they are
+`require`d inside it), so loading any other part of this distribution stays free of any threads associations:
 
 ```perl
-use Acme::Parataxis::Blocking qw[spawn_blocking];    # separate distribution
+use Acme::Parataxis::Blocking qw[spawn_blocking];
 
 my $f = spawn_blocking( sub { heavy_parse($blob) } );
 my $parsed = $f->await;    # fibers kept running while $blob was parsed
