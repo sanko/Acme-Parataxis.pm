@@ -300,6 +300,20 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
     my $batch     = $snap->{n};
     push @out, sprintf( '  the driver was asked to arm %d watches by the sample and %d by the end of a %d-read batch',
         $at_sample, $at_end, $batch );
+
+    # What those arming calls were keyed on. %watches is fileno => the handle being watched, so two registrations
+    # that arrive with the same descriptor number collapse into a single slot and watch_count falls by exactly the
+    # number of repeats. That makes "300 arms but 176 watches" arithmetic rather than mysterious, and it is
+    # separable from a watch that was never made: a repeat here is a registration that happened, keyed to the wrong
+    # descriptor; no repeat here means the missing slots were never created at all. Stated as the count it is, with
+    # the repeats listed, because a bare shortfall has twice now been read as a ceiling.
+    if ( defined $snap->{arm_distinct} ) {
+        my @dupes = grep { length } split /,/, ( $snap->{arm_dupes} // '' );
+        push @out, sprintf( '  those %d arming calls used %d distinct descriptors, collapsing %d watches into a '
+                . 'descriptor number claimed more than once: %s',
+            $at_sample, $snap->{arm_distinct}, $at_sample - $snap->{arm_distinct},
+            @dupes ? fd_span( \@dupes ) : 'none, so no two registrations shared a descriptor' );
+    }
     my $never = $batch - $at_end;
     push @out,
         $never > 0
@@ -432,7 +446,7 @@ sub armed_snapshot ( $loop, $waiters ) {
     # later bit by one and makes the batch index point at the wrong descriptor, silently. Keying by descriptor
     # assumes no positions at all, and a plain string crosses back out of the fiber intact.
     my ( @para, @mojo, @kernel, @peek );
-    my ( %seen, @dupe );
+    my ( %seen, %repeat, @dupe );
     my $skipped = 0;
     for my $fh (@$waiters) {
         my $fd = eval { fileno($fh) };
@@ -458,6 +472,16 @@ sub armed_snapshot ( $loop, $waiters ) {
         dupes    => join( ',', sort { $a <=> $b } @dupe ),
         skipped  => $skipped,
         arm_n    => $arm_n,
+        # The descriptor each arming call actually passed in, distinct count and repeats. Without this the census
+        # compares "300 arms" against "176 watches" and has no way to tell a collapsed key from a missing one: both
+        # arithmetic routes land on the same two numbers, and the 176 figure has been sitting in the log looking like
+        # a resource bound. _track_watch keys by fileno, so a number claimed twice collapses two registrations into
+        # one and the count falls by exactly the number of repeats. This is the line that settles it.
+        arm_distinct => scalar keys %{ { map { $_ => 1 } grep { $_ ne '?' } split /,/, ( $arm_fds // '' ) } },
+        arm_dupes    => join( ',', sort { $a <=> $b }
+            grep { $_ ne '?' }
+            grep { $repeat{$_}++ > 0 }
+            ( split /,/, ( $arm_fds // '' ) ) ),
         watch_ct => ( $driver ? $driver->watch_count : -1 ),
         reactor  => ref($reactor) || 'none',
     };

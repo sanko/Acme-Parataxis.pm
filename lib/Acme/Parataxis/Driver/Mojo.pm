@@ -32,9 +32,20 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
     method _watch ( $fh, $dir, $cb ) {
         my $fd = fileno($fh);
         croak 'Mojo driver cannot watch a closed filehandle' unless defined $fd;
+
+        # has_watch() compares handles, not descriptor numbers, so a false here means this handle has no slot of its
+        # own -- it is new to us, or the number it was just given belonged to a closed handle we were still holding.
+        # Either way the callbacks keyed to this number are not this handle's, and a stale direction left behind is
+        # live: a handle that only ever asked to read would have POLLOUT set from the previous owner and its dead
+        # write callback fired. Clear the slot before claiming it.
+        my $fresh = !$self->has_watch($fh);
+        if ($fresh) {
+            delete $read_cb{$fd};
+            delete $write_cb{$fd};
+        }
         if   ( $dir eq 'r' ) { $read_cb{$fd}  = $cb }
         else                 { $write_cb{$fd} = $cb }
-        if ( !$self->has_watch($fh) ) {
+        if ($fresh) {
             try { $fh->blocking(0) } catch ($e) {
             }    # a handle that refuses is still worth watching
             $reactor->io(

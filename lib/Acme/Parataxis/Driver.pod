@@ -91,6 +91,11 @@ Both directions share one slot per filehandle, because every loop in support off
 descriptor - asking to read and write the same C<$fh> leaves C<watch_count> at 1. A value that is not a filehandle is
 simply not watched, so this returns false rather than dying.
 
+The slot is keyed by descriptor number but matched by handle, which are not the same thing: the OS recycles a
+descriptor number the moment a handle is closed, so a slot left behind by a handle that was watched and then closed
+must not answer for whichever unrelated handle the number is handed to next. It does not, so this returns false for
+a new handle that happens to be sitting on a retired number, and C<unwatch> refuses it for the same reason.
+
 =head2 C<watch_count( )>
 
 How many filehandles are currently watched.

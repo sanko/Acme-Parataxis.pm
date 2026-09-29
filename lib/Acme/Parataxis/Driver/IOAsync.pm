@@ -22,6 +22,14 @@ class Acme::Parataxis::Driver::IOAsync v0.1.1 : isa(Acme::Parataxis::Driver) {
     method _watch ( $fh, $dir, $cb ) {
         my $fd = fileno($fh);
         croak 'IOAsync driver cannot watch a closed filehandle' unless defined $fd;
+
+        # As in Driver::Mojo: has_watch() compares handles rather than descriptor numbers, so a false here means this
+        # handle owns no slot yet and any callbacks filed under this number belong to a handle that is gone. Clearing
+        # them first keeps a recycled number from inheriting the previous owner's direction.
+        if ( !$self->has_watch($fh) ) {
+            delete $read_cb{$fd};
+            delete $write_cb{$fd};
+        }
         if   ( $dir eq 'r' ) { $read_cb{$fd}  = $cb }
         else                 { $write_cb{$fd} = $cb }
         $self->_track_watch($fh);
