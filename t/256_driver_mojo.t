@@ -4,6 +4,7 @@ use blib;
 use Test2::V1 -ipP;
 use Config         qw[%Config];
 use IO::Socket::INET ();
+use Socket         qw[MSG_PEEK MSG_DONTWAIT];
 use Time::HiRes      qw[time];
 use Acme::Parataxis  qw[async fiber await_sleep await_read await_write with_timeout];
 #
@@ -174,7 +175,7 @@ ok $N >= 8,                             "the high-volume workload kept a workabl
 # their descriptors clustered past a ceiling, or whether await_read hit its timeout (undef) or returned something
 # else. Those three answers point at different bugs, so the failure diagnostic carries all of them along with the
 # reactor actually in play. Only ever runs after the count assertion has already failed.
-sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end ) {
+sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
     my @lost = grep { !( defined $got->[$_] && $got->[$_] == 1 ) } 0 .. $#$got;
     my @kept = grep {   defined $got->[$_] && $got->[$_] == 1     } 0 .. $#$got;
     my @out  = ( 'lost ' . @lost . " of $n parked reads" );
@@ -234,7 +235,7 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end ) {
     # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
     push @out, sprintf( 'batch elapsed %.0fms (await_read timeout was 5000ms)', $ms );
 
-    push @out, layer_census( \@lost, $fd, $snap, $arms_end );
+    push @out, layer_census( \@lost, $fd, $snap, $arms_end, $awaiting );
     return join "\n", @out;
 }
 
@@ -242,7 +243,7 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end ) {
 # the kernel is asked independently whether it is readable, so the loss lands in exactly one layer. A bare "lost 66
 # of 300" cannot do this: the count is the same whether the watch was never made, was made and dropped on the way
 # to Mojo, or was live and the event never came back.
-sub layer_census ( $lost, $fd, $snap, $arms_at_end ) {
+sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
     return 'no mid-batch census: the sampler did not run' if !$snap;
     my @out;
 
@@ -252,9 +253,21 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end ) {
     my %para   = map { $_ => 1 } grep { length } split /,/, ( $snap->{para}   // '' );
     my %mojo   = map { $_ => 1 } grep { length } split /,/, ( $snap->{mojo}   // '' );
     my %kernel = map { $_ => 1 } grep { length } split /,/, ( $snap->{kernel} // '' );
-    push @out, sprintf( 'mid-batch census: %d descriptors, %d of them without a fileno, driver->watch_count %d, '
-            . 'Parataxis holding %d, the reactor holding %d, the kernel calling %d readable',
-        $snap->{n}, $snap->{skipped}, $snap->{watch_ct}, scalar keys %para, scalar keys %mojo, scalar keys %kernel );
+    my %peek   = map { $_ => 1 } grep { length } split /,/, ( $snap->{peek}   // '' );
+    push @out, sprintf( 'mid-batch census: %d waiters on %d distinct descriptors (%d without a fileno), '
+            . 'driver->watch_count %d, Parataxis holding %d, the reactor holding %d, select() calling %d readable, '
+            . 'recv(MSG_PEEK) finding %d',
+        $snap->{n}, $snap->{distinct}, $snap->{skipped}, $snap->{watch_ct},
+        scalar keys %para, scalar keys %mojo, scalar keys %kernel, scalar keys %peek );
+    push @out, '  descriptors claimed by more than one waiter: ' . fd_span( [ split /,/, ( $snap->{dupes} // '' ) ] )
+        if length( $snap->{dupes} // '' );
+    my @disagree = grep { ( $kernel{$_} ? 1 : 0 ) != ( $peek{$_} ? 1 : 0 ) } keys %kernel, keys %peek;
+    push @out, '  select() and recv(MSG_PEEK) disagree about ' . scalar(@disagree)
+        . ' descriptors, so trust neither: the readable count above is not evidence'
+        if @disagree;
+    push @out, "  $awaiting of them were still reporting no data when the 500ms wait ran out, so the readable"
+        . ' count above is a floor, not the whole picture'
+        if $awaiting > 0;
 
     # Every lost read is classified on its own descriptor's three answers. Branching on whether a *total* came out
     # zero is worse than useless here, and has already been wrong in the field: a real failure had 2 of its 31 lost
@@ -367,6 +380,20 @@ sub fd_readable ($fh) {
     return $n > 0 ? 1 : 0;
 }
 
+# The same question asked a second way, because the whole census rests on fd_readable and select() is the one
+# call here that behaves differently per platform -- a leg whose kernel reports nothing readable when 300 sockets
+# were just written to is either a real and startling fact or this function lying. recv() with MSG_PEEK|MSG_DONTWAIT
+# does not block and consumes nothing, so the two can be compared instead of one being believed.
+#   1 data is waiting, 0 none is, -1 MSG_DONTWAIT is unavailable here so the question was not asked.
+# The answer is read out of the buffer, not recv()'s return value: on perl 5.44.0 that returns '' after filling the
+# buffer with five bytes, so a referee trusting it reports "no data" on a socket that is demonstrably holding one.
+sub fd_peekable ($fh) {
+    return -1 if !defined &Socket::MSG_DONTWAIT;
+    my $scratch = '';
+    recv( $fh, $scratch, 1, MSG_PEEK | MSG_DONTWAIT );
+    return length($scratch) ? 1 : 0;
+}
+
 # What each layer believed it was holding, sampled at the instant every watch is armed and every byte written and
 # before the scheduler has resumed anything. This has to be taken mid-batch: detach_loop() unwinds every watch and
 # timer at the end of the subtest, so a count read after the run is zero on all three sides and cannot tell them
@@ -374,6 +401,27 @@ sub fd_readable ($fh) {
 #   Parataxis watches it, the reactor does not  -> Driver::Mojo::_watch armed its own table but never reached Mojo
 #   neither holds it                             -> await_read never registered a watch at all
 #   both hold it, the kernel calls it readable  -> the watch was live and the loss is above the kernel, in Mojo
+# Wait until every waiter reports data, or the budget runs out, and return how many are still waiting. The census
+# asks the kernel whether the byte is there, so the byte has to have arrived before the question means anything.
+# Loopback delivery is not instantaneous: on this box a byte written to a loopback peer took about a millisecond to
+# show up as readable, and a macOS leg's census saw none of 300 -- which reads as "the batch never wrote to it" when
+# it only ever meant "the sample was taken before the data landed". This is a synchronous loop in the main fiber,
+# so no parked fiber gets a chance to wake and eat its byte first, and the census still sees the batch as written.
+sub wait_for_data ( $waiters, $budget_ms ) {
+    my @fds = grep { defined } map { eval { fileno($_) } } @$waiters;
+    my $deadline = time + $budget_ms / 1000;
+    my $missing  = scalar @fds;
+    while ( $missing > 0 ) {
+        my $remain = $deadline - time;
+        last if $remain <= 0;
+        my $v = '';
+        vec( $v, $_, 1 ) = 1 for @fds;
+        my $ready = select( $v, undef, undef, $remain > 0.05 ? 0.05 : $remain ) || 0;
+        $missing = scalar(@fds) - $ready;
+    }
+    return $missing;
+}
+
 sub armed_snapshot ( $loop, $waiters ) {
     my $driver  = $LIVE_DRIVER;
     my $reactor = eval { $loop->reactor };
@@ -383,20 +431,31 @@ sub armed_snapshot ( $loop, $waiters ) {
     # tried first and was wrong: a descriptor with no fileno was skipped without appending, which shifts every
     # later bit by one and makes the batch index point at the wrong descriptor, silently. Keying by descriptor
     # assumes no positions at all, and a plain string crosses back out of the fiber intact.
-    my ( @para, @mojo, @kernel );
+    my ( @para, @mojo, @kernel, @peek );
+    my ( %seen, @dupe );
     my $skipped = 0;
     for my $fh (@$waiters) {
         my $fd = eval { fileno($fh) };
         if ( !defined $fd ) { $skipped++; next }
+
+        # Both layers key their tables by descriptor, so a descriptor claimed by two waiters is one watch, not two.
+        # That makes "300 reads" and "227 watches" arithmetically consistent without anything being lost at all, and
+        # this whole diagnostic has been comparing watch counts against read counts without ever checking it.
+        push @dupe, $fd if $seen{$fd}++;
         push @para,   $fd if $driver && $driver->has_watch($fh);
         push @mojo,   $fd if exists $io->{$fd};
         push @kernel, $fd if fd_readable($fh);
+        my $p = fd_peekable($fh);
+        push @peek, $fd if $p;
     }
     return {
         para     => join( ',', sort { $a <=> $b } @para ),
         mojo     => join( ',', sort { $a <=> $b } @mojo ),
         kernel   => join( ',', sort { $a <=> $b } @kernel ),
+        peek     => join( ',', sort { $a <=> $b } @peek ),
         n        => scalar @$waiters,
+        distinct => scalar keys %seen,
+        dupes    => join( ',', sort { $a <=> $b } @dupe ),
         skipped  => $skipped,
         arm_n    => $arm_n,
         watch_ct => ( $driver ? $driver->watch_count : -1 ),
@@ -415,6 +474,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my @fd;                 # the descriptor each fiber actually parked on, captured before the batch runs
     my $snap;               # the three layers' views, sampled while the batch is still live
     my $arms_end;           # the same tally once the batch has finished, to tell "late" from "never"
+    my $awaiting = -1;      # descriptors still reporting no data at the sample, i.e. the waiter's budget ran out
     my $t0 = time;
     Acme::Parataxis::run(
         sub {
@@ -429,8 +489,10 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
             syswrite $writers->[$_], 'x' for 0 .. $N - 1;
 
             # Every byte is written and nothing has been resumed yet, so this is the last moment at which "who
-            # thinks it is watching what" is a meaningful question.
-            $snap = armed_snapshot( $loop, $waiters );
+            # thinks it is watching what" is a meaningful question. The data has to have landed first, or the
+            # kernel is being asked about delivery latency rather than about the watch.
+            $awaiting = wait_for_data( $waiters, 500 );
+            $snap     = armed_snapshot( $loop, $waiters );
             $_->await for @fibers;
         }
     );
@@ -440,7 +502,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
     is $woke, $N, "all $N parked reads woke with their byte"
-        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap, $arms_end );
+        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap, $arms_end, $awaiting );
     is $attached_submit, 0,  "no worker-pool job was submitted for any of the $N reads";
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
