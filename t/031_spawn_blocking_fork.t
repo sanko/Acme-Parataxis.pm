@@ -51,32 +51,56 @@ subtest 'the whole point: CPU work runs off the scheduler with no threads anywhe
 };
 
 subtest 'the caller keeps running while the child burns' => sub {
-    my ( $ticks, $done ) = ( 0, 0 );
+    my ( $at, $done ) = ( [], 0 );
     my $rv = run(
         sub {
-            # The child is given a wall-clock budget rather than a loop count, so the window in which the run loop has
-            # to prove it is free is a known length and the count below means something.
+            # The child is given a wall-clock budget rather than a loop count, and reports the window it was actually
+            # running in, so the bystander's progress can be compared against the child's lifetime rather than against
+            # a tick count.
             my $t0   = time;
             my $secs = 1;
             my $f    = spawn_blocking_fork(
                 sub {
-                    my $end = time + $_[0];
-                    my $s   = 0;
+                    my $start = time;
+                    my $end   = $start + $_[0];
+                    my $s     = 0;
                     while ( time < $end ) { $s += $_ % 7 for 1 .. 20_000 }
-                    return "slow:$s";
+                    return [ $s, $start, time ];
                 }, $secs
             );
             fiber {    # a bystander fiber that only makes progress if the loop is not blocked on the child
-                while ( !$done && time - $t0 < $secs + 1 ) { await_sleep(20); $ticks++ }
+                while ( !$done && time - $t0 < $secs + 1 ) {
+                    await_sleep(20);
+                    push @$at, time;
+                }
             };
-            my $v    = $f->await;
+            my $v = $f->await;
             $done = 1;
             return { v => $v, elapsed => time - $t0 };
         }
     );
-    like( $rv->{v}, qr/^slow:\d+$/, 'the slow closure still returned its result' );
+    like( "$rv->{v}[0]", qr/^\d+$/, 'the slow closure still returned its result' );
     cmp_ok( $rv->{elapsed}, '>=', 0.9, sprintf( 'the caller really waited for the child (%.2fs)', $rv->{elapsed} ) );
-    cmp_ok( $ticks, '>', 20, "the run loop kept scheduling other fibers the whole time ($ticks wakeups)" );
+
+    # Deliberately not "at least N wakeups in N/20ms": timer granularity is the OS's business, and macOS resolves a
+    # 20ms sleep at roughly 90ms, which turned a tick-count assertion into a platform test. What matters is that the
+    # bystander was scheduled *while the child was still working*, so its wake times are compared against the window
+    # the child reported for itself. A run loop blocked on the child could only wake after that window closed.
+    my ( $start, $end ) = @{$rv->{v}}[ 1, 2 ];
+    my @inside = grep { $_ >= $start && $_ <= $end } @$at;
+    cmp_ok( scalar @inside, '>=', 3, sprintf( 'the bystander fiber ran %d times inside the childs window', scalar @inside ) );
+    SKIP: {
+        skip 'nothing to measure without a wake inside the window, which the assertion above reports', 1
+            if !@inside;
+
+        # A loop blocked on the child could only wake at the far end of the window, so the first wake landing in its
+        # first half is the part that distinguishes "kept running" from "was released once at the end". The half is a
+        # margin, not a specification: macOS resolves a 20ms sleep at roughly 90ms, and a loaded runner can be
+        # coarser still.
+        cmp_ok( $inside[0], '<', $start + ( $end - $start ) / 2,
+            sprintf( 'and its first wake inside that window came %.0fms into a %.0fms window',
+                ( $inside[0] - $start ) * 1000, ( $end - $start ) * 1000 ) );
+    }
 };
 
 subtest 'marshalling: args, structured results, and copy-in copy-out' => sub {
