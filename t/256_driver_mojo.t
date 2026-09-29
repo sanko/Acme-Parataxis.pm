@@ -208,14 +208,20 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms ) {
         $all_fd[0], $all_fd[-1], $lost_fd[0] > $mid ? 'above' : 'below', $mid )
         if @lost_fd && @all_fd > 1;
 
-    # Which reactor was really in play. Mojo::Reactor::Poll is the wrapper for all of the backends, so name the
-    # backend too: on macOS it means kqueue, and that is the detail that separates a poll-bound bug from a kqueue one.
-    my $reactor = eval { $loop->reactor } || 'unknown';
-    my $backend = 'unknown';
-    for my $b (qw[KQueue Epoll Poll]) {
-        $backend = $b if ref($reactor) ne 'unknown' && $reactor->isa( "Mojo::Reactor::$b" );
-    }
-    push @out, 'reactor: ' . ref($reactor) . " (backend: $backend)";
+    # Which reactor was in play. The class alone is not enough to name the waiting syscall, and a previous version of
+    # this line overclaimed: it walked KQueue/Epoll/Poll and printed "backend: Poll" on a macOS leg, but
+    # Mojo::Reactor::Poll is the only class there and it fronts all of them, so that label was never evidence of
+    # anything. The syscall is chosen inside core's IO::Poll::_poll, which exposes no accessor to ask, so say that
+    # rather than invent one. MOJO_REACTOR overrides the whole choice, so report it when set.
+    my $reactor = eval { $loop->reactor };
+    push @out, 'reactor: ' . ( ref($reactor) || 'unknown (no reactor)' )
+        . ( $ENV{MOJO_REACTOR} ? " (MOJO_REACTOR=$ENV{MOJO_REACTOR})" : '' );
+    push @out, 'the wait syscall is chosen inside IO::Poll::_poll and is not introspectable; '
+        . 'read it from the d_* row below';
+
+    # The d_* row is therefore the real evidence, and FD_SETSIZE is only a bound on the select(2) fallback, so it
+    # means something different per backend. Reporting the number alone invited reading a descriptor ceiling into a
+    # kqueue run, which the two observed losses contradict.
     push @out, sprintf( 'FD_SETSIZE %d, d_poll %s, d_ppoll %s, d_epoll %s, d_kqueue %s',
         Acme::Parataxis::fd_setsize(), map { defined $Config{$_} ? $Config{$_} : 'undef' }
         qw[d_poll d_ppoll d_epoll d_kqueue] );
