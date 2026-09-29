@@ -67,7 +67,10 @@ sub run_one_clone {
     );
     return ( $rc, $buf, $joined );
 }
-subtest 'a scheduled interpreter can be cloned with the overrides installed but nothing parked' => sub {
+# The payload size goes in the subtest name so every run says which size it actually exercised. A green run that
+# silently fell back to the default is the exact failure this test cannot otherwise catch: it passed at 4 MB while
+# the corruption was still live, and a misconfigured CI env var would have reproduced that invisibly.
+subtest "a scheduled interpreter can be cloned at ${PAYLOAD_MB} MB with the overrides on, nothing parked" => sub {
     my ( $rc, $buf, $joined ) = run_one_clone(0);
     is $joined, $PAYLOAD_MB * 1_048_576, 'the cloned interpreter returned the payload length';
     is $rc,     undef,                   'no read happened, so no read result exists';
