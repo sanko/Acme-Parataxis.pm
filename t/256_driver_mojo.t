@@ -174,7 +174,7 @@ ok $N >= 8,                             "the high-volume workload kept a workabl
 # their descriptors clustered past a ceiling, or whether await_read hit its timeout (undef) or returned something
 # else. Those three answers point at different bugs, so the failure diagnostic carries all of them along with the
 # reactor actually in play. Only ever runs after the count assertion has already failed.
-sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap ) {
+sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end ) {
     my @lost = grep { !( defined $got->[$_] && $got->[$_] == 1 ) } 0 .. $#$got;
     my @kept = grep {   defined $got->[$_] && $got->[$_] == 1     } 0 .. $#$got;
     my @out  = ( 'lost ' . @lost . " of $n parked reads" );
@@ -234,7 +234,7 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap ) {
     # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
     push @out, sprintf( 'batch elapsed %.0fms (await_read timeout was 5000ms)', $ms );
 
-    push @out, layer_census( \@lost, $fd, $snap );
+    push @out, layer_census( \@lost, $fd, $snap, $arms_end );
     return join "\n", @out;
 }
 
@@ -242,36 +242,75 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap ) {
 # the kernel is asked independently whether it is readable, so the loss lands in exactly one layer. A bare "lost 66
 # of 300" cannot do this: the count is the same whether the watch was never made, was made and dropped on the way
 # to Mojo, or was live and the event never came back.
-sub layer_census ( $lost, $fd, $snap ) {
+sub layer_census ( $lost, $fd, $snap, $arms_at_end ) {
     return 'no mid-batch census: the sampler did not run' if !$snap;
     my $bits = $snap->{bits};
     return 'no mid-batch census: the sampler produced no data' if !defined $bits || !length $bits;
+    my @out;
 
-    # One character per batch index, so index into the string rather than looking a descriptor up. @$lost holds
-    # *indices*, not descriptors, and conflating the two asks each layer about the wrong things entirely.
-    my ( $p, $m, $k ) = ( 0, 0, 0 );
+    # Every lost read is classified on its own three bits. Branching on whether a *total* came out zero is worse
+    # than useless here, and has already been wrong in the field: a real failure had 2 of its 31 lost descriptors
+    # watched, which is overwhelmingly "unwatched" but not zero, so every zero-test passed and the verdict below
+    # reported all clear and named the reactor. The 29 descriptors nobody was watching out of 31 are the finding.
+    my ( %how, $k_all ) = ( (), 0 );
     for my $i (@$lost) {
         next if $i < 0 || $i >= length $bits;
         my $v = ord( substr $bits, $i, 1 ) - ord('0');
-        $p += $v & 1;
-        $m += $v & 2 ? 1 : 0;
-        $k += $v & 4 ? 1 : 0;
+        my $p = $v & 1      ? 1 : 0;
+        my $m = $v & 2      ? 1 : 0;
+        my $k = $v & 4      ? 1 : 0;
+        $k_all += $k;
+        $how{
+            !$p && !$m ? ( $k ? 'unwatched by both layers, kernel had data'
+                             : 'unwatched by both layers, kernel had nothing' )
+            : $p && !$m  ? 'watched by Parataxis, absent from the reactor'
+            : !$p && $m  ? 'in the reactor, absent from Parataxis'
+            : !$k        ? 'watched by both, kernel had nothing'
+            :              'watched by both, kernel had data'
+        }++;
     }
-    my $n = scalar @$lost;
-    my @out;
-    push @out, sprintf( 'mid-batch census over %d lost reads: Parataxis watched %d, the reactor held %d, '
-            . 'the kernel called %d readable (driver->watch_count %d, %d descriptors sampled)',
-        $n, $p, $m, $k, $snap->{watch_ct}, $snap->{n} );
+    push @out, sprintf( 'mid-batch census over %d lost reads (%d descriptors sampled, driver->watch_count %d, '
+            . 'kernel had data for %d of the lost):',
+        scalar @$lost, $snap->{n}, $snap->{watch_ct}, $k_all );
+    push @out, "  $_: $how{$_}" for sort keys %how;
 
-    # The verdict, stated as a consequence of the three numbers above rather than as a guess.
-    my $why
-        = $p == 0 ? 'the watch was never registered, so the fault is in await_read or Driver::Mojo::_watch'
-        : $m == 0 ? 'Parataxis armed its own table but the watch never reached the reactor, so the fault is in '
-        . 'Driver::Mojo::_watch'
-        : $k == 0 ? 'the descriptor was watched but not readable, so the batch never wrote to it'
-        :          'all three layers held it and the kernel had data, so the watch was live and the event was lost '
-        . 'above the kernel, inside the reactor';
-    push @out, "reading of the loss: $why";
+    # Late or never is the one thing a snapshot cannot answer by itself, so say it from the two arming tallies
+    # against the size of the batch. Phrased off the counts rather than off "the unwatched fibers", which would
+    # claim there were unwatched reads in the cases where every read was watched and the fault is elsewhere.
+    my $at_sample = defined $snap->{arm_n}    ? $snap->{arm_n}    : -1;
+    my $at_end    = defined $arms_at_end     ? $arms_at_end     : -1;
+    my $batch     = $snap->{n};
+    push @out, sprintf( '  the driver was asked to arm %d watches by the sample and %d by the end of a %d-read batch',
+        $at_sample, $at_end, $batch );
+    my $never = $batch - $at_end;
+    push @out,
+        $never > 0
+        ? sprintf( '  so %d of the %d reads were NEVER asked to arm a watch, even by the end of the batch',
+            $never, $batch )
+        : $at_sample < $at_end
+        ? '  so every read did arm, but some armed only after the sample: they were LATE'
+        : '  so every read was armed by the sample and none armed after it';
+
+    # The dominant class, with its reading spelled out. Every class is listed above, so this is a summary of what
+    # is already on the record rather than the only thing on it.
+    my %why = (
+        'unwatched by both layers, kernel had nothing' =>
+            'the descriptor was never watched and never became readable, so there was nothing to wake on',
+        'unwatched by both layers, kernel had data' =>
+            'the kernel had data and no layer was watching: the watch was never registered for these reads',
+        'watched by Parataxis, absent from the reactor' =>
+            'Parataxis armed its own table but the watch never reached the reactor, so the fault is in '
+            . 'Driver::Mojo::_watch',
+        'in the reactor, absent from Parataxis' =>
+            'the reactor held a watch Parataxis had not recorded, so the two tables disagree',
+        'watched by both, kernel had nothing' =>
+            'watched by both layers but the descriptor was not readable, so the batch never wrote to it',
+        'watched by both, kernel had data' =>
+            'the watch was live on both sides and the kernel had data, so the readiness event was lost above the '
+            . 'kernel, inside the reactor',
+    );
+    my ($top) = sort { $how{$b} <=> $how{$a} || $a cmp $b } keys %how;
+    push @out, "reading of the loss: $why{$top}" if $top;
     return join "\n", @out;
 }
 
@@ -296,6 +335,22 @@ BEGIN {
     no warnings 'redefine';
     my $orig_wrap = \&Acme::Parataxis::Driver::wrap;
     *Acme::Parataxis::Driver::wrap = sub { my $d = $orig_wrap->(@_); $LIVE_DRIVER = $d; return $d };
+}
+
+# Whether a watch was armed late or never armed at all is invisible from any count taken after the fact: by then
+# the fiber has finished and unwatched its descriptor either way, and the census sees the same thing. So count the
+# _watch calls as they happen and let the census compare that tally against its own snapshot. A count that is short
+# at the sample and complete by the end means the fibers were late; a count that is still short at the end means
+# they were never asked at all. Test-side only, the original is always called, and the tally is two scalars.
+my ( $arm_n, $arm_fds );
+{
+    no warnings 'redefine';
+    my $orig_watch = \&Acme::Parataxis::Driver::Mojo::_watch;
+    *Acme::Parataxis::Driver::Mojo::_watch = sub ( $self, $fh, $dir, $cb ) {
+        $arm_n++;
+        $arm_fds .= ( fileno($fh) // '?' ) . ',';
+        return $orig_watch->( $self, $fh, $dir, $cb );
+    };
 }
 
 # Is the kernel willing to read this descriptor right now? The referee in the three-way comparison below: whatever
@@ -335,6 +390,7 @@ sub armed_snapshot ( $loop, $waiters ) {
     return {
         bits     => $bits,
         n        => scalar @$waiters,
+        arm_n    => $arm_n,
         watch_ct => ( $driver ? $driver->watch_count : -1 ),
         reactor  => ref($reactor) || 'none',
     };
@@ -345,9 +401,12 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my $loop = Mojo::IOLoop->new;
     Acme::Parataxis->attach_loop($loop);
     $submits = 0;
+    $arm_n   = 0;           # this subtest's arming tally only, not the whole file's
+    $arm_fds = '';
     my @got;
     my @fd;                 # the descriptor each fiber actually parked on, captured before the batch runs
     my $snap;               # the three layers' views, sampled while the batch is still live
+    my $arms_end;           # the same tally once the batch has finished, to tell "late" from "never"
     my $t0 = time;
     Acme::Parataxis::run(
         sub {
@@ -369,10 +428,11 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     );
     my $ms              = ( time - $t0 ) * 1000;
     my $attached_submit = $submits;
+    $arms_end = $arm_n;
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
     is $woke, $N, "all $N parked reads woke with their byte"
-        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap );
+        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap, $arms_end );
     is $attached_submit, 0,  "no worker-pool job was submitted for any of the $N reads";
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
