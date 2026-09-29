@@ -4,15 +4,52 @@ package Acme::Parataxis::Blocking v0.1.1 {
     use Config;
     use Exporter        qw[import];
     use Carp            qw[croak];
-    use Acme::Parataxis qw[fiber await_sleep];
+    use Acme::Parataxis qw[fiber await_sleep await_read];
     use Acme::Parataxis::Future;
     use Acme::Parataxis::Semaphore;
-    our %EXPORT_TAGS = ( all => [ our @EXPORT_OK = qw[spawn_blocking set_max_blocking_threads max_blocking_threads] ] );
+    our %EXPORT_TAGS = ( all => [
+            our @EXPORT_OK = qw[
+            spawn_blocking set_max_blocking_threads max_blocking_threads
+            spawn_blocking_fork set_max_blocking_forks max_blocking_forks kill_blocking_fork
+            ]
+    ] );
 
     # spawn_blocking interpreter pool: at most $SB_MAX background interpreters run closures at once, bounded by an
     # Acme::Parataxis::Semaphore created on first use (PARATAXIS_SB_THREADS overrides the default 4).
     my $SB_MAX = do { my $e = $ENV{PARATAXIS_SB_THREADS}; ( defined $e && $e =~ /\A[1-9][0-9]*\z/ ) ? int($e) : 4 };
     my $SB_PERMITS;    # Acme::Parataxis::Semaphore, capacity $SB_MAX; down() before a thread spawn, up() at reap
+
+    # spawn_blocking_fork process pool: a separate semaphore and a separate cap, because a forked child and a cloned
+    # interpreter are different resources and coupling them would make one starve the other silently.
+    my $SBF_MAX = do { my $e = $ENV{PARATAXIS_SBF_FORKS}; ( defined $e && $e =~ /\A[1-9][0-9]*\z/ ) ? int($e) : 4 };
+    my $SBF_PERMITS;    # Acme::Parataxis::Semaphore, capacity $SBF_MAX; down() before a fork, up() at reap
+    my %SBF_CHILDREN;    # Future address => the pid of the child that will resolve it, so kill_blocking_fork() can find it
+
+    # Read exactly $want bytes off a pipe, parking between chunks, and return what arrived. Deliberately not built on
+    # await_read's return value: that is a readiness flag (1) rather than a byte count, and a closed write end reports
+    # readiness too, so 0 bytes off sysread here is the only honest EOF signal. A negative readiness means the child is
+    # simply still busy, which is not an error and never ends the read.
+    sub _fork_read_exactly ( $fh, $want, $timeout ) {
+        my $buf = '';
+        while ( length($buf) < $want ) {
+            my $ready = await_read( $fh, $timeout );
+            # The deadline came round with the child still running: its own runtime is the only clock that matters here
+            next if $ready < 0;
+            my $n = sysread( $fh, my $chunk, $want - length($buf) );
+            last if !defined($n) || $n == 0;    # write end closed, or the pipe broke
+            $buf .= $chunk;
+        }
+        return $buf;
+    }
+
+    # Reap a child without blocking the run loop, and return its exit status as (exited, status, signal).
+    # WNOHANG in a park loop rather than a blocking waitpid: the loop's other fibers have to keep running.
+    sub _fork_reap ( $pid ) {
+        my $reaped = 0;
+        while ( ( $reaped = waitpid( $pid, POSIX::WNOHANG() ) ) == 0 ) { await_sleep(1) }
+        return ( 1, $? >> 8, $? & 127 ) if $reaped == $pid;
+        return ( 0, undef, undef );    # already reaped by something else, or not ours
+    }
 
     # Index at which user arguments start in @_: 0 when it is a plain call, 1 when $_[0] is a self (package name or
     # blessed object). Mirrors the dance in Acme::Parataxis: read $_[0] instead of shifting, so calling this never
@@ -123,6 +160,182 @@ package Acme::Parataxis::Blocking v0.1.1 {
             };
         return $fut;
     }
+
+    # Run a CPU-bound closure in a forked child process and return its result as a normal Future.
+    #
+    # This is the same promise spawn_blocking makes, for a perl with no thread support. It is a separate entry point
+    # rather than a backend switch inside spawn_blocking on purpose: the two have genuinely different limits, and a
+    # caller should be able to see them at the call site instead of inheriting a silent per-build difference.
+    #
+    #   * no threads at all - the point. Nothing here requires threads, threads::shared or Thread::Queue, so a plain
+    #     perl gets CPU offload and keeps the property that loading this distribution acquires no threads association.
+    #   * copy-in by fork, copy-out by Storable - the child starts as a copy of the whole parent address space, so the
+    #     closure sees the caller's world as it was at the fork: its args, and whatever its captured lexicals held
+    #     then. Nothing the child does to memory comes back; the only thing that travels is the frozen result. A
+    #     result Storable cannot store (a CODE ref, a resource) becomes the Future's error, as does a die().
+    #   * the closure must not call back into Acme::Parataxis - the child's interpreter is a copy whose scheduler state
+    #     is meaningless, and it holds copies of the parent's descriptors (including any attached driver's sockets), so
+    #     a closure that reads or writes through one of those would act on a copy of a descriptor, not the original.
+    #     Inherited descriptors also keep their ports busy until the child exits, which is worth knowing when a closure
+    #     is short but a run is long.
+    #   * cancellation kills - unlike the thread pool, this one can actually stop the work. Cancelling the *await*
+    #     still only withdraws the waiter, exactly as with spawn_blocking, so nothing changes by accident; when you do
+    #     want the work to stop, call kill_blocking_fork($future) and the child is signalled (TERM by default).
+    #   * a harvester fiber always runs - it is scheduled independently of whether anyone awaits the Future, so the
+    #     pipe is drained and the child reaped even if the caller never looks at the result. That is also what keeps a
+    #     large result from deadlocking: a closure whose payload exceeds the pipe buffer blocks in write until the
+    #     harvester's next chunk, which is the design working, not a hang.
+    #   * wall-clock only, like spawn_blocking: real processes cannot be fast-forwarded, so this croaks under
+    #     run( virtual => 1 ).
+    sub spawn_blocking_fork {
+        my $o    = _arg_offset( $_[0] );
+        my $code = $_[$o];
+        my @args = @_[ $o + 1 .. $#_ ];
+        @_ = ();
+        croak 'spawn_blocking_fork() requires a CODE ref' unless ref $code eq 'CODE';
+        croak 'spawn_blocking_fork() is not available on this platform (no fork(2); d_fork is '
+            . ( defined $Config{d_fork} ? $Config{d_fork} : 'undef' ) . ')'
+            unless $Config{d_fork} && $Config{d_fork} eq 'define';
+        croak 'spawn_blocking_fork() is not available on MSWin32, where perl\'s fork() is a threads.pm emulation'
+            if $^O eq 'MSWin32';
+        croak 'spawn_blocking_fork() must be called from inside a scheduled fiber (inside run())'
+            if Acme::Parataxis->current_fid < 0;
+        croak 'spawn_blocking_fork() is wall-clock only and cannot be driven by the mock clock of run(virtual => 1)'
+            if defined Acme::Parataxis->virtual_now;
+        state $have_marshal = do { require POSIX; require Storable; 1 };
+        my $fut = Acme::Parataxis::Future->new;
+        pipe( my $rd, my $wr ) or do {
+            $fut->set_error("spawn_blocking_fork() could not create a pipe: $!");
+            return $fut;
+        };
+        $SBF_PERMITS //= Acme::Parataxis::Semaphore->new( count => $SBF_MAX );
+        $SBF_PERMITS->down('spawn_blocking_fork capacity');
+
+        # The fork itself. The child shares nothing with the parent but this pipe, and it must leave through
+        # POSIX::_exit rather than exit: a normal exit would run END blocks and global destruction over a heap it only
+        # borrowed, letting the child's destructors touch a copy of the parent's objects. _exit also means the child's
+        # copy of the parent's buffered STDOUT is never flushed a second time.
+        my $pid = CORE::fork();
+        if ( !defined $pid ) {
+            my $err = "spawn_blocking_fork() could not fork: $!";
+            close $rd;
+            close $wr;
+            $SBF_PERMITS->up;
+            $fut->set_error($err);
+            return $fut;
+        }
+        if ( !$pid ) {    # child
+            close $rd;
+
+            # One tagged frame on the wire: a 1-byte tag, then a length-prefixed body. The tag is what tells the
+            # parent which of three things it is looking at, so the body is always a single string and exactly one
+            # length is ever transmitted - framing an array by its element count instead of its byte count is the
+            # kind of mistake that only shows up as a mystifying "Storable binary image v24.4 more recent than I am".
+            my ( $tag, $body );
+            my $image = eval { Storable::freeze( [ 1, $code->(@args) ] ) };
+            if ( defined $image ) { ( $tag, $body ) = ( 'R', $image ) }
+            else {
+                my $err   = $@;
+                my $image = eval { Storable::freeze( [ 0, "$err" ] ) };
+                if ( defined $image ) { ( $tag, $body ) = ( 'E', $image ) }
+
+                # Even the error string would not freeze. Say so in plain text rather than dying in silence.
+                else { ( $tag, $body ) = ( 'X', "the closure failed and its error could not be marshalled: $err" ) }
+            }
+            my $frame = $tag . pack( 'Q>', length $body ) . $body;
+            while ( length $frame ) {
+                my $n = syswrite( $wr, $frame );
+                last if !defined($n) || $n == 0;    # the parent is gone; there is nothing left to report to
+                substr( $frame, 0, $n, '' );
+            }
+            close $wr;
+            POSIX::_exit(0);
+        }
+
+        # parent: its own copy of the write end would keep the read end from ever seeing EOF
+        close $wr;
+        $SBF_CHILDREN{ builtin::refaddr($fut) } = $pid;
+
+        # The permit is released exactly once. The body below runs in its own fiber, so the eval only ever catches a
+        # fiber that could not be created at all - in which case the body never ran and its up never happened.
+        eval {
+            fiber {
+                my $header = _fork_read_exactly( $rd, 9, 5000 );    # 1 tag byte + an 8-byte length
+                my $tag = length($header) ? substr( $header, 0, 1 ) : '';
+                my $len = length($header) == 9 ? unpack( 'Q>', substr( $header, 1 ) ) : 0;
+                my $body = $len ? _fork_read_exactly( $rd, $len, 5000 ) : '';
+                close $rd;
+                my ( $reaped, $status, $sig ) = _fork_reap($pid);
+                delete $SBF_CHILDREN{ builtin::refaddr($fut) };
+                $SBF_PERMITS->up;
+                if ( length($header) != 9 || length($body) != $len ) {
+                    $fut->set_error(
+                        "the forked child never delivered a result ("
+                            . (
+                            !$reaped ? 'its status is unknown, it may already have been reaped elsewhere'
+                            : $sig    ? "it died on signal $sig"
+                            :            sprintf( 'it exited with status %d', $status )
+                            )
+                            . ')'
+                    );
+                }
+                elsif ( $tag eq 'X' ) { $fut->set_error($body) }
+                else {
+                    my $thawed = eval { Storable::thaw($body) };
+                    if ( !defined $thawed || ref($thawed) ne 'ARRAY' ) {
+                        $fut->set_error("the forked child's result could not be read back: "
+                                . ( $@ || 'the thawed payload was not an array ref' ) );
+                    }
+                    elsif ( $thawed->[0] ) { $fut->set_result( $thawed->[1] ) }
+                    else                   { $fut->set_error( $thawed->[1] ) }
+                }
+                1;
+            };
+            1;
+        } or
+            do {
+            my $err = $@;
+            close $rd;
+            kill 'KILL', $pid;
+            _fork_reap($pid);
+            delete $SBF_CHILDREN{ builtin::refaddr($fut) };
+            $SBF_PERMITS->up;
+            $fut->set_error($err);
+            };
+        return $fut;
+    }
+
+    # Signal a running spawn_blocking_fork child. Returns true if a signal was delivered, false if the child was
+    # already gone. Deliberately takes the Future rather than a pid: the caller holds a Future, and a pid it would have
+    # to be told separately is a pid it can get wrong.
+    sub kill_blocking_fork {
+        my $o = _arg_offset( $_[0] );
+        my ( $fut, $sig ) = @_[ $o, $o + 1 ];
+        @_ = ();
+        croak 'kill_blocking_fork() requires an Acme::Parataxis::Future'
+            unless defined $fut && builtin::blessed($fut) && $fut->isa('Acme::Parataxis::Future');
+        $sig = 'TERM' unless defined $sig;
+        my $pid = $SBF_CHILDREN{ builtin::refaddr($fut) };
+        return false if !defined $pid;
+        return kill $sig, $pid;
+    }
+
+    # Raise (or lower) the spawn_blocking_fork concurrency cap. Only meaningful before the pool has been used, and
+    # separate from the thread cap because a forked child and a cloned interpreter are not the same resource.
+    sub set_max_blocking_forks {
+        my $o   = _arg_offset( $_[0] );
+        my $max = $_[$o];
+        @_ = ();
+        croak 'set_max_blocking_forks() requires a positive integer' unless defined $max && $max =~ /\A[1-9][0-9]*\z/;
+        croak 'set_max_blocking_forks() must be called before the first spawn_blocking_fork() (the process pool is '
+            . 'already in use)'
+            if $SBF_PERMITS;
+        $SBF_MAX = int($max);
+        return $SBF_MAX;
+    }
+
+    # The configured spawn_blocking_fork capacity (the default 4, PARATAXIS_SBF_FORKS, or set_max_blocking_forks).
+    sub max_blocking_forks () {$SBF_MAX}
 
     # Raise (or lower) the spawn_blocking concurrency cap. Only meaningful before the pool has been used - once a
     # Semaphore exists its capacity is live and this croaks rather than silently stealing slots from in-flight
