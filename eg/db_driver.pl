@@ -222,9 +222,18 @@ sub dbh_disconnect {
 # ------------------------------------------------------------------- run them
 my ( $pfh, $ppath ) = tempfile( 'parataxis-db-XXXXXX', TMPDIR => 1, UNLINK => 1 );
 close $pfh;
-open my $child, '-|', $^X, '-e', $SERVER, $ppath, $QUERY_LATENCY_MS
+
+# The database program goes in a file, not on a -e. Handing a multi-line program
+# to the child as one command-line argument means trusting the platform to keep
+# the newlines through the round trip, and it does not: on Windows the argument
+# is re-split and the child was handed "use" as its whole program, dying with
+# "syntax error at -e line 1, at EOF". A file path cannot be mangled that way.
+my ( $sfh, $spath ) = tempfile( 'parataxis-db-server-XXXXXX', TMPDIR => 1, UNLINK => 1 );
+print $sfh $SERVER or die "cannot write the database program: $!";
+close $sfh or die "cannot write the database program: $!";
+
+open my $child, '-|', $^X, $spath, $ppath, $QUERY_LATENCY_MS
     or die "cannot start the database: $!";
-select( ( select($child), $| = 1 )[0] );    # let the child's exit not wedge the demo
 
 for ( 1 .. 200 ) {
     if ( open my $rfh, '<', $ppath ) {
@@ -232,6 +241,7 @@ for ( 1 .. 200 ) {
         close $rfh;
         if ( $l && $l =~ /\A([0-9]+)\z/ ) { $PORT = $1; last }
     }
+
     select undef, undef, undef, 0.05;
 }
 die "the database never reported a port\n" if !$PORT;
