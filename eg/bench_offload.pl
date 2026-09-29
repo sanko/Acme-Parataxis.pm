@@ -73,13 +73,11 @@ use File::Temp      ();
 use File::Spec      ();
 use Digest::SHA     ();
 use Time::HiRes     ();
-my $ROUNDS = shift                                   // 3;
-my $TREE   = shift                                   // 20;
-my $SIZE   = shift                                   // 262_144;
-my $PASSES = shift                                   // 100;
-my $cores  = $^O eq 'MSWin32'
-    ? ( $ENV{NUMBER_OF_PROCESSORS} || 1 )
-    : ( split ' ', qx{nproc 2>/dev/null} )[0] // 1;
+my $ROUNDS = shift                                                                                            // 3;
+my $TREE   = shift                                                                                            // 20;
+my $SIZE   = shift                                                                                            // 262_144;
+my $PASSES = shift                                                                                            // 100;
+my $cores  = $^O eq 'MSWin32' ? ( $ENV{NUMBER_OF_PROCESSORS} || 1 ) : ( split ' ', qx{nproc 2>/dev/null} )[0] // 1;
 $cores ||= 1;
 
 # The processes rows measure a real address space, and on Windows fork is emulation, not one: the
@@ -260,67 +258,67 @@ sub service_fork {
 }
 my @wait;
 if ($REAL_FORK) {
-push @wait, [
-    'blocking serial',
-    sub {
-        my @svc = service_fork();
-        my $got = 0;
-        for my $s (@svc) {    # ask one, wait it out, then ask the next
-            syswrite $s->[0], '?';
-            my $buf = q{};
-            $got += CORE::read( $s->[1], $buf, 64 );
-        }
-        waitpid $_->[2], 0 for @svc;
-        $got == $N * 64 or die "short read: $got";
-    }
-];
-push @wait, [
-    'fibers + await_read',
-    sub {
-        my @svc = service_fork();
-        my $got = async {
-            my @f = map {
-                fiber {
-                    my $s = $svc[$_];
-                    syswrite $s->[0], '?';    # all N requests leave at once
-                    my $buf = q{};
-
-                    # await_read answers 1 for ready, -1 for a timeout *or* a descriptor it
-                    # cannot watch, and never a byte count. Testing the return for > 0 happens
-                    # to work here, which is exactly why it is worth stating: a read that is
-                    # ready and a read that returns 0 both look fine, and neither is a count.
-                    Acme::Parataxis->await_read( $s->[1], 10_000 ) == 1 or return 0;
-                    return CORE::sysread( $s->[1], $buf, 64 );
-                }
-            } 0 .. $N - 1;
-            my $sum = 0;
-            $sum += $_->await for @f;
-            $sum;
-        };
-        waitpid $_->[2], 0 for @svc;
-        $got == $N * 64 or die "short read: $got";
-    }
-];
-push @wait, [
-    "processes x$N",
-    sub {
-        my @svc = service_fork();
-        my @kid;
-        for my $i ( 0 .. $#svc ) {
-            my $c = fork();
-            die "fork: $!" if !defined $c;
-            if ( !$c ) {
-                syswrite $svc[$i][0], '?';
+    push @wait, [
+        'blocking serial',
+        sub {
+            my @svc = service_fork();
+            my $got = 0;
+            for my $s (@svc) {    # ask one, wait it out, then ask the next
+                syswrite $s->[0], '?';
                 my $buf = q{};
-                CORE::read( $svc[$i][1], $buf, 64 );
-                POSIX::_exit(0);
+                $got += CORE::read( $s->[1], $buf, 64 );
             }
-            push @kid, $c;
+            waitpid $_->[2], 0 for @svc;
+            $got == $N * 64 or die "short read: $got";
         }
-        waitpid $_,      0 for @kid;
-        waitpid $_->[2], 0 for @svc;
-    }
-];
+    ];
+    push @wait, [
+        'fibers + await_read',
+        sub {
+            my @svc = service_fork();
+            my $got = async {
+                my @f = map {
+                    fiber {
+                        my $s = $svc[$_];
+                        syswrite $s->[0], '?';    # all N requests leave at once
+                        my $buf = q{};
+
+                        # await_read answers 1 for ready, -1 for a timeout *or* a descriptor it
+                        # cannot watch, and never a byte count. Testing the return for > 0 happens
+                        # to work here, which is exactly why it is worth stating: a read that is
+                        # ready and a read that returns 0 both look fine, and neither is a count.
+                        Acme::Parataxis->await_read( $s->[1], 10_000 ) == 1 or return 0;
+                        return CORE::sysread( $s->[1], $buf, 64 );
+                    }
+                } 0 .. $N - 1;
+                my $sum = 0;
+                $sum += $_->await for @f;
+                $sum;
+            };
+            waitpid $_->[2], 0 for @svc;
+            $got == $N * 64 or die "short read: $got";
+        }
+    ];
+    push @wait, [
+        "processes x$N",
+        sub {
+            my @svc = service_fork();
+            my @kid;
+            for my $i ( 0 .. $#svc ) {
+                my $c = fork();
+                die "fork: $!" if !defined $c;
+                if ( !$c ) {
+                    syswrite $svc[$i][0], '?';
+                    my $buf = q{};
+                    CORE::read( $svc[$i][1], $buf, 64 );
+                    POSIX::_exit(0);
+                }
+                push @kid, $c;
+            }
+            waitpid $_,      0 for @kid;
+            waitpid $_->[2], 0 for @svc;
+        }
+    ];
 }
 if ( !@wait ) {
     print "\n=== Wait-bound: $N services, $RTT ms each -- skipped on $^O: the fixture is one forked service per pipe ===\n";

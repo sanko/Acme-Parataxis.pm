@@ -87,9 +87,9 @@ interrupted.
 
 Removes the calling fiber, so a later C<cancel> leaves it alone. Worth doing once the work you wanted stopped is over
 but the fiber still has cleanup of its own to finish - and see the "A leaked registration arms the next fiber" note
-under L</"Behavior Notes"> for why leaving it out is worse than it looks. Safe to call any number of times, and it needs
-no fiber, so a destructor or an off-fiber cleanup can still call it. L</"Cancelling waits you cannot pass a token to">
-has the tidy C<defer> form.
+under L</"Behavior Notes"> for why leaving it out is worse than it looks. Safe to call any number of times, and it
+needs no fiber, so a destructor or an off-fiber cleanup can still call it. L</"Cancelling waits you cannot pass a token
+to"> has the tidy C<defer> form.
 
 =head2 C<waiters( )>
 

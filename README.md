@@ -371,9 +371,9 @@ spawned into and the inner nursery's `_join` awaits them as long as they stay re
 ## `Acme::Parataxis::Monitor`
 
 [`Acme::Parataxis::Monitor`](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%3AMonitor) observes another fiber's death without owning it, like an
-Erlang monitor. `Monitor->new( target => $fiber )` (or `fid => $id`) returns a `Future`-like handle that resolves
-exactly once when the target exits - `undef` for a clean end, the death error for a crash. Watching an already-dead
-target fires immediately, and the monitor never delays the target's own reaping.
+Erlang monitor. `Monitor->new( target => $fiber )` (or `fid => $id`) returns a `Future`-like handle that
+resolves exactly once when the target exits - `undef` for a clean end, the death error for a crash. Watching an
+already-dead target fires immediately, and the monitor never delays the target's own reaping.
 
 ```perl
 my $mon = Acme::Parataxis::Monitor->new( target => $worker );
@@ -750,7 +750,7 @@ Measured in C, because perl has no way to ask: `getconf FD_SETSIZE` is not a val
 
 CPU-bound Perl work runs on a dedicated background Perl interpreter (a real OS thread cloned with
 `threads->create`) through `spawn_blocking()`, which returns an `Acme::Parataxis::Future` carrying the result.
-`Acme::Parataxis::Blocking` is the one module in this project that uses `threads.pm`, and it keeps that lazy:
+`Acme::Parataxis::Blocking` is the one module in this project that touches `threads.pm`, and it keeps that lazy:
 nothing loads `threads`, `threads::shared`, or `Thread::Queue` until the first `spawn_blocking` call (they are
 `require`d inside it), so loading any other part of this distribution stays free of any threads associations:
 
@@ -765,7 +765,10 @@ See [Acme::Parataxis::Blocking](https://metacpan.org/pod/Acme%3A%3AParataxis%3A%
 `set_max_blocking_threads()` concurrency cap (default 4, `PARATAXIS_SB_THREADS` overrides), the ithreads requirement,
 the mock-clock croak under `run( virtual >=> 1 )`, and the `perl_clone` platform warning for affected perls
 (the `feature 'class'` `method DESTROY` trigger and the content-independent namespace trigger, which is why the
-in-tree guard classes are classic blessed packages).
+in-tree guard classes are classic blessed packages). Also Windows-only: while any socket wait is in flight (a fiber
+parked in `await_read` or `await_write`), a `spawn_blocking` call blocks until that wait returns, because
+`perl_clone` duplicates every open descriptor and Windows stalls the duplication while a socket has an outstanding
+operation - the stall tracks the wait's remaining time, not a fixed budget.
 
 # Fiber Limits
 
@@ -837,8 +840,8 @@ while (my $row = $sth->fetch) {
 
 ## `set_preempt_threshold( $val )`
 
-Sets the number of `maybe_yield` increments before a forced yield occurs. Default is 0 (preemption disabled).
-Also callable as a class method: `Acme::Parataxis->set_preempt_threshold( $val )`.
+Sets the number of `maybe_yield` increments before a forced yield occurs. Default is 0 (preemption disabled). Also
+callable as `Acme::Parataxis-`set\_preempt\_threshold( $val )>.
 
 # Class Methods
 

@@ -35,7 +35,7 @@ subtest 'deadline fires: Error::Timeout is thrown in the caller and the run cont
         $caught = dies {
             with_timeout( 20, sub { sem_block() } );
         };
-        $after  = 'ran-on';
+        $after = 'ran-on';
     };
     ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Timeout'), '::Timeout thrown by with_timeout';
     is $caught->kind,             'timeout',        'kind() is "timeout"';

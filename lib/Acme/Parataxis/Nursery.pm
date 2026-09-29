@@ -36,7 +36,9 @@ class Acme::Parataxis::Nursery v0.1.1 {
                 Acme::Parataxis->yield;    # birth park: this run never happens inline into the parent
                 my $rv;
                 my $err;
-                try { $rv = $code->() } catch ($e) { $err = $e }
+                try { $rv = $code->() } catch ($e) {
+                    $err = $e
+                }
                 $tok->unregister;
                 die $err if $err;
                 return $rv;
@@ -69,7 +71,10 @@ class Acme::Parataxis::Nursery v0.1.1 {
             next if $child->is_done;
             my $ok = 1;
             my $e;
-            try { $child->await } catch ($caught) { $ok = 0; $e = $caught }
+            try { $child->await } catch ($caught) {
+                $ok = 0;
+                $e  = $caught
+            }
             if ($ok) {
                 $child->is_done;
                 next;
@@ -88,7 +93,8 @@ class Acme::Parataxis::Nursery v0.1.1 {
 
                 # Deliberately a *different* variable: $e is still the parent-interrupt error that
                 # gets rethrown below, and a drain failure must not overwrite it.
-                try { $c->await } catch ($drain_err) { }
+                try { $c->await } catch ($drain_err) {
+                }
                 $c->is_done;
             }
             warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d join draining done, rethrowing error=%s\n", ( time - $^T ) * 1000,

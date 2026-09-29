@@ -157,8 +157,8 @@ The five primitives use six wait reasons between them: C<Mutex lock>, C<RwLock r
 C<WaitGroup wait>, C<Barrier arrive> and C<Once init>. They surface in a C<PARATAXIS_TRACE> diagnostic and in the
 C<wait_reason> of an L<Acme::Parataxis::Error::Timeout>.
 
-C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see
-L</"How It Works">.
+C<$dereg> is the deregistration half of the contract, and every park in the family supplies one - see L</"How It
+Works">.
 
 =item C<_wake( $waiter )>
 

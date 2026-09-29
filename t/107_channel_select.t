@@ -190,18 +190,12 @@ subtest 'an armed timeout is recalled when a case commits first (no stray sleep 
 };
 subtest 'argument validation' => sub {
     my $ch = Acme::Parataxis::Channel->new;
-    like dies { Acme::Parataxis::Channel->select( [ $ch => 'bogus' ] ) },
-        qr/op must be "get" or "put"/, 'bad op croaks';
-    like dies { Acme::Parataxis::Channel->select( [ undef => 'get' ] ) },
-        qr/channel must be an Acme::Parataxis::Channel/, 'bad channel croaks';
-    like dies { Acme::Parataxis::Channel->select( [ $ch => 'put' ] ) },
-        qr/requires a value/, 'put without value croaks';
-    like dies { Acme::Parataxis::Channel->select( [ $ch => 'get' ], timeout => -1 ) },
-        qr/non-negative/, 'negative timeout croaks';
-    like dies { Acme::Parataxis::Channel->select( [ $ch => 'get' ], default => 'nope' ) },
-        qr/default must be a CODE/, 'non-code default croaks';
-    like dies { Acme::Parataxis::Channel->select() },
-        qr/at least one case/, 'no cases croaks';
+    like dies { Acme::Parataxis::Channel->select( [ $ch => 'bogus' ] ) }, qr/op must be "get" or "put"/,                   'bad op croaks';
+    like dies { Acme::Parataxis::Channel->select( [ undef => 'get' ] ) }, qr/channel must be an Acme::Parataxis::Channel/, 'bad channel croaks';
+    like dies { Acme::Parataxis::Channel->select( [ $ch => 'put' ] ) },   qr/requires a value/,                            'put without value croaks';
+    like dies { Acme::Parataxis::Channel->select( [ $ch => 'get' ], timeout => -1 ) },     qr/non-negative/,               'negative timeout croaks';
+    like dies { Acme::Parataxis::Channel->select( [ $ch => 'get' ], default => 'nope' ) }, qr/default must be a CODE/,     'non-code default croaks';
+    like dies { Acme::Parataxis::Channel->select() },                                      qr/at least one case/,          'no cases croaks';
 };
 subtest 'select honors a channel default when no option is given' => sub {
     my $ch = Acme::Parataxis::Channel->new( timeout => 30 );

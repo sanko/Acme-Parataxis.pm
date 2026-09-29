@@ -134,7 +134,7 @@ while ( time - $t0 < $SECONDS && $waves < $MAX_WAVES ) {
         $out = async { one_wave( $seed, $scale ) }
     };
     if ($croak)               { @problems_out = ( @problems_out, "wave $waves (seed $seed, scale $scale) croak escaped: $croak" ); $fails++; last }
-    if ( ref $out ne 'HASH' ) { @problems_out = ( @problems_out, "wave $waves (seed $seed) async returned nothing" );          $fails++; last }
+    if ( ref $out ne 'HASH' ) { @problems_out = ( @problems_out, "wave $waves (seed $seed) async returned nothing" );              $fails++; last }
     my $plan = $out->{plan};
     my $inv  = $out->{inv};
     my @p;

@@ -19,8 +19,8 @@ sub collect ($gen) {
 }
 subtest 'lazy pull: no work happens before the first next' => sub {
     my $started = 0;
-    my $gen     = Acme::Parataxis::Generator->new( code =>
-        sub ($y) {
+    my $gen     = Acme::Parataxis::Generator->new(
+        code => sub ($y) {
             $started++;
             $y->($_) for 1, 2, 3;
         }
@@ -59,8 +59,8 @@ subtest 'an error before the first yield also surfaces at the caller' => sub {
     like "$err", qr/early boom/, 'message preserved';
 };
 subtest 'yields from nested subroutines (deep call stack inside the fiber)' => sub {
-    my $gen = Acme::Parataxis::Generator->new( code =>
-        sub ($y) {
+    my $gen = Acme::Parataxis::Generator->new(
+        code => sub ($y) {
             for my $i ( 1 .. 5 ) {
                 sub {
                     sub { $y->( $i * 10 ) }
@@ -111,8 +111,8 @@ subtest 'destroying an unexhausted generator drains its fiber cleanly' => sub {
 subtest 'abandoning an infinite generator frees it at scope exit' => sub {
     my $gc = Acme::Parataxis::get_live_fiber_count();
     {
-        my $gen = Acme::Parataxis::Generator->new( code =>
-            sub ($y) {
+        my $gen = Acme::Parataxis::Generator->new(
+            code => sub ($y) {
                 while (1) { $y->(1) }
             }
         );
@@ -131,8 +131,8 @@ subtest 'the private fiber is reusable across exhaustion and a later generator' 
     ok !defined( $gen2->next ), 'and exhausts normally';
 };
 subtest 'a body that dies with the old sentinel string still surfaces (no silent drain swallow)' => sub {
-    my $gen = Acme::Parataxis::Generator->new( code =>
-        sub ($y) {
+    my $gen = Acme::Parataxis::Generator->new(
+        code => sub ($y) {
             $y->('ok');
             die '__PARATAXIS_GENERATOR_DRAIN__';
         }
@@ -146,8 +146,8 @@ subtest 'a body that dies with the old sentinel string still surfaces (no silent
 subtest 'yielding the sentinel lookalike string is ordinary data' => sub {
     my $base = Acme::Parataxis::get_live_fiber_count();
     {
-        my $kept = Acme::Parataxis::Generator->new( code =>
-            sub ($y) {
+        my $kept = Acme::Parataxis::Generator->new(
+            code => sub ($y) {
                 $y->('__PARATAXIS_GENERATOR_DRAIN__');
                 $y->('tail');
             }

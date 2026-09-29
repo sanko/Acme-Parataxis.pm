@@ -154,8 +154,8 @@ collected while its future stays usable.
 Reset the future to not-ready, discarding the stored result, the stored error, every registered C<on_ready> callback,
 and every parked waiter. The future can then be resolved and awaited again, which is the supported way to reuse one.
 
-Clearing a future that has waiters parked in it is a deadlock, not a reset - see
-L</"clear_result drops parked waiters, and they are never resumed">.
+Clearing a future that has waiters parked in it is a deadlock, not a reset - see L</"clear_result drops parked waiters,
+and they are never resumed">.
 
 =head1 Recipes
 

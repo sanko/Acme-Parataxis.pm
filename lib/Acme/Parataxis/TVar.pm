@@ -127,7 +127,7 @@ class Acme::Parataxis::TVar v0.1.1 {
             }
         }
         catch ($caught) { $loop_ok = 0; $loop_err = $caught }
-        finally          { delete $stash->{$TXN_KEY} }
+        finally { delete $stash->{$TXN_KEY} }
         die $loop_err unless $loop_ok;
         return $want ? @r : $r[0];
     }

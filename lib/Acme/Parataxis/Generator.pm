@@ -8,10 +8,9 @@ class Acme::Parataxis::Generator v0.1.1 {
     use Carp qw[croak];
     our $RESERVED;
     our $DRAIN = \do { my $x = 1 };    # an opaque scalar ref, so no user yield/die value can collide with the marker
-
-    field $code    :param;    # the user's producer; kept so construction can validate and seed the driver
-    field $fiber;              # the private fiber the body runs on
-    field $err_ref;            # ref to the fiber-local error the driver parks the body's die in
+    field $code : param;               # the user's producer; kept so construction can validate and seed the driver
+    field $fiber;                      # the private fiber the body runs on
+    field $err_ref;                    # ref to the fiber-local error the driver parks the body's die in
 
     # The body's yield: suspends the private fiber and returns the next value to ->next. When DESTROY resumes
     # the fiber to drain it, coro_yield returns our drain marker and the closure dies with it so the body stops
@@ -32,7 +31,9 @@ class Acme::Parataxis::Generator v0.1.1 {
         };
         my $err;
         my $driver = sub {
-            try { $code->($yield) } catch ($caught) { $err = $caught }
+            try { $code->($yield) } catch ($caught) {
+                $err = $caught
+            }
             return;
         };
         $fiber   = Acme::Parataxis->new( code => $driver );
@@ -43,12 +44,12 @@ class Acme::Parataxis::Generator v0.1.1 {
         return undef if $fiber->is_done;
         my $rv = Acme::Parataxis::coro_call( $fiber->fid, [] );
         return ( ref $rv eq 'ARRAY' ) ? $rv->[0] : undef unless $fiber->is_done;
-        my $err = ${ $err_ref };
+        my $err = ${$err_ref};
         die $err if defined $err && !( ref($err) eq 'SCALAR' && $err == $DRAIN );
         return undef;
     }
     method is_done () { $fiber->is_done }
-    method fiber   () { $fiber }    # the private fiber (fid inspection, tests)
+    method fiber ()   {$fiber}              # the private fiber (fid inspection, tests)
 
     # An unexhausted (suspended) fiber is drained to its natural exit instead of being torn down in mid-shot:
     # resuming it with the drain marker makes the yield closure die, the fiber-local try/catch absorbs it, and the
@@ -63,7 +64,8 @@ class Acme::Parataxis::Generator v0.1.1 {
 
             # try/catch neither reads nor writes $@, so the local $@ this used to need (to keep a
             # failed drain from clobbering the caller's error) is gone along with the eval.
-            try { Acme::Parataxis::coro_call( $fid, [$DRAIN] ) } catch ($caught) { }
+            try { Acme::Parataxis::coro_call( $fid, [$DRAIN] ) } catch ($caught) {
+            }
         }
         return if $fiber->is_done;
         Acme::Parataxis::destroy_coro($fid);

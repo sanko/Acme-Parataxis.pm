@@ -20,7 +20,6 @@
 # Run it: perl -Mblib eg/tar_pack.pl [files] [bytes-per-file]
 #
 # Section 4 needs Acme::Parataxis::Blocking and a threaded perl. Without them it prints why and stops.
-
 use v5.40;
 use blib;
 $|++;
@@ -29,12 +28,11 @@ use Acme::Parataxis::CancellationToken;
 use Acme::Parataxis::Semaphore;
 use Archive::Tar ();
 use Config;
-use Digest::SHA    ();
-use File::Path     ();
+use Digest::SHA ();
+use File::Path  ();
 use File::Spec;
-use File::Temp     ();
-use Time::HiRes    ();
-
+use File::Temp  ();
+use Time::HiRes ();
 my $FILE_COUNT = shift // 12;
 my $FILE_BYTES = shift // 1_048_576;
 my $CHUNK      = 65_536;
@@ -47,15 +45,15 @@ my $CHUNKS_PER_FILE = int( ( $FILE_BYTES + $CHUNK - 1 ) / $CHUNK );
 # spawn_blocking do not mix - see section 5, which is a bug report rather than a demonstration.
 # The point here is explicit await boundaries that you place on purpose, and a transparently
 # unblocked sysread() would take the placement away and hand it to the scheduler.
-
 # --------------------------------------------------------------------------------------------------
 # A tree to pack.
 # --------------------------------------------------------------------------------------------------
 my $TREE = File::Temp->newdir( CLEANUP => 0 );
+
 END {
     return if $main::TREE_DONE;
     $main::TREE_DONE = 1;
-    File::Path::remove_tree( "$TREE" ) if -d "$TREE";
+    File::Path::remove_tree("$TREE") if -d "$TREE";
 }
 
 sub build_tree {
@@ -64,8 +62,10 @@ sub build_tree {
     for my $i ( 0 .. $count - 1 ) {
         my $path = File::Spec->catfile( $root, sprintf( 'part%02d.dat', $i ) );
         open my $fh, '>:raw', $path or die "open $path: $!";
+
         # Vary the content so the gzip ratio is a real number rather than a column of zeroes.
         my $chunk = join q{}, map { chr( 32 + ( $_ * 7 + $i ) % 90 ) } 0 .. 4095;
+
         # The parens are required: x binds tighter than +, so without them this is
         # ( $chunk x int( $bytes / 4096 ) ) + 1 and perl tries to numify a 1 MB string.
         print {$fh} substr( $chunk x ( int( $bytes / 4096 ) + 1 ), 0, $bytes );
@@ -85,7 +85,7 @@ sub build_tree {
 sub read_hashed {
     my ( $path, $on_chunk ) = @_;
     open my $fh, '<:raw', $path or die "open $path: $!";
-    my $sha = Digest::SHA->new(256);
+    my $sha  = Digest::SHA->new(256);
     my $body = q{};
     my $buf;
     my $n_chunk = 0;
@@ -93,7 +93,7 @@ sub read_hashed {
         $body .= substr( $buf, 0, $n );
         $sha->add( substr( $buf, 0, $n ) );
         $n_chunk++;
-        await_sleep(0);                      # <- the cancel boundary
+        await_sleep(0);    # <- the cancel boundary
         $on_chunk->( $path, $n_chunk ) if $on_chunk;
     }
     close $fh;
@@ -121,8 +121,8 @@ sub verify_archive {
     my $next = Archive::Tar->iter( $path, 1 );
     my @got;
     while ( my $f = $next->() ) {
-        my $body = $f->get_content;      # Archive::Tar::File has no read(); get_content is the accessor
-        push @got, [ $f->full_path, $f->size, Digest::SHA::sha256_hex( $body ) ];
+        my $body = $f->get_content;    # Archive::Tar::File has no read(); get_content is the accessor
+        push @got, [ $f->full_path, $f->size, Digest::SHA::sha256_hex($body) ];
     }
     return @got;
 }
@@ -130,8 +130,7 @@ sub verify_archive {
 sub show_entries {
     my ( $rows, $expected, $label ) = @_;
     printf "  %-28s %d entries\n", $label, scalar @$rows;
-    my $ok = ( join( q{,}, map { "$_->[0]:$_->[1]:$_->[2]" } @$rows )
-            eq join( q{,}, map { "$_->[0]:$_->[1]:$_->[2]" } @$expected ) ) ? 'yes' : 'NO';
+    my $ok = ( join( q{,}, map {"$_->[0]:$_->[1]:$_->[2]"} @$rows ) eq join( q{,}, map {"$_->[0]:$_->[1]:$_->[2]"} @$expected ) ) ? 'yes' : 'NO';
     printf "  %-28s %s\n", '  names, sizes and digests match', $ok;
     return $ok eq 'yes';
 }
@@ -148,7 +147,7 @@ sub build_archive {
     for my $i ( 0 .. $#$paths ) {
         my ( $digest, $size, $body ) = read_hashed( $paths->[$i], undef );
         $tar->add_data( sprintf( 'part%02d.dat', $i ), $body );
-        $expected_ref->[ $i ] = [ sprintf( 'part%02d.dat', $i ), $size, $digest ];
+        $expected_ref->[$i] = [ sprintf( 'part%02d.dat', $i ), $size, $digest ];
     }
     $tar->write( $out, 1 );    # a FILENAME, or this writes an uncompressed tar and still returns true
     return -s $out;
@@ -168,7 +167,7 @@ sub build_archive {
 # --------------------------------------------------------------------------------------------------
 sub gzip_stream {
     my ( $src, $dst, $chunk ) = @_;
-    open my $in, '<:raw', $src or die "open $src: $!";
+    open my $in,  '<:raw', $src or die "open $src: $!";
     open my $out, '>:raw', $dst or die "open $dst: $!";
     my $zw  = Compress::Zlib::gzopen( $out, 'wb' );
     my $buf = q{};
@@ -178,7 +177,7 @@ sub gzip_stream {
         $read += $n;
         $passes++;
     }
-    $zw->gzclose;            # this is what flushes the last block and writes the trailer
+    $zw->gzclose;    # this is what flushes the last block and writes the trailer
     close $out;
     return "$read/$passes";
 }
@@ -197,14 +196,14 @@ sub build_incompressible {
         my $left = $bytes;
         while ( $left > 0 ) {
             my $want = $left > 1_048_576 ? 1_048_576 : $left;
-            my $n = sysread( $ur, $buf, $want );
+            my $n    = sysread( $ur, $buf, $want );
             last if !$n;
             print {$fh} $buf;
             $left -= $n;
         }
         close $ur;
     }
-    else {    # a portable fallback: an LCG, which is slower to generate but needs no device
+    else {                                           # a portable fallback: an LCG, which is slower to generate but needs no device
         my ( $s, $buf ) = ( 2_654_435_761, q{} );
         my $left = $bytes;
         while ( $left > 0 ) {
@@ -238,10 +237,8 @@ sub canceller {
     };
     return $f;
 }
-
 my @paths = build_tree( $TREE, $FILE_COUNT, $FILE_BYTES );
 my $mb    = $FILE_COUNT * $FILE_BYTES / 1_048_576;
-
 say "Packing $FILE_COUNT files, " . sprintf( '%.1f MB', $mb ) . ', in ' . $CHUNK . ' byte chunks.';
 say '';
 
@@ -257,16 +254,15 @@ Acme::Parataxis::run(
         return;
     }
 );
-my $ok_ms = ( Time::HiRes::time() - $t0 ) * 1000;
-
+my $ok_ms   = ( Time::HiRes::time() - $t0 ) * 1000;
 my $ok_path = File::Spec->catfile( "$TREE", 'ok.tar.gz' );
 printf "  %-34s %s\n", 'built', sprintf( '%.1f ms', $ok_ms );
-printf "  %-34s %s\n", 'archive size', sprintf( '%d bytes (%.0f%% of the input)', -s $ok_path,
-    100 * ( -s $ok_path ) / ( $mb * 1_048_576 ) );
+printf "  %-34s %s\n", 'archive size', sprintf( '%d bytes (%.0f%% of the input)', -s $ok_path, 100 * ( -s $ok_path ) / ( $mb * 1_048_576 ) );
 my $ok = show_entries( [ verify_archive($ok_path) ], \@expected, 'read back with iter' );
 say '';
 say "  Every file in that archive was read in $CHUNK byte chunks with an await boundary between";
 say '  them, so a cancel could have landed mid-file. Nothing cancelled it, so it did not.';
+
 # --------------------------------------------------------------------------------------------------
 # 2. Cancelling the read, with the cancel landing inside a file rather than before the first one.
 # --------------------------------------------------------------------------------------------------
@@ -280,10 +276,9 @@ say '';
     # delivered, which is not reproducible. So fire the same call from a chunk callback instead, at a
     # fixed chunk number. Nothing else differs: $SIG{INT} is still wired to the same token above, and
     # the cancel still arrives from outside the wait, which is the part the scheduler has to handle.
-    my $fire_at = 8;                    # the 9th chunk boundary of the 3rd file
+    my $fire_at = 8;    # the 9th chunk boundary of the 3rd file
     my ( $seen, $where, $err ) = ( 0, q{}, q{} );
     my $out = File::Spec->catfile( "$TREE", 'cancelled.tar.gz' );
-
     Acme::Parataxis::run(
         sub {
             eval {
@@ -313,14 +308,12 @@ say '';
             return;
         }
     );
-
-    printf "  %-34s %s\n", 'died with', ( $err ? ref($err) : 'NOTHING' );
+    printf "  %-34s %s\n",       'died with', ( $err ? ref($err) : 'NOTHING' );
     printf "  %-34s %d of %d\n", 'chunk boundaries entered', $seen, $CHUNKS_PER_FILE * scalar @paths;
-    printf "  %-34s %s\n", 'cancel delivered during', $where;
-    printf "  %-34s %s\n", 'archive written', ( -e $out ? 'yes' : 'no' );
+    printf "  %-34s %s\n",       'cancel delivered during',  $where;
+    printf "  %-34s %s\n",       'archive written', ( -e $out ? 'yes' : 'no' );
     say '';
-    say sprintf( '  The cancel landed on the %dth boundary, inside a file that was %d chunks long,',
-        $seen, $CHUNKS_PER_FILE );
+    say sprintf( '  The cancel landed on the %dth boundary, inside a file that was %d chunks long,', $seen, $CHUNKS_PER_FILE );
     say '  and the cost of the signal was the work in flight for that one chunk. Change the chunk size';
     say '  at the top of this file and the granularity moves with it: that is the whole design';
     say "  decision, and it is yours to make, not the scheduler's.";
@@ -354,14 +347,12 @@ say '';
     open my $cfh, '>:raw', $cut or die $!;
     print {$cfh} substr( $all, 0, int( $full * 0.6 ) );
     close $cfh;
-
     printf "  %-34s %d of %d bytes\n", 'archive cut to 60%', ( -s $cut ), $full;
-
     for my $tool ( [ 'gzip -t', "gzip -t $cut" ], [ 'tar tzf', "tar tzf $cut" ] ) {
         my ( $label, $cmd ) = @$tool;
         my @lines = split m/\n/, `$cmd 2>&1`;
         my $rc    = $? >> 8;
-        printf "  %-34s exit %d, %d entries named\n", $label, $rc, scalar( grep { /part\d+\.dat/ } @lines );
+        printf "  %-34s exit %d, %d entries named\n", $label, $rc, scalar( grep {/part\d+\.dat/} @lines );
     }
 
     # Extraction is the dangerous one, because the files land on disk before tar gives up.
@@ -369,8 +360,7 @@ say '';
     File::Path::make_path($dest);
     my @out = split m/\n/, `tar xzf $cut -C $dest 2>&1`;
     my @ext = glob( File::Spec->catfile( $dest, '*' ) );
-    printf "  %-34s exit %d, %d files left on disk\n", 'tar xzf into a fresh directory', $? >> 8,
-        scalar @ext;
+    printf "  %-34s exit %d, %d files left on disk\n", 'tar xzf into a fresh directory', $? >> 8, scalar @ext;
 
     # And the iterator this program uses to verify, which is the one a reader would most trust. It is
     # the worst of the four: it does not exit, and it does not die either. It warns once and hands
@@ -381,13 +371,16 @@ say '';
         my $next = Archive::Tar->iter( $cut, 1 );
         local $SIG{__WARN__} = sub { push @iter_warned, $_[0] };
         local $@;
-        eval { while ( my $f = $next->() ) { $recovered++ } 1 } or $iter_died = $@;
+        eval {
+            while ( my $f = $next->() ) { $recovered++ }
+            1;
+        } or $iter_died = $@;
         $iter_died =~ s/\n.*//s if $iter_died;
     }
-    printf "  %-34s %d of %d entries, %d warning(s), %s\n", 'Archive::Tar->iter', $recovered,
-        $#paths + 1, scalar @iter_warned, ( $iter_died ? "died: $iter_died" : 'no exception' );
+    printf "  %-34s %d of %d entries, %d warning(s), %s\n", 'Archive::Tar->iter', $recovered, $#paths + 1, scalar @iter_warned,
+        ( $iter_died ? "died: $iter_died" : 'no exception' );
     if (@iter_warned) {
-        my @first = grep { length } map {
+        my @first = grep {length} map {
             my $w = $_;
             $w =~ s{\s+at\s+\S+\s+line\s+\d+\.?\s*\z}{};    # drop "at eg/foo.pl line 289."
             $w =~ s{\A\s+}{};
@@ -418,8 +411,7 @@ say '';
     Acme::Parataxis::run( sub { build_archive( $tmp, \@paths, \@junk ) } );
     show_entries( [ verify_archive($tmp) ], \@junk, 'staged, then read back' );
     rename( $tmp, $ok_path ) or die "rename: $!";
-    printf "  %-34s %s\n", 'published by rename()',
-        ( -e $tmp ? 'FAILED - staging file still present' : 'yes, staging file is gone' );
+    printf "  %-34s %s\n", 'published by rename()', ( -e $tmp ? 'FAILED - staging file still present' : 'yes, staging file is gone' );
     say '';
     say '  Write to a temporary name in the same directory, read the archive back and check the';
     say '  entries, and only then rename() into place. rename() is atomic within a filesystem, so a';
@@ -433,15 +425,12 @@ say '';
 say '';
 say '4. The same build on a thread.';
 say '';
-
 my $ithreads = ( defined $Config{useithreads} && $Config{useithreads} eq 'define' ) ? 1 : 0;
 $ithreads = 0 if $^O eq 'MSWin32';
 my $have_blocking = eval { require Acme::Parataxis::Blocking; 1 } ? 1 : 0;
-
 if ( $have_blocking && $ithreads ) {
     require Acme::Parataxis::Blocking;
     require Compress::Zlib;
-
     my $big  = build_incompressible( File::Spec->catfile( "$TREE", 'raw.bin' ), 12 * 1_048_576 );
     my $out  = File::Spec->catfile( "$TREE", 'streamed.gz' );
     my $tok  = token_for_signal();
@@ -454,7 +443,6 @@ if ( $have_blocking && $ithreads ) {
     my ( $at, $then, $settled, $grew, $await_result, $await_died, $err );
     my $watch_ms = 2_000;
     my $t0       = Time::HiRes::time();
-
     Acme::Parataxis::run(
         sub {
             my $fut = Acme::Parataxis::Blocking::spawn_blocking( \&gzip_stream, $big, $out, $CHUNK );
@@ -464,11 +452,13 @@ if ( $have_blocking && $ithreads ) {
             # lands us squarely mid-write. Cancel *before* the spawn and you get the pre-cancelled
             # path instead, which fails without ever entering the await and shows you nothing.
             await_sleep(70);
-            $tok->cancel;                 # the same call $SIG{INT} makes
+            $tok->cancel;    # the same call $SIG{INT} makes
             $at   = ( Time::HiRes::time() - $t0 ) * 1000;
             $then = -e $out ? -s $out : 0;
-
-            eval { with_timeout( 0, $tok, sub { $fut->await } ); 1 } or $err = $@;
+            eval {
+                with_timeout( 0, $tok, sub { $fut->await } );
+                1;
+            } or $err = $@;
 
             # The closure is still running. Watch the file, and do not ask the thread anything to do
             # it. Bounded by wall time so the "after" figure means something: this is how big the file
@@ -488,14 +478,11 @@ if ( $have_blocking && $ithreads ) {
             return;
         }
     );
-
-    printf "  %-34s %s\n", 'cancel delivered after', sprintf( '%.0f ms', $at );
-    printf "  %-34s %d of %d bytes\n", 'output file at that moment', $then, $want;
-    printf "  %-34s %s\n", 'the await returned', ( $err ? ref($err) : 'a result' );
-    printf "  %-34s %d bytes, %d ms later\n", 'output file once it settled', ( $settled // $then ),
-        $watch_ms;
+    printf "  %-34s %s\n",                    'cancel delivered after',     sprintf( '%.0f ms', $at );
+    printf "  %-34s %d of %d bytes\n",        'output file at that moment', $then, $want;
+    printf "  %-34s %s\n",                    'the await returned', ( $err ? ref($err) : 'a result' );
+    printf "  %-34s %d bytes, %d ms later\n", 'output file once it settled', ( $settled // $then ), $watch_ms;
     say '';
-
     if ($grew) {
         say "  It grew by " . ( $settled - $then ) . " bytes *after* the cancellation. That is not a bug and it is";
         say '  not fixable: the closure is a real OS thread running real code, and there is no safe way';
@@ -518,13 +505,10 @@ if ( $have_blocking && $ithreads ) {
         say '  going. Raise the payload size, or lower the sleep, to make mid-write the usual case.';
         say '';
     }
-
     printf "  %-34s %s\n", 'awaited again, outside the scope',
-        ( $await_died ? do { my $x = $await_died; $x =~ s/\n.*//s; "died: $x" }
-            : "'$await_result' (bytes read / chunk passes)" );
+        ( $await_died ? do { my $x = $await_died; $x =~ s/\n.*//s; "died: $x" } : "'$await_result' (bytes read / chunk passes)" );
     if ( -e $out ) {
-        printf "  %-34s %s\n", 'and it is a valid gzip stream',
-            ( system( 'gzip -t ' . quotemeta($out) . ' >/dev/null 2>&1' ) == 0 ? 'yes' : 'NO' );
+        printf "  %-34s %s\n", 'and it is a valid gzip stream', ( system( 'gzip -t ' . quotemeta($out) . ' >/dev/null 2>&1' ) == 0 ? 'yes' : 'NO' );
         unlink $out;
         printf "  %-34s %s\n", 'after unlink', ( -e $out ? 'STILL THERE' : 'gone' );
     }
@@ -532,18 +516,16 @@ if ( $have_blocking && $ithreads ) {
 else {
     say '  Acme::Parataxis::Blocking, the separate distribution that provides spawn_blocking, is not';
     say '  available here, so the build stays on this thread:';
-    printf "    %-38s %s\n", 'Blocking installed:', ( $have_blocking ? 'yes' : 'no' );
-    printf "    %-38s %s\n", 'an ithreads perl to clone:', ( $ithreads ? 'yes' : 'no' );
-    printf "    %-38s %s\n", '$Config{useithreads}', (
-        defined $Config{useithreads} ? "'" . $Config{useithreads} . "'" : 'undef' );
+    printf "    %-38s %s\n", 'Blocking installed:',        ( $have_blocking               ? 'yes'                            : 'no' );
+    printf "    %-38s %s\n", 'an ithreads perl to clone:', ( $ithreads                    ? 'yes'                            : 'no' );
+    printf "    %-38s %s\n", '$Config{useithreads}',       ( defined $Config{useithreads} ? "'" . $Config{useithreads} . "'" : 'undef' );
     say '';
     say '  The trap still applies, it is just not demonstrable without the thread, and it is worth';
     say '  knowing before you reach for spawn_blocking on a long job: a cancelled await withdraws the';
     say '  waiter and nothing else. The closure runs to completion. Do not clean up its output on the';
     say '  strength of a cancellation alone.';
     say '';
-    say '  Compare the inline numbers: the build above took ' . sprintf( '%.1f ms', $ok_ms ) . ' for '
-        . sprintf( '%.1f MB', $mb ) . '.';
+    say '  Compare the inline numbers: the build above took ' . sprintf( '%.1f ms', $ok_ms ) . ' for ' . sprintf( '%.1f MB', $mb ) . '.';
     say '  A spawn_blocking call costs on the order of 10ms before it starts, so for a job this size';
     say '  the thread is not worth reaching for on speed grounds - only because you want the bytes';
     say '  moving while this thread does something else.';
@@ -591,4 +573,3 @@ say '  segfault. This file leaves transparent unblocking off on purpose, and the
 say '  their own chunking so the await boundaries stay visible.';
 say '';
 say '';
-

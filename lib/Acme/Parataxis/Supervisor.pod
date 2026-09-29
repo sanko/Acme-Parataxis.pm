@@ -84,8 +84,8 @@ through their own teardown. No C, no OS threads, nothing but the scheduler's ord
         within       => 60,             # default, in seconds
     );
 
-Creates a supervisor. All three options are optional, and all three are readable afterwards - see
-L</"Configuration readers">.
+Creates a supervisor. All three options are optional, and all three are readable afterwards - see L</"Configuration
+readers">.
 
 =over
 

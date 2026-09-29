@@ -19,11 +19,9 @@ class Acme::Parataxis::Monitor v0.1.1 {
     use Acme::Parataxis::Future;
     use Carp         qw[croak];
     use Scalar::Util qw[blessed weaken];
-
-    field $target :param = undef;    # the watched fiber/future/actor object; a fiber id is resolved to its object first
-    field $fid    :param = undef;    # optionally supplied watch target by id instead of by object
-    field $future;           # the single-resolution future that backs ->await/->result/->is_ready
-
+    field $target : param = undef;    # the watched fiber/future/actor object; a fiber id is resolved to its object first
+    field $fid    : param = undef;    # optionally supplied watch target by id instead of by object
+    field $future;                    # the single-resolution future that backs ->await/->result/->is_ready
     ADJUST {
         croak 'Monitor->new() takes a target or a fid, not both' if defined $target && defined $fid;
         if ( defined $fid ) {
@@ -36,7 +34,7 @@ class Acme::Parataxis::Monitor v0.1.1 {
         if ( !$target->can('on_ready') && !$target->can('on_death') ) {
             croak 'Monitor->new() cannot watch this target: it has neither on_ready() (fibers, futures) nor on_death() (actors)';
         }
-        $fid    //= $target->can('fid') ? $target->fid : undef;
+        $fid //= $target->can('fid') ? $target->fid : undef;
         $future = Acme::Parataxis::Future->new;
 
         # The reverse edge is cut: the target's callback list holds only this weak copy, so a
@@ -47,7 +45,7 @@ class Acme::Parataxis::Monitor v0.1.1 {
             $target->on_ready( sub { $weak->_resolve( $weak->target->error ) if $weak } );
         }
         else {
-            $target->on_death( sub { $weak->_resolve($_[1]) if $weak } );
+            $target->on_death( sub { $weak->_resolve( $_[1] ) if $weak } );
         }
     }
 
@@ -58,19 +56,19 @@ class Acme::Parataxis::Monitor v0.1.1 {
         $future->set_result($err);
         return $self;
     }
-    method await    () { $future->await }                                          # parks until the target exits
-    method result   () { $future->result }                                         # the resolution value; croaks until ready
-    method error    () { $future->is_ready ? $future->result : undef }             # death error (or undef), ready or not
+    method await ()    { $future->await }                                 # parks until the target exits
+    method result ()   { $future->result }                                # the resolution value; croaks until ready
+    method error ()    { $future->is_ready ? $future->result : undef }    # death error (or undef), ready or not
     method is_ready () { $future->is_ready }
-    method is_done  () { $future->is_ready }                                       # resolved == done, mirroring the fiber-side naming
-    method target   () { $target }                                                 # the watched fiber/future/actor object
-    method fid      () { $fid }                                                    # the target's fiber id at watch time (undef for non-fiber targets)
+    method is_done ()  { $future->is_ready }                              # resolved == done, mirroring the fiber-side naming
+    method target ()   {$target}                                          # the watched fiber/future/actor object
+    method fid ()      {$fid}                                             # the target's fiber id at watch time (undef for non-fiber targets)
 
     method on_ready ($cb) {
         croak 'on_ready() requires a CODE ref' unless ref $cb eq 'CODE';
         my $weak = $self;
         weaken $weak;
-        $future->on_ready( sub { $cb->($weak) if $weak } );                        # hand the caller the monitor, not the inner future
+        $future->on_ready( sub { $cb->($weak) if $weak } );               # hand the caller the monitor, not the inner future
         return $self;
     }
 };

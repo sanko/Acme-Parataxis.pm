@@ -19,7 +19,6 @@
 #   5. The diagnosis, and the one tuning knob that is actually worth reaching for.
 #
 # Run it: perl -Mblib eg/sha_walk.pl [files] [bytes-per-file]
-
 use v5.40;
 use blib;
 $|++;
@@ -28,12 +27,11 @@ no warnings 'experimental::try';    # try/catch below; the dist does the same in
 use Acme::Parataxis::Semaphore;
 use Config;
 use Digest::SHA ();
-use File::Find ();
-use File::Path ();
+use File::Find  ();
+use File::Path  ();
 use File::Spec;
-use File::Temp ();
+use File::Temp  ();
 use Time::HiRes ();
-
 my $FILE_COUNT = shift // 20;
 my $FILE_BYTES = shift // 262_144;
 
@@ -54,11 +52,12 @@ BEGIN { Acme::Parataxis->enable_transparent_unblocking() }
 # and everything after that dies with ENOENT. "Open failed: No such file or directory" on files that demonstrably
 # existed a second earlier. It looks exactly like a race in the code being benchmarked, and it is not.
 my $ROOT = File::Temp->newdir( CLEANUP => 0 );
+
 END {
     return if $main::ROOT_DONE;
     $main::ROOT_DONE = 1;
     my $d = $ROOT->dirname;
-    File::Path::remove_tree( $d ) if defined $d && -d $d;
+    File::Path::remove_tree($d) if defined $d && -d $d;
 }
 
 # ----------------------------------------------------------------------------------------------------------
@@ -73,6 +72,7 @@ sub build_tree {
         my $dir  = $dirs[ $i % @dirs ];
         my $path = File::Spec->catfile( $dir, "file$i.dat" );
         open my $fh, '>:raw', $path or die "open $path: $!";
+
         # Incompressible-ish content, so the digest has real work and is not measuring a memcpy of zeroes.
         my $chunk = join q{}, map { chr( 32 + ( $_ * 7 + $i ) % 90 ) } 0 .. 4095;
         print {$fh} substr( $chunk x int( $bytes / 4096 ), 0, $bytes );
@@ -97,6 +97,7 @@ sub measure {
     my $ms = ( Time::HiRes::time() - $t0 ) * 1000;
     $stop = 1;
     $beat->await;
+
     # An empty label means "measured but not printed here" - section 6 prints its own table, and it
     # wants the tick counts without the duplicate millisecond line.
     printf "  %-42s %6.1f ms   ticks: %3d   %s\n", $label, $ms, $ticks, $note if length $label;
@@ -111,7 +112,7 @@ sub measure {
 # scheduler's point of view, and it cannot be interrupted part way through.
 # ----------------------------------------------------------------------------------------------------------
 sub hash_addfile {
-    my ( $path ) = @_;
+    my ($path) = @_;
     return Digest::SHA->new(256)->addfile($path)->hexdigest;
 }
 
@@ -131,7 +132,6 @@ sub hash_loop {
     close $fh;
     return $sha->hexdigest;
 }
-
 Acme::Parataxis::run(
     sub {
         my $root = build_tree( $ROOT->dirname, $FILE_COUNT, $FILE_BYTES );
@@ -151,17 +151,17 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '1. File::Find, and how many turns it hands to a sibling.';
         say '';
-
         my $sibling_runs = sub {
             my ($work) = @_;
             my ( $runs, $stop ) = ( 0, 0 );
-            my $companion = fiber { while ( !$stop ) { $runs++; await_sleep(0) } };
+            my $companion = fiber {
+                while ( !$stop ) { $runs++; await_sleep(0) }
+            };
             $work->();
             $stop = 1;
             $companion->await;
             return $runs;
         };
-
         my $walk = sub {
             my ($hook) = @_;
             return $sibling_runs->(
@@ -184,11 +184,10 @@ Acme::Parataxis::run(
         # dies with "Wrong number of arguments. Expected 1, got 2" because the method form never applies the
         # argument offset. The fully qualified function call is the only form that works.
         my $arm = sub {
-            my ( $n ) = @_;
+            my ($n) = @_;
             Acme::Parataxis::set_preempt_threshold($n);
             return;
         };
-
         $arm->(0);
         my $no_yield = $walk->(undef);
         my $maybe_0  = $walk->( sub { maybe_yield() } );
@@ -199,13 +198,12 @@ Acme::Parataxis::run(
             $armed{$threshold} = $walk->( sub { maybe_yield() } );
         }
         $arm->(0);
-
-        printf "  %-42s %3d\n", 'no yield at all',              $no_yield;
-        printf "  %-42s %3d\n", 'maybe_yield(), threshold 0',   $maybe_0;
-        printf "  %-42s %3d\n", 'yield() per entry',            $hard;
-        printf "  %-42s %3d\n", 'maybe_yield(), threshold 1',   $armed{1};
-        printf "  %-42s %3d\n", 'maybe_yield(), threshold 5',   $armed{5};
-        printf "  %-42s %3d\n", 'maybe_yield(), threshold 20',  $armed{20};
+        printf "  %-42s %3d\n", 'no yield at all',             $no_yield;
+        printf "  %-42s %3d\n", 'maybe_yield(), threshold 0',  $maybe_0;
+        printf "  %-42s %3d\n", 'yield() per entry',           $hard;
+        printf "  %-42s %3d\n", 'maybe_yield(), threshold 1',  $armed{1};
+        printf "  %-42s %3d\n", 'maybe_yield(), threshold 5',  $armed{5};
+        printf "  %-42s %3d\n", 'maybe_yield(), threshold 20', $armed{20};
         say '';
         say '  Read the first two rows together, because they are the whole point of this section.';
         say '';
@@ -224,14 +222,8 @@ Acme::Parataxis::run(
         say '  every other fiber for the whole traversal - and the threshold is how you stop paying for a yield per';
         say '  entry when the tree is large and the entries are cheap.';
         say '';
-
         my @sorted;
-        File::Find::find(
-            {   no_chdir => 1,
-                wanted   => sub { push @sorted, $File::Find::name if -f $_ },
-            },
-            $root
-        );
+        File::Find::find( { no_chdir => 1, wanted => sub { push @sorted, $File::Find::name if -f $_ }, }, $root );
         @sorted = sort @sorted;
 
         # ------------------------------------------------------------------------------------------------------
@@ -239,11 +231,12 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '2. Hashing it the obvious way.';
         say '';
-
         my ( $ms_c, $ticks_c, @naive ) = measure(
             'one fiber, addfile in a loop',
             '<- the whole tree, uninterrupted',
-            sub { return map { hash_addfile($_) } @sorted }
+            sub {
+                return map { hash_addfile($_) } @sorted;
+            }
         );
 
         # ------------------------------------------------------------------------------------------------------
@@ -251,13 +244,13 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '3. The same digests, with the read loop in Perl.';
         say '';
-
         my ( $ms_d, $ticks_d, @chunked ) = measure(
             'one fiber, chunked read loop, 64K',
             '<- every read is now interruptible',
-            sub { return map { hash_loop( $_, 65_536, 0 ) } @sorted }
+            sub {
+                return map { hash_loop( $_, 65_536, 0 ) } @sorted;
+            }
         );
-
         say "  Same digests: " . ( ( join q{,}, @naive ) eq ( join q{,}, @chunked ) ? 'yes' : 'NO' );
         say '';
 
@@ -266,14 +259,13 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '4. One fiber per file, capped at four in flight.';
         say '';
-
-        my $sem    = Acme::Parataxis::Semaphore->new( count => 4 );
+        my $sem = Acme::Parataxis::Semaphore->new( count => 4 );
         my @by_file;
         my ( $ms_e, $ticks_e ) = measure(
             '4 fibers at a time, chunked reads',
             '<- reads overlap each other',
             sub {
-                @by_file = ( undef ) x scalar(@sorted);
+                @by_file = (undef) x scalar(@sorted);
 
                 # nursery is the structured form: every spawned child is reaped before it returns, so there is no
                 # way to reach the line below with work still outstanding, and a child that dies takes the nursery
@@ -287,6 +279,7 @@ Acme::Parataxis::run(
                             $n->spawn(
                                 sub {
                                     $sem->down;
+
                                     # try/catch, not eval: the rethrow has to preserve the original error, and
                                     # `catch ($caught)` is the only form that actually assigns the caught value -
                                     # `catch ($err)` silently leaves $err undef, because the value is only visible
@@ -310,7 +303,6 @@ Acme::Parataxis::run(
                 return @by_file;
             }
         );
-
         say "  Same digests: " . ( ( join q{,}, @naive ) eq ( join q{,}, @by_file ) ? 'yes' : 'NO' );
         say '';
 
@@ -319,9 +311,9 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '5. Why none of that made it faster.';
         say '';
-        printf "  %-42s %6.1f ms\n", 'addfile loop',                 $ms_c;
-        printf "  %-42s %6.1f ms\n", 'chunked read loop, 64K',       $ms_d;
-        printf "  %-42s %6.1f ms\n", '4 fibers, chunked reads',      $ms_e;
+        printf "  %-42s %6.1f ms\n", 'addfile loop',            $ms_c;
+        printf "  %-42s %6.1f ms\n", 'chunked read loop, 64K',  $ms_d;
+        printf "  %-42s %6.1f ms\n", '4 fibers, chunked reads', $ms_e;
         say '';
 
         # How much of that is the syscall and how much is the digest? Read the bytes without hashing, then hash bytes
@@ -339,7 +331,6 @@ Acme::Parataxis::run(
                 return;
             }
         );
-
         my @blobs = map {
             open my $fh, '<:raw', $_ or die;
             local $/;
@@ -347,26 +338,19 @@ Acme::Parataxis::run(
             close $fh;
             $b;
         } @sorted;
-        my ($ms_cpu) = measure(
-            'digest the same bytes, already in memory',
-            '',
-            sub { Digest::SHA->new(256)->add($_) for @blobs; return }
-        );
-
+        my ($ms_cpu) = measure( 'digest the same bytes, already in memory', '', sub { Digest::SHA->new(256)->add($_) for @blobs; return } );
         say '';
         printf "  Reading %.1f MB off the page cache, no digest: %6.1f ms\n", $mb, $ms_io;
-        printf "  Digesting the same %.1f MB from memory:       %6.1f ms\n", $mb, $ms_cpu;
-        printf "  addfile, which does both inside C:           %6.1f ms\n", $ms_c;
+        printf "  Digesting the same %.1f MB from memory:       %6.1f ms\n",  $mb, $ms_cpu;
+        printf "  addfile, which does both inside C:           %6.1f ms\n",   $ms_c;
         say '';
         my $share  = $ms_c > 0 ? sprintf( '%.0f%%', 100 * $ms_cpu / $ms_c ) : 'all of it';
         my $c_read = $ms_c - $ms_cpu;
         say "  The digest is the whole story: run on bytes already in memory it takes $share as long as addfile";
         say '  does for the read and the digest together. It is arithmetic in this process, on the one thread that';
         say '  every fiber shares. The read is cheap, but only';
-        say sprintf( '  because addfile does it inside C in megabyte chunks - roughly %.1fms of the %.1fms. The same',
-            $c_read, $ms_c );
-        say sprintf( '  bytes through a Perl read loop cost %.1fms, so something like %.1fms of the difference is',
-            $ms_io, $ms_io - $c_read );
+        say sprintf( '  because addfile does it inside C in megabyte chunks - roughly %.1fms of the %.1fms. The same', $c_read, $ms_c );
+        say sprintf( '  bytes through a Perl read loop cost %.1fms, so something like %.1fms of the difference is',    $ms_io,  $ms_io - $c_read );
         say '  per-call overhead rather than the kernel - which is what the chunk size below controls.';
         say '';
         say '    * Step 1 bought fairness. The walk no longer starves a sibling. Worth having in a server.';
@@ -390,19 +374,12 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say '6. The knob that does matter: chunk size.';
         say '';
-
         my ( %by_size, %ticks_by );
         for my $size ( 4_096, 65_536, 1_048_576 ) {
-            my ( $ms, $ticks ) = measure(
-                '', '',
-                sub { hash_loop( $_, $size, 0 ) for @sorted; return }
-            );
+            my ( $ms, $ticks ) = measure( '', '', sub { hash_loop( $_, $size, 0 ) for @sorted; return } );
             ( $by_size{$size}, $ticks_by{$size} ) = ( $ms, $ticks );
         }
-        my ( $ms_core, $ticks_core ) = measure(
-            '', '',
-            sub { hash_loop( $_, 65_536, 1 ) for @sorted; return }
-        );
+        my ( $ms_core, $ticks_core ) = measure( '', '', sub { hash_loop( $_, 65_536, 1 ) for @sorted; return } );
 
         # Every row is shown against the 4K loop, because that is the one people write by default.
         my $four_k = $by_size{4_096};
@@ -411,7 +388,7 @@ Acme::Parataxis::run(
             printf "  %-42s %6.1f ms   %5.2fx   ticks: %3d\n", $label, $ms, $four_k / $ms, $ticks;
             return;
         };
-        $row->( 'addfile (all reads in C)', $ms_c,              $ticks_c );
+        $row->( 'addfile (all reads in C)', $ms_c,               $ticks_c );
         $row->( '4K chunks',                $four_k,             $ticks_by{4_096} );
         $row->( '64K chunks',               $by_size{65_536},    $ticks_by{65_536} );
         $row->( '1M chunks',                $by_size{1_048_576}, $ticks_by{1_048_576} );
@@ -421,13 +398,14 @@ Acme::Parataxis::run(
         say '  default. The tick count is the other half of the story: more ticks is the loop handing the';
         say '  thread back more often, which is what makes the work cancellable in between.';
         say '';
-        say sprintf( '  Per file that is %d reads at 4K against %d at 1M. The per-read cost - the syscall plus the',
-            int( $FILE_BYTES / 4_096 ) + 1, int( $FILE_BYTES / 1_048_576 ) + 1 );
+        say sprintf(
+            '  Per file that is %d reads at 4K against %d at 1M. The per-read cost - the syscall plus the',
+            int( $FILE_BYTES / 4_096 ) + 1,
+            int( $FILE_BYTES / 1_048_576 ) + 1
+        );
         say '  override Compat installs around each one - is charged once per read, so the chunk size is the dial.';
         say '';
-        my $pct = $by_size{65_536} > 0
-            ? sprintf( '%.0f%%', 100 * ( $by_size{65_536} - $ms_core ) / $by_size{65_536} )
-            : 'n/a';
+        my $pct = $by_size{65_536} > 0 ? sprintf( '%.0f%%', 100 * ( $by_size{65_536} - $ms_core ) / $by_size{65_536} ) : 'n/a';
         say '  The last row is the uncomfortable one. Bypassing the override is faster still, and it is faster';
         say "  precisely because it stops being cooperative: against the 64K row that is about $pct of the wall clock,";
         say '  spent on handing the thread back. If that is a trade you will not make, keep 64K or better and accept';
@@ -446,7 +424,6 @@ Acme::Parataxis::run(
         my $ithreads = ( defined $Config{useithreads} && $Config{useithreads} eq 'define' ) ? 1 : 0;
         $ithreads = 0 if $^O eq 'MSWin32';    # perl_clone does not work there
         my $have_blocking = eval { require Acme::Parataxis::Blocking; 1 } ? 1 : 0;
-
         if ( $have_blocking && $ithreads ) {
             require Acme::Parataxis::Blocking;
 
@@ -457,8 +434,7 @@ Acme::Parataxis::run(
             my @w   = map { Acme::Parataxis::Blocking::spawn_blocking( \&hash_addfile, $_ ) } @sorted;
             my @out = map { $_->await } @w;
             my $ms  = ( Time::HiRes::time() - $t0 ) * 1000;
-            printf "  spawn_blocking on all %d files:      %6.1f ms   (inline was %6.1f ms, %5.2fx)\n",
-                scalar(@sorted), $ms, $ms_c, $ms / $ms_c;
+            printf "  spawn_blocking on all %d files:      %6.1f ms   (inline was %6.1f ms, %5.2fx)\n", scalar(@sorted), $ms, $ms_c, $ms / $ms_c;
             say '  Same digests: ' . ( ( join q{,}, @naive ) eq ( join q{,}, @out ) ? 'yes' : 'NO' );
             say '';
             say '  Note the multiplier. Offloading one hash of a 256KB file to a thread made it much slower, and';
@@ -476,11 +452,10 @@ Acme::Parataxis::run(
             say '  The only way to speed up a CPU-bound digest is to get it off this OS thread, which needs a';
             say '  background interpreter: Acme::Parataxis::Blocking, a separate distribution, via';
             say '  spawn_blocking(). It is not available here:';
-            printf "    Acme::Parataxis::Blocking installed: %s\n", ( $have_blocking ? 'yes' : 'no' );
+            printf "    Acme::Parataxis::Blocking installed: %s\n",   ( $have_blocking ? 'yes' : 'no' );
             printf "    an ithreads perl for it to clone:      %s\n", ( $ithreads      ? 'yes' : 'no' );
             if ( !$ithreads ) {
-                printf "    \$Config{useithreads} is %s\n",
-                    ( defined $Config{useithreads} ? "'" . $Config{useithreads} . "'" : 'undef' );
+                printf "    \$Config{useithreads} is %s\n", ( defined $Config{useithreads} ? "'" . $Config{useithreads} . "'" : 'undef' );
             }
             say '';
             say '  Note that the threads module being loadable is not the test. `require threads` succeeds on some';

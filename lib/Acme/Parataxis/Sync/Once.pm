@@ -24,7 +24,9 @@ class Acme::Parataxis::Sync::Once v0.1.1 : isa(Acme::Parataxis::Sync) {
         $owner = $fid;
         my $rv;
         my $err;
-        try { $rv = $code->() } catch ($e) { $err = $e }
+        try { $rv = $code->() } catch ($e) {
+            $err = $e
+        }
         $owner = undef;
         $done  = 1;
         my @w = @waiters;

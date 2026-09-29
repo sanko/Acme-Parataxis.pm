@@ -18,7 +18,8 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
         $reactor = $loop->can('reactor') ? $loop->reactor : $loop;
         my $has_tick = 0;
         if ( defined $reactor ) {
-            try { $has_tick = $reactor->can('one_tick') } catch ($e) { }    # can() itself may throw
+            try { $has_tick = $reactor->can('one_tick') } catch ($e) {
+            }    # can() itself may throw
         }
         croak 'Acme::Parataxis::Driver::Mojo requires a reactor with a one_tick() method' unless $has_tick;
     }
@@ -34,7 +35,8 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
         if   ( $dir eq 'r' ) { $read_cb{$fd}  = $cb }
         else                 { $write_cb{$fd} = $cb }
         if ( !$self->has_watch($fh) ) {
-            try { $fh->blocking(0) } catch ($e) { }    # a handle that refuses is still worth watching
+            try { $fh->blocking(0) } catch ($e) {
+            }    # a handle that refuses is still worth watching
             $reactor->io(
                 $fh,
                 sub ( $reactor, $writable ) {
@@ -54,7 +56,8 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
         delete $read_cb{$fd};
         delete $write_cb{$fd};
         $self->_untrack_watch($fh);
-        try { $reactor->remove($fh) } catch ($e) { }    # already gone from the reactor's point of view
+        try { $reactor->remove($fh) } catch ($e) {
+        }    # already gone from the reactor's point of view
         return 1;
     }
 

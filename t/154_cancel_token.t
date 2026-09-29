@@ -48,7 +48,7 @@ subtest 'cancel wakes a parked fiber with Error::Cancelled' => sub {
         is $sem->waiters, 1, 'one fiber parked on the semaphore';
         $tok->cancel;
         my $caught = dies { $w->await };
-        ok $caught,                                                          'cancelled fiber did not return normally';
+        ok $caught,                                                           'cancelled fiber did not return normally';
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'await rethrows Error::Cancelled to the parent';
         is $sem->waiters, 0, 'cancelled waiter was deregistered from the semaphore';
     };
@@ -148,7 +148,7 @@ subtest 'destructors run while a cancelled wait unwinds' => sub {
         my $w   = fiber {
             $tok->register;
             my $tx = Local::Txn->new( out => \$trace, seq => 1 );
-            $tx->act;                             # a1
+            $tx->act;                           # a1
             my $e = dies { wait_sem($sem) };    # parked here when cancelled
             $tok->unregister;
             die $e if $e;

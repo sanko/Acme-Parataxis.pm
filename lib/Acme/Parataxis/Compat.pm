@@ -220,13 +220,12 @@ package Acme::Parataxis::Compat v0.1.1 {
             # self-assignment -- a no-op that leaves the override in the glob once @SAVED and $INSTALLED are cleared.
             # The sole witness is the CODE slot: an installed override is a CODE slot on the CORE::GLOBAL::%s glob, and
             # a builtin occupies no slot at all, so undef *is* the builtin's identity and restoring is "empty the slot".
-            my $sleep_prior   = *{ 'CORE::GLOBAL::sleep' }{CODE};
-            my $read_prior    = *{ 'CORE::GLOBAL::read' }{CODE};
-            my $sysread_prior = *{ 'CORE::GLOBAL::sysread' }{CODE};
-            push @SAVED, [ sleep => $sleep_prior, $sleep_override ];
-            push @SAVED, [ read => $read_prior, $read_override ];
+            my $sleep_prior   = *{'CORE::GLOBAL::sleep'}{CODE};
+            my $read_prior    = *{'CORE::GLOBAL::read'}{CODE};
+            my $sysread_prior = *{'CORE::GLOBAL::sysread'}{CODE};
+            push @SAVED, [ sleep   => $sleep_prior,   $sleep_override ];
+            push @SAVED, [ read    => $read_prior,    $read_override ];
             push @SAVED, [ sysread => $sysread_prior, $sysread_override ];
-
             *{'CORE::GLOBAL::sleep'}   = $sleep_override;
             *{'CORE::GLOBAL::read'}    = $read_override;
             *{'CORE::GLOBAL::sysread'} = $sysread_override;
@@ -240,6 +239,7 @@ package Acme::Parataxis::Compat v0.1.1 {
         {
             no strict 'refs';
             no warnings 'redefine';
+
             # Hand back the pad bookkeeping for each override before the glob is touched. Fiber swaps fabricate a
             # CvDEPTH for a CV some fiber is parked inside, so that the next call lands above the parked pad -- but
             # nothing withdraws that value once the parked frame is gone, and the CV then looks permanently active to
@@ -257,11 +257,11 @@ package Acme::Parataxis::Compat v0.1.1 {
                 my ( $name, $prior, $cv ) = @$entry;
                 Acme::Parataxis::para_release_cv_depth($cv) if $cv;
                 my $glob = 'CORE::GLOBAL::' . $name;
-                if ( defined $prior && ref( $prior ) eq 'CODE' ) {
+                if ( defined $prior && ref($prior) eq 'CODE' ) {
                     *{$glob} = $prior;    # hand the override that predated install() back
                 }
                 else {
-                    undef *{$glob};    # builtin: no CODE slot is how perl knows the builtin is in effect
+                    undef *{$glob};       # builtin: no CODE slot is how perl knows the builtin is in effect
                 }
             }
         }

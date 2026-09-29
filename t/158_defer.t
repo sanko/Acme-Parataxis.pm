@@ -63,7 +63,7 @@ async {
         $tok->cancel;
         $caught = dies { $w->await };
         is \@log, ['cancelled'], 'the defer ran on the cancel path';
-        ok $caught,                                                              'the cancelled fiber did not return normally';
+        ok $caught,                                                           'the cancelled fiber did not return normally';
         ok ref($caught) && $caught->isa('Acme::Parataxis::Error::Cancelled'), 'await rethrows Error::Cancelled';
     };
     subtest 'defer runs when a deadline cuts the parked wait' => sub {

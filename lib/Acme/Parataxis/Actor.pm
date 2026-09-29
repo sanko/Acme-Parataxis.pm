@@ -12,19 +12,17 @@ class Acme::Parataxis::Actor v0.1.1 {
     use Acme::Parataxis::Future;
     use Carp qw[croak];
     our $STOP = \do { my $x = 1 };    # envelope value that tells the loop to shut down gracefully
-
-    field $cap :param;            # mailbox capacity
-    field $code :param;           # the handler: ($self, $value) => result, run for each message
-    field $done = 0;              # set once at teardown
-    field $error;                 # what killed the actor, or undef for a graceful stop
-    field $fiber;                 # the private fiber the message loop runs on
-    field $mailbox;               # the Channel the messages queue through
-    field $name :param = undef;   # the registered name, or undef for an unnamed actor
-    field $on_death = [];         # death hooks, fired exactly once at teardown
-    field $opts :param;           # the original spawn %opts, so respawn() can reproduce them
-    field $stopping = 0;          # set by stop(), refuses new send()s/ask()s
-    field $supervised :param;     # a supervised handler crash stops this actor and reports it
-
+    field $cap  : param;              # mailbox capacity
+    field $code : param;              # the handler: ($self, $value) => result, run for each message
+    field $done = 0;                  # set once at teardown
+    field $error;                     # what killed the actor, or undef for a graceful stop
+    field $fiber;                     # the private fiber the message loop runs on
+    field $mailbox;                   # the Channel the messages queue through
+    field $name : param = undef;      # the registered name, or undef for an unnamed actor
+    field $on_death = [];             # death hooks, fired exactly once at teardown
+    field $opts : param;              # the original spawn %opts, so respawn() can reproduce them
+    field $stopping = 0;              # set by stop(), refuses new send()s/ask()s
+    field $supervised : param;        # a supervised handler crash stops this actor and reports it
     ADJUST {
         $mailbox = Acme::Parataxis::Channel->new( capacity => $cap );
     }
@@ -62,7 +60,7 @@ class Acme::Parataxis::Actor v0.1.1 {
             # The loop is guarded so teardown is reached on *every* exit path: an interrupt (a
             # cancellation token or a with_timeout deadline landing on this fiber) thrown from a
             # parked wait inside a handler escapes the loop and must not skip the drain below.
-            my $ok  = 1;
+            my $ok = 1;
             my $interrupt;
             try {
                 while (1) {
@@ -80,7 +78,7 @@ class Acme::Parataxis::Actor v0.1.1 {
             $crash = $interrupt unless $ok;
             if ( my $actor = $weak ) { $actor->_finish($crash) }
         };
-        $Acme::Parataxis::ACTOR_REGISTRY{ $name } = $self if defined $name;    # only a spawned actor is registered
+        $Acme::Parataxis::ACTOR_REGISTRY{$name} = $self if defined $name;    # only a spawned actor is registered
         return;
     }
 
@@ -91,13 +89,14 @@ class Acme::Parataxis::Actor v0.1.1 {
 
         # Release any registered name so a dead actor never answers a lookup. The guard (entry still == $self)
         # keeps an older actor's teardown from clobbering a same-named replacement that registered since.
-        delete $Acme::Parataxis::ACTOR_REGISTRY{ $name }
-            if defined $name && ( $Acme::Parataxis::ACTOR_REGISTRY{ $name } // 0 ) == $self;
+        delete $Acme::Parataxis::ACTOR_REGISTRY{$name} if defined $name && ( $Acme::Parataxis::ACTOR_REGISTRY{$name} // 0 ) == $self;
 
         # The drain is best effort: a watcher must learn about this death even if an interrupt lands
         # on this fiber mid-teardown, or whoever is waiting for the report waits forever.
         my $msg = defined $crash ? "$crash" : 'actor stopped before this message was handled!';
-        try { $self->_fail_queued($msg) } catch ($e) { warn "Acme::Parataxis::Actor: drain failed: $e" }
+        try { $self->_fail_queued($msg) } catch ($e) {
+            warn "Acme::Parataxis::Actor: drain failed: $e"
+        }
         for my $cb ( @{ $on_death // [] } ) {
             try { $cb->( $self, $error ) }
             catch ($e) { warn "Acme::Parataxis::Actor: death hook died: $e" }
@@ -133,11 +132,11 @@ class Acme::Parataxis::Actor v0.1.1 {
     # Fires exactly once when this actor is gone: $err is what killed it, or undef for a graceful stop. An actor that
     # is already done calls back immediately, so a watcher never has to check.
     method on_death : prototype($&) ($cb) {
-        if ( $done ) { $cb->( $self, $error ); return $self }
+        if ($done) { $cb->( $self, $error ); return $self }
         push $on_death->@*, $cb;
         return $self;
     }
-    method error () { $error }    # why it died, or undef if it stopped gracefully
+    method error () {$error}    # why it died, or undef if it stopped gracefully
 
     # A fresh, already-running actor with the same handler, mailbox size and options: what a supervisor starts in
     # place of this one. The new actor owns a new mailbox, so asks still outstanding here are failed here rather than
@@ -194,8 +193,8 @@ class Acme::Parataxis::Actor v0.1.1 {
         return $self;
     }
     method is_alive () { return !$done }
-    method fid      () { return $fiber->fid }
-    method name     () { return $name }    # the registered name, or undef for an unnamed actor
+    method fid ()      { return $fiber->fid }
+    method name ()     { return $name }         # the registered name, or undef for an unnamed actor
 
     # Hot code swap: atomically replace the handler for *subsequent* messages.
     method swap : prototype($\&) ($new) {
@@ -212,9 +211,8 @@ class Acme::Parataxis::Actor v0.1.1 {
     }
 
     method DESTROY () {
-        return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        delete $Acme::Parataxis::ACTOR_REGISTRY{ $name }
-            if defined $name && ( $Acme::Parataxis::ACTOR_REGISTRY{ $name } // 0 ) == $self;
+        return                                         if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+        delete $Acme::Parataxis::ACTOR_REGISTRY{$name} if defined $name && ( $Acme::Parataxis::ACTOR_REGISTRY{$name} // 0 ) == $self;
         $self->stop unless $done;
         return;
     }

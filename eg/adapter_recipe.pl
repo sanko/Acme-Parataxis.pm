@@ -10,12 +10,11 @@
 # nothing above it. That single rule explains most of what follows, including the limits.
 #
 # Run it: perl -Mblib eg/adapter_recipe.pl
-
 use v5.40;
 use blib;
 $|++;
 use Acme::Parataxis qw[:all];
-use Time::HiRes ();
+use Time::HiRes     ();
 
 # ----------------------------------------------------------------------------------------------------------
 # The yardstick.
@@ -48,18 +47,17 @@ sub measure {
 # A blocking read and a same-thread writer cannot both make progress, which is exactly the failure this file is
 # about -- and exactly why a real program's blocking I/O is a subprocess, a peer, or a timer, never a sibling fiber.
 sub stall_pipe {
-    my ( $delay ) = @_;
+    my ($delay) = @_;
 
     # $delay is in milliseconds, because every other duration in this file and in Parataxis is. A four-argument
     # select in the child is in *seconds*, so convert on the way out -- and note that raw CORE::sleep would truncate
     # the fraction to nothing, which is why the child uses select at all.
-    open my $reader, '-|', $^X, '-e', "select undef, undef, undef, " . ( $delay / 1000 ) . "; print 'hello'"
-        or die "open: $!";
+    open my $reader, '-|', $^X, '-e', "select undef, undef, undef, " . ( $delay / 1000 ) . "; print 'hello'" or die "open: $!";
     return $reader;
 }
 
 sub drop_pipe {
-    my ( $reader ) = @_;
+    my ($reader) = @_;
     close $reader;
     return;
 }
@@ -79,7 +77,7 @@ sub stall_with_select {
 
 # A blocking read, in code that predates the install.
 sub read_from_pipe_before {
-    my ( $fh ) = @_;
+    my ($fh) = @_;
     my $buf = q{};
     sysread( $fh, $buf, 5 );
     return $buf;
@@ -105,26 +103,16 @@ sub burn_cpu {
     $x += $_ for 1 .. 2_000_000;
     return $x;
 }
-
 Acme::Parataxis::run(
     sub {
         say '';
         say 'Before the install: everything is raw.';
         say '';
-
         my $reader = stall_pipe(300);
-        measure(
-            'sysread on an idle pipe',
-            '<- read in pre-install code',
-            sub { read_from_pipe_before($reader) }
-        );
+        measure( 'sysread on an idle pipe', '<- read in pre-install code', sub { read_from_pipe_before($reader) } );
         drop_pipe($reader);
-
-        measure( 'select(undef,undef,undef,0.3)', '<- untouched by Compat, either way',
-            sub { stall_with_select() } );
-
-        measure( '2M integer adds', '<- no syscall, nothing to cooperate with', sub { burn_cpu() } );
-
+        measure( 'select(undef,undef,undef,0.3)', '<- untouched by Compat, either way',       sub { stall_with_select() } );
+        measure( '2M integer adds',               '<- no syscall, nothing to cooperate with', sub { burn_cpu() } );
         say '';
         say '  Three rows, one tick each -- and that single tick is the heartbeat\'s already-pending timer coming due';
         say '  after the work returned, not progress made during it. The pipe read and the select parked the OS thread';
@@ -138,15 +126,9 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say 'After the install: sleep/read/sysread cooperate.';
         say '';
-
         $reader = stall_pipe(300);
-        measure(
-            'sysread, still in pre-install code',
-            '<- unchanged, and that is the rule',
-            sub { read_from_pipe_before($reader) }
-        );
+        measure( 'sysread, still in pre-install code', '<- unchanged, and that is the rule', sub { read_from_pipe_before($reader) } );
         drop_pipe($reader);
-
         $reader = stall_pipe(300);
         measure(
             'sysread, in code compiled after it',
@@ -158,10 +140,7 @@ Acme::Parataxis::run(
             }
         );
         drop_pipe($reader);
-
-        measure( 'select(undef,undef,undef,0.3)', '<- still parked, still frozen',
-            sub { stall_with_select_after() } );
-
+        measure( 'select(undef,undef,undef,0.3)', '<- still parked, still frozen', sub { stall_with_select_after() } );
         say '';
         say '  Those two rows are the same three lines of code, one compiled above the install and one below it. That';
         say '  is all an override is: it is installed, not compiled in, so it changes the parser for each call site as';
@@ -195,7 +174,6 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say 'Wrapping the pre-install read yourself: the general adapter.';
         say '';
-
         $reader = stall_pipe(300);
         measure(
             'await_read, then the old read',
@@ -207,7 +185,6 @@ Acme::Parataxis::run(
             }
         );
         drop_pipe($reader);
-
         say '';
         say '  This is the shape to lift around any blocking call on a handle: wait for the handle, then do the call';
         say '  non-blocking. It is what await_read and await_write are for, and it is what Compat automates for the';
@@ -225,11 +202,8 @@ Acme::Parataxis::run(
         # ------------------------------------------------------------------------------------------------------
         say 'The two cases nothing here fixes.';
         say '';
-
-        measure( 'select(undef,undef,undef,0.3)', '<- parked, and it stays parked',
-            sub { stall_with_select_after() } );
-        measure( '2M integer adds', '<- one thread, no yields', sub { burn_cpu() } );
-
+        measure( 'select(undef,undef,undef,0.3)', '<- parked, and it stays parked', sub { stall_with_select_after() } );
+        measure( '2M integer adds',               '<- one thread, no yields',       sub { burn_cpu() } );
         say '';
         say '  The select row is a real block in a fiber and there is no way to make it yield, because the fiber';
         say '  does not know it is waiting -- it is inside a call, not at a park site. Compat cannot reach it and';
@@ -245,14 +219,12 @@ Acme::Parataxis::run(
         say '      use Acme::Parataxis::Blocking qw[spawn_blocking];';
         say '      my $f = spawn_blocking( sub { heavy_parse($blob) } );';
         say '      my $parsed = $f->await;';
-
-        my $have_blocking = eval { require Acme::Parataxis::Blocking; 1 }  ? 1 : 0;
-        my $have_ithreads = eval { require threads; threads->can('create') } ? 1 : 0;
+        my $have_blocking = eval { require Acme::Parataxis::Blocking; 1 }                      ? 1 : 0;
+        my $have_ithreads = eval { require threads;                   threads->can('create') } ? 1 : 0;
         $have_ithreads = 0 if $^O eq 'MSWin32';    # perl_clone does not work there
-
         say '';
         say '  On this machine it is not available:';
-        printf "    Acme::Parataxis::Blocking installed: %s\n", ( $have_blocking ? 'yes' : 'no' );
+        printf "    Acme::Parataxis::Blocking installed: %s\n",   ( $have_blocking ? 'yes' : 'no' );
         printf "    an ithreads perl for it to clone:      %s\n", ( $have_ithreads ? 'yes' : 'no' );
         say '';
         say '  So the only move left in-process is to make the loop itself yield: maybe_yield() between chunks, or';

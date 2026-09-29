@@ -33,15 +33,22 @@ class Acme::Parataxis::Channel v0.1.1 {
         my $ms = $timeout;
         fiber {
             $deadline->register;
-            try { await_sleep($ms); $deadline->cancel } catch ($e) { }    # swallows its own interrupt
+            try { await_sleep($ms); $deadline->cancel } catch ($e) {
+            }    # swallows its own interrupt
         };
         my ( $ok, $err, @rv );
         $ok = 1;
         if (wantarray) {
-            try { @rv = $op->() } catch ($e) { $ok = 0; $err = $e }
+            try { @rv = $op->() } catch ($e) {
+                $ok  = 0;
+                $err = $e
+            }
         }
         else {
-            try { $rv[0] = $op->() } catch ($e) { $ok = 0; $err = $e }
+            try { $rv[0] = $op->() } catch ($e) {
+                $ok  = 0;
+                $err = $e
+            }
         }
         $deadline->unregister;
         $deadline->cancel;
@@ -219,7 +226,8 @@ class Acme::Parataxis::Channel v0.1.1 {
                     # recall it when a case commits first instead of leaving a worker parked for the full $ms.
                     Acme::Parataxis::fiber {
                         $deadline->register;
-                        try { Acme::Parataxis::await_sleep($ms); $deadline->cancel } catch ($e) { }
+                        try { Acme::Parataxis::await_sleep($ms); $deadline->cancel } catch ($e) {
+                        }
                     };
                     $timer_armed = 1;
                 }

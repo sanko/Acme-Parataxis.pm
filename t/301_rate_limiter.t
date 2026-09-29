@@ -66,7 +66,7 @@ subtest 'thousands of concurrent acquire never exceed rate x wall-time + burst' 
         note 'upper-bound margin skipped: automated CI hosts wake timers late enough that this would measure the host, not the limiter';
     }
     else {
-        cmp_ok $span, '<',  $need * 3 + 1, 'and finished near the requested rate instead of stalling';
+        cmp_ok $span, '<', $need * 3 + 1, 'and finished near the requested rate instead of stalling';
     }
     is live_count(), $BASE, 'no fiber left behind';
 };
@@ -149,7 +149,7 @@ subtest 'stop() lets a parked acquirer through instead of stranding it' => sub {
         is $rl->waiters, 1, 'a fiber is parked waiting for a token';
         $st1 = $rl->stop;
         $f->await;
-        $st2 = $rl->stop;
+        $st2  = $rl->stop;
         $post = dies { $rl->acquire(1) };
     };
     ok $released, 'the parked acquire was released when the limiter stopped, so the run could end';

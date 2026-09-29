@@ -2,7 +2,7 @@ use v5.40;
 use blib;
 $|++;
 use Config;
-use Acme::Parataxis qw[run fiber await_sleep with_timeout];
+use Acme::Parataxis           qw[run fiber await_sleep with_timeout];
 use Acme::Parataxis::Blocking qw[spawn_blocking set_max_blocking_threads max_blocking_threads];
 use if $Config{useithreads} eq 'define', 'threads';            # 'use threads' must precede
 use if $Config{useithreads} eq 'define', 'threads::shared';    # threads::shared, so both are conditional
@@ -37,22 +37,19 @@ use Time::HiRes qw[time];
 # warning), so a whole run takes tens of wall seconds no matter how small
 # --burn is; the scheduler still ticks the whole time. --pool 1 --jobs 2 is
 # the fastest run there is.
-
 if ( !( defined $Config{useithreads} && $Config{useithreads} eq 'define' ) ) {
     print "This perl is not built with useithreads, so spawn_blocking() cannot clone\n",
-        "an interpreter. Acme::Parataxis::Blocking is a no-op here; rebuild perl\n",
-        "with -Dusethreads to run the offload demo.\n";
+        "an interpreter. Acme::Parataxis::Blocking is a no-op here; rebuild perl\n", "with -Dusethreads to run the offload demo.\n";
     exit 0;
 }
-
-my $POOL = 2;       # background interpreters; --pool to raise
-my $JOBS = 6;       # closures to run through the pool; --jobs to change
-my $BURN = 100;     # ms of CPU per closure; --burn to vary
+my $POOL = 2;      # background interpreters; --pool to raise
+my $JOBS = 6;      # closures to run through the pool; --jobs to change
+my $BURN = 100;    # ms of CPU per closure; --burn to vary
 {
     my @a = @ARGV;
     while (@a) {
         my $arg = shift @a;
-        if ( $arg eq '--pool' )    { $POOL = int shift @a }
+        if    ( $arg eq '--pool' ) { $POOL = int shift @a }
         elsif ( $arg eq '--jobs' ) { $JOBS = int shift @a }
         elsif ( $arg eq '--burn' ) { $BURN = int shift @a }
         else                       { die "unknown option '$arg'\n" }
@@ -71,7 +68,6 @@ sub churn ( $tag, $ms ) {
     1 while time() < $end && ( $sum = ( $sum * 31 + $tag ) % 2147483647 );
     return { tag => $tag, sum => $sum };
 }
-
 my $cap = set_max_blocking_threads($POOL);
 die "set_max_blocking_threads($POOL) reported $cap" unless $cap == $POOL;
 
@@ -82,9 +78,8 @@ my $cur  = 0;
 my $peak = 0;
 share($cur)  or die 'share $cur';
 share($peak) or die 'share $peak';
-
-my $ticks  = 0;
-my $rv     = run(
+my $ticks = 0;
+my $rv    = run(
     sub {
         # $JOBS closures out, only $POOL interpreters at home: the pool is a
         # Semaphore, so the callers that oversubscribe it park at spawn and
@@ -113,10 +108,12 @@ my $rv     = run(
             }
             1;
         };
-
-        my @out = map { $_->await } @fs;    # results come back in spawn order
+        my @out   = map { $_->await } @fs;                        # results come back in spawn order
         my $slow  = spawn_blocking( sub { churn( 99, 300 ) } );
-        my $timed = !eval { with_timeout( 50, sub { return $slow->await } ); 1 };
+        my $timed = !eval {
+            with_timeout( 50, sub { return $slow->await } );
+            1;
+        };
         my $again = spawn_blocking( sub { churn( 7, 20 ) } )->await;
         return {
             out   => \@out,
@@ -127,24 +124,19 @@ my $rv     = run(
         };
     }
 );
-
 my $fail = 0;
 sub problem ($msg) { print "verify FAIL: $msg\n"; ++$fail }
-
-my @out   = @{ $rv->{out} };
+my @out = @{ $rv->{out} };
 problem "expected $JOBS results, got " . scalar @out unless @out == $JOBS;
-problem "cap raised to $POOL but the run reported peak " . ( $rv->{peak} // 'undef' ) if ( $rv->{peak} // 0 ) > $POOL;
+problem "cap raised to $POOL but the run reported peak " . ( $rv->{peak} // 'undef' )        if ( $rv->{peak}  // 0 ) > $POOL;
 problem "a cooperative fiber completed only $rv->{ticks} ticks while $JOBS closures churned" if ( $rv->{ticks} // 0 ) == 0;
-problem "closure results did not come back in spawn order"
-    unless join( ',', map { $_->{tag} } @out ) eq join( ',', 1 .. $JOBS );
-problem "a closure result was not carried across intact"
-    if grep { !$_->{sum} || ref($_) ne 'HASH' } @out;
-problem "with_timeout(50) did not time out a 300 ms closure"  unless $rv->{timed};
+problem "closure results did not come back in spawn order" unless join( ',', map { $_->{tag} } @out ) eq join( ',', 1 .. $JOBS );
+problem "a closure result was not carried across intact" if grep { !$_->{sum} || ref($_) ne 'HASH' } @out;
+problem "with_timeout(50) did not time out a 300 ms closure"           unless $rv->{timed};
 problem "a fresh spawn_blocking after the timeout gave a wrong answer" unless $rv->{again}{tag} == 7;
 problem "set_max_blocking_threads reported a different cap" if max_blocking_threads() != $POOL;
-
-print sprintf "%d closures (%d ms each) through %d background interpreters in %.2fs; peak == %d, cap == %d\n",
-    $JOBS, $BURN, $POOL, time() - $^T, $rv->{peak} // 0, max_blocking_threads();
+print sprintf "%d closures (%d ms each) through %d background interpreters in %.2fs; peak == %d, cap == %d\n", $JOBS, $BURN, $POOL, time() - $^T,
+    $rv->{peak} // 0, max_blocking_threads();
 print sprintf "while they churned, a plain fiber ticked %d times at 25 ms -- the scheduler never stopped.\n", $rv->{ticks};
 print sprintf "with_timeout(50) vs a 300 ms closure: %s. composition works.\n", $rv->{timed} ? 'timed out' : 'finished (unexpected!)';
 $fail ? ( print "demo FAILED ($fail issues)\n" and exit 1 ) : ( print "all checks passed\n" and exit 0 );

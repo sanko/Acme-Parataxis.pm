@@ -118,9 +118,12 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         croak 'Supervisor->run() requires at least one supervised child' unless @children;
         croak 'Supervisor->run() may only be called once' if $started;
         $started = $running = true;
-        my $ok  = 1;
+        my $ok = 1;
         my $err;
-        try { $self->_supervise_loop } catch ($e) { $ok = 0; $err = $e }
+        try { $self->_supervise_loop } catch ($e) {
+            $ok  = 0;
+            $err = $e
+        }
         $self->_shutdown;
         $running = false;
         die $err unless $ok;
@@ -158,7 +161,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         for my $child (@children) {
             next unless $child->{pending};    # not running: never started, already reported, or failed to start
             my $inst = $child->{instance} or next;
-            try { $inst->stop } catch ($e) { warn "Acme::Parataxis::Supervisor: stopping child '$child->{name}' failed: $e" }
+            try { $inst->stop } catch ($e) {
+                warn "Acme::Parataxis::Supervisor: stopping child '$child->{name}' failed: $e"
+            }
         }
         return;
     }
@@ -168,7 +173,7 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         while ( !$stopping ) {
             my $ev = $deaths->get;
             last if $stopping;
-            next if @$ev == 1;                # wake marker from a stop() already seen above
+            next if @$ev == 1;    # wake marker from a stop() already seen above
             my ( $child, $token, $err ) = @$ev;
             next unless ref $child eq 'HASH' && defined $child->{token} && $child->{token} == $token;
 
@@ -231,7 +236,10 @@ class Acme::Parataxis::Supervisor v0.1.1 {
         if ( defined $child->{initial} ) { ( $inst, $ok ) = ( delete $child->{initial}, 1 ) }
         else {
             $ok = 1;
-            try { $inst = $child->{factory}->() } catch ($e) { $ok = 0; $err = $e }
+            try { $inst = $child->{factory}->() } catch ($e) {
+                $ok  = 0;
+                $err = $e
+            }
         }
         croak "Supervisor child '$child->{name}' factory must return an Acme::Parataxis::Actor or an Acme::Parataxis::Supervisor"
             if $ok && ( !blessed($inst) || ( !$inst->isa('Acme::Parataxis::Actor') && !$inst->isa('Acme::Parataxis::Supervisor') ) );
@@ -250,7 +258,10 @@ class Acme::Parataxis::Supervisor v0.1.1 {
                 fiber {
                     my $ok2 = 1;
                     my $run_err;
-                    try { $inst->run } catch ($e) { $ok2 = 0; $run_err = $e }
+                    try { $inst->run } catch ($e) {
+                        $ok2     = 0;
+                        $run_err = $e
+                    }
                     $self->_report( $child, $token, $ok2 ? undef : $run_err );
                 };
             }

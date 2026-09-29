@@ -128,7 +128,7 @@ for my $iter ( 1 .. $ITERS ) {
     my $croak = dies {
         $out = async { one_iteration($seed) }
     };
-    if ($croak)               { @problems_out = ( @problems_out, "iter $iter (seed $seed) croak escaped: $croak" );      next }
+    if ($croak)               { @problems_out = ( @problems_out, "iter $iter (seed $seed) croak escaped: $croak" );  next }
     if ( ref $out ne 'HASH' ) { @problems_out = ( @problems_out, "iter $iter (seed $seed) async returned nothing" ); next }
     my $plan = $out->{plan};
     my $inv  = $out->{inv};

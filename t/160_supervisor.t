@@ -66,17 +66,16 @@ subtest 'configuration and registration are validated' => sub {
     is $sup->within,       60,          'default window in seconds';
     ok !$sup->running,  'a fresh supervisor is not running';
     ok !$sup->stopping, 'and has not been stopped';
-    ok dies { Acme::Parataxis::Supervisor->new( strategy => 'Whatever' ) }, 'an unknown strategy is rejected';
-    ok dies { Acme::Parataxis::Supervisor->new( max_restarts => -1 ) }, 'a negative budget is rejected';
-    ok dies { Acme::Parataxis::Supervisor->new( within => -5 ) }, 'a negative window is rejected';
-    ok dies { Acme::Parataxis::Supervisor->new( within => 'soon' ) }, 'a non-numeric window is rejected';
-    ok dies { Acme::Parataxis::Supervisor->new( within => '1e3' ) }, 'so is an exponent, not a number of seconds';
-    ok dies { Acme::Parataxis::Supervisor->new( within => undef ) }, 'and so is no window at all';
-    ok lives { Acme::Parataxis::Supervisor->new( within => 0.5 ) }, 'a fractional window is accepted';
-    ok lives { Acme::Parataxis::Supervisor->new( strategy => 'RestForOne', max_restarts => 0, within => 0 ) },
-        'a valid configuration is accepted';
+    ok dies { Acme::Parataxis::Supervisor->new( strategy     => 'Whatever' ) }, 'an unknown strategy is rejected';
+    ok dies { Acme::Parataxis::Supervisor->new( max_restarts => -1 ) },         'a negative budget is rejected';
+    ok dies { Acme::Parataxis::Supervisor->new( within       => -5 ) },         'a negative window is rejected';
+    ok dies { Acme::Parataxis::Supervisor->new( within       => 'soon' ) },     'a non-numeric window is rejected';
+    ok dies { Acme::Parataxis::Supervisor->new( within       => '1e3' ) },      'so is an exponent, not a number of seconds';
+    ok dies { Acme::Parataxis::Supervisor->new( within       => undef ) },      'and so is no window at all';
+    ok lives { Acme::Parataxis::Supervisor->new( within   => 0.5 ) },                                          'a fractional window is accepted';
+    ok lives { Acme::Parataxis::Supervisor->new( strategy => 'RestForOne', max_restarts => 0, within => 0 ) }, 'a valid configuration is accepted';
     my $reg = Acme::Parataxis::Supervisor->new;
-    ok dies { $reg->supervise('not a child') }, 'supervise() rejects something that is not a child';
+    ok dies { $reg->supervise('not a child') },                   'supervise() rejects something that is not a child';
     ok lives { $reg->supervise( make_child('a'), name => 'a' ) }, 'and accepts a factory';
     ok dies { $reg->supervise( make_child('b'), name => 'a' ) }, 'a duplicate child name is rejected';
     ok dies { $reg->supervise( make_child('b'), name => 'b', bogus => 1 ) }, 'an unknown option is rejected';

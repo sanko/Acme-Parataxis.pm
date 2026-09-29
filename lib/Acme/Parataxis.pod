@@ -349,9 +349,9 @@ spawned into and the inner nursery's C<_join> awaits them as long as they stay r
 =head2 C<Acme::Parataxis::Monitor>
 
 L<C<Acme::Parataxis::Monitor>|Acme::Parataxis::Monitor> observes another fiber's death without owning it, like an
-Erlang monitor. C<Monitor-E<gt>new( target =E<gt> $fiber )> (or C<fid =E<gt> $id>) returns a C<Future>-like handle that resolves
-exactly once when the target exits - C<undef> for a clean end, the death error for a crash. Watching an already-dead
-target fires immediately, and the monitor never delays the target's own reaping.
+Erlang monitor. C<Monitor-E<gt>new( target =E<gt> $fiber )> (or C<fid =E<gt> $id>) returns a C<Future>-like handle that
+resolves exactly once when the target exits - C<undef> for a clean end, the death error for a crash. Watching an
+already-dead target fires immediately, and the monitor never delays the target's own reaping.
 
     my $mon = Acme::Parataxis::Monitor->new( target => $worker );
     my $err = $mon->await;    # undef, or the error the worker died with
@@ -816,8 +816,8 @@ C<set_preempt_threshold>, the fiber automatically yields.
 
 =head2 C<set_preempt_threshold( $val )>
 
-Sets the number of C<maybe_yield> increments before a forced yield occurs. Default is 0 (preemption disabled).
-Also callable as C<Acme::Parataxis->set_preempt_threshold( $val )>.
+Sets the number of C<maybe_yield> increments before a forced yield occurs. Default is 0 (preemption disabled). Also
+callable as C<Acme::Parataxis->set_preempt_threshold( $val )>.
 
 =head1 Class Methods
 

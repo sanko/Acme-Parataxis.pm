@@ -116,7 +116,7 @@ subtest 'with_timeout and cancellation still interrupt an unexpired channel wait
         fiber { yield; $tok->cancel };
         $err2 = dies { $ch2->get };
     };
-    ok $err2,                                            'a cancellation token interrupts a channel wait too';
+    ok $err2,                                           'a cancellation token interrupts a channel wait too';
     ok $err2->isa('Acme::Parataxis::Error::Cancelled'), 'as Error::Cancelled';
     wait_for_drain();
 };
@@ -204,7 +204,7 @@ subtest 'a falsey value survives a parking get under a channel timeout' => sub {
     async {
         for my $case (@cases) {
             my ( $value, $label ) = @$case;
-            my $ch = Acme::Parataxis::Channel->new( timeout => 1000 );
+            my $ch     = Acme::Parataxis::Channel->new( timeout => 1000 );
             my $writer = fiber {
                 yield;
                 $ch->put($value);
@@ -220,8 +220,8 @@ subtest 'a falsey value survives a parking get under a channel timeout' => sub {
         my ( $label, $err, $got ) = @$r;
         ok !$err, "a parked get on a channel holding $label does not die";
     }
-    is $got[0][2], 0,   'a channel holding 0 comes back as 0';
-    is $got[1][2], '',  'a channel holding the empty string comes back as the empty string';
+    is $got[0][2], 0,            'a channel holding 0 comes back as 0';
+    is $got[1][2], '',           'a channel holding the empty string comes back as the empty string';
     is $got[2][2], $cases[2][0], 'a channel holding a ref to zero comes back as that ref';
 };
 #

@@ -253,12 +253,10 @@ subtest 'more than one fiber can be inside a framed read at the same time' => su
                     for my $i ( 0 .. $N - 1 ) {
                         push @k, fiber {
                             my $j    = ( $i + 1 ) % $N;
-                            my $mine = sprintf 'fiber-%02d-%s', $i,  'x' x $WIDE;
+                            my $mine = sprintf 'fiber-%02d-%s', $i, 'x' x $WIDE;
                             my $late = fiber { await_sleep(10); syswrite $pairs[$i][1], $mine; 1 };
                             my $buf  = q{};
-                            my $rc   = $builtin eq 'read'
-                                ? read( $pairs[$j][0], $buf, length $mine )
-                                : sysread( $pairs[$j][0], $buf, length $mine );
+                            my $rc   = $builtin eq 'read' ? read( $pairs[$j][0], $buf, length $mine ) : sysread( $pairs[$j][0], $buf, length $mine );
                             $late->await;
                             return [ $rc, $buf ];
                         };
@@ -270,10 +268,8 @@ subtest 'more than one fiber can be inside a framed read at the same time' => su
             );
         };
         my @expect = map { sprintf 'fiber-%02d-%s', ( $_ + 1 ) % $N, 'x' x $WIDE } 0 .. $N - 1;
-        is join( q{,}, @rc ), join( q{,}, ( length $expect[0] ) x $N ),
-            "$builtin: all $N concurrent reads returned the byte count";
-        is join( q{\0}, @buf ), join( q{\0}, @expect ),
-            "$builtin: every concurrent read filled the buffer with the right payload";
+        is join( q{,},  @rc ),  join( q{,}, ( length $expect[0] ) x $N ), "$builtin: all $N concurrent reads returned the byte count";
+        is join( q{\0}, @buf ), join( q{\0}, @expect ),                   "$builtin: every concurrent read filled the buffer with the right payload";
     }
 };
 subtest 'a fiber re-entering a framed read while a sibling is still parked keeps its own buffer' => sub {
@@ -329,10 +325,8 @@ subtest 'a fiber re-entering a framed read while a sibling is still parked keeps
             push @ebuf, $tag;
         }
     }
-    is join( q{,}, @rc ),  join( q{,}, @erc ),
-        'every read, the re-entering one included, returned the byte count';
-    is join( q{\0}, @buf ), join( q{\0}, @ebuf ),
-        '...and each kept its own payload, so no parked sibling buffer was emptied';
+    is join( q{,},  @rc ),  join( q{,},  @erc ),  'every read, the re-entering one included, returned the byte count';
+    is join( q{\0}, @buf ), join( q{\0}, @ebuf ), '...and each kept its own payload, so no parked sibling buffer was emptied';
 };
 subtest 'disable restores the raw globals for freshly compiled code' => sub {
     is Acme::Parataxis->disable_transparent_unblocking(), 1, 'disabling reports success';
@@ -349,10 +343,10 @@ subtest 'disable restores the raw globals for freshly compiled code' => sub {
     # CORE::GLOBAL::%s, and the builtin occupies no slot at all, so the override is gone exactly when the slot reads
     # empty again.
     no strict 'refs';
-    ok !( defined *{ "CORE::GLOBAL::$_" }{CODE} ), "CORE::GLOBAL::$_ is empty again after disable" for qw[sleep read sysread];
+    ok !( defined *{"CORE::GLOBAL::$_"}{CODE} ), "CORE::GLOBAL::$_ is empty again after disable" for qw[sleep read sysread];
     is Acme::Parataxis->enable_transparent_unblocking(), 1, 're-enabling works';
-    ok   defined *{ "CORE::GLOBAL::$_" }{CODE}, "re-enable restores the CORE::GLOBAL::$_ override" for qw[sleep read sysread];
-    is Acme::Parataxis->transparent_unblocking(),        1, 'and is reported installed again';
+    ok defined *{"CORE::GLOBAL::$_"}{CODE}, "re-enable restores the CORE::GLOBAL::$_ override" for qw[sleep read sysread];
+    is Acme::Parataxis->transparent_unblocking(), 1, 'and is reported installed again';
 };
 #
 done_testing();

@@ -22,8 +22,9 @@ skip_all 'cloning a scheduled interpreter requires an ithreads perl', 1 unless $
 # CORE::, so this INSTALLED prefix pollutes nothing by itself.
 BEGIN { Acme::Parataxis->enable_transparent_unblocking }
 $|++;
-
-my $PAYLOAD_MB = do { ( defined $ENV{PARATAXIS_SB_PAYLOAD_MB} && $ENV{PARATAXIS_SB_PAYLOAD_MB} =~ /\A[1-9][0-9]*\z/ ) ? int( $ENV{PARATAXIS_SB_PAYLOAD_MB} ) : 4 };
+my $PAYLOAD_MB = do {
+    ( defined $ENV{PARATAXIS_SB_PAYLOAD_MB} && $ENV{PARATAXIS_SB_PAYLOAD_MB} =~ /\A[1-9][0-9]*\z/ ) ? int( $ENV{PARATAXIS_SB_PAYLOAD_MB} ) : 4;
+};
 
 sub socket_pair {
     my $server = IO::Socket::INET->new( LocalAddr => '127.0.0.1', LocalPort => 0, Listen => 8, ReuseAddr => 1 ) or die "listen: $!";
@@ -36,7 +37,7 @@ sub socket_pair {
 # empty until the writer fires $delay ms in) while threads->create duplicates the interpreter. Returns (rc, buf,
 # joined): the read's byte count and payload, and what the cloned worker returned.
 sub run_one_clone {
-    my ( $park ) = @_;
+    my ($park) = @_;
     my $expected = $PAYLOAD_MB * 1_048_576;
     my ( $rc, $buf, $joined );
     run(
@@ -52,7 +53,7 @@ sub run_one_clone {
                     syswrite $client, 'framed!';
                     1;
                 };
-                await_sleep(50);               # the reader is guaranteed parked before the clone below
+                await_sleep(50);    # the reader is guaranteed parked before the clone below
                 my $worker = threads->create( sub { length( 'x' x $expected ) } );
                 $joined = $worker->join;
                 $writer->await;
@@ -66,12 +67,11 @@ sub run_one_clone {
     );
     return ( $rc, $buf, $joined );
 }
-
 subtest 'a scheduled interpreter can be cloned with the overrides installed but nothing parked' => sub {
     my ( $rc, $buf, $joined ) = run_one_clone(0);
     is $joined, $PAYLOAD_MB * 1_048_576, 'the cloned interpreter returned the payload length';
-    is $rc, undef,                       'no read happened, so no read result exists';
-    is $buf, undef,                      'the read buffer was never touched';
+    is $rc,     undef,                   'no read happened, so no read result exists';
+    is $buf,    undef,                   'the read buffer was never touched';
 };
 
 # Every warning a scheduled interpreter clone can leak, trapped so a pre-fix build FAILS on the documented symptoms
@@ -80,15 +80,12 @@ subtest 'a scheduled interpreter can be cloned with the overrides installed but 
 # printing these; a test that only checked the answer would have let the corruption in.
 my @leaked;
 $SIG{__WARN__} = sub { push @leaked, $_[0] };
-
 subtest 'cloning while a fiber is parked inside the read override leaves the heap intact' => sub {
     my $before = scalar @leaked;
     my ( $rc, $buf, $joined ) = run_one_clone(1);
-    is $joined, $PAYLOAD_MB * 1_048_576, 'the clone ran to completion while the read was parked';
-    is $rc,    7,                       'the parked read was not clobbered by the clone';
-    is $buf,   'framed!',               'the read payload is intact';
-    is scalar @leaked, $before,         'no interpreter-leak warning escaped the parked clone'
-        or diag join q{}, @leaked;
+    is $joined,        $PAYLOAD_MB * 1_048_576, 'the clone ran to completion while the read was parked';
+    is $rc,            7,                       'the parked read was not clobbered by the clone';
+    is $buf,           'framed!',               'the read payload is intact';
+    is scalar @leaked, $before,                 'no interpreter-leak warning escaped the parked clone' or diag join q{}, @leaked;
 };
-
 done_testing();

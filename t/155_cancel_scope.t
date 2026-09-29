@@ -50,8 +50,8 @@ subtest 'a wait entered after the scope is cancelled fails fast, leaving no stal
                     $tok = $t;
                     my $e1 = dies { $sem->down };
                     $first = ref($e1) && $e1->isa('Acme::Parataxis::Error::Cancelled');
-                    my $e2  = dies { $ch->get };
-                    $second = ref($e2) && $e2->isa('Acme::Parataxis::Error::Cancelled');
+                    my $e2 = dies { $ch->get };
+                    $second   = ref($e2) && $e2->isa('Acme::Parataxis::Error::Cancelled');
                     $block_rv = 'done';
                     return $block_rv;
                 }

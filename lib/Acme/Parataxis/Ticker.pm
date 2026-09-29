@@ -74,7 +74,8 @@ class Acme::Parataxis::Ticker v0.1.1 {
 
             # A finished fiber must not stay registered on the token, or a later stop() would interrupt an id that
             # no longer names a live waiter.
-            try { $stop_token->unregister } catch ($e) { }
+            try { $stop_token->unregister } catch ($e) {
+            }
             ();
         };
     }

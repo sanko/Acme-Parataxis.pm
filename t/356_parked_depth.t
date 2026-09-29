@@ -1,7 +1,7 @@
 use v5.40;
 use Test2::V1 -ipP;
 use blib;
-use File::Temp ();
+use File::Temp      ();
 use Acme::Parataxis qw[:all];
 
 # Regression test. Two or more fibers parked concurrently in the *same* CV used to leave that CV with a
@@ -39,26 +39,19 @@ use Acme::Parataxis qw[:all];
 # claims are purged by destroy_coro and settled by the next swap's Pass 1c, and the never-destroyed-fiber
 # case is covered by para_cvreg_purge_fiber() at the deadlock and failed-run epilogue points (56b956e).
 # This file now only guards the two original defect cases above.
-
 sub run_child {
     my ($body) = @_;
-    my $log  = File::Temp->new( SUFFIX => '.log' );
-    my $code = join "\n",
-        'use v5.40;',
-        'use blib;',
-        'use Acme::Parataxis qw[:all];',
-        '$|++;',
-        $body,
-        '';
+    my $log    = File::Temp->new( SUFFIX => '.log' );
+    my $code   = join "\n", 'use v5.40;', 'use blib;', 'use Acme::Parataxis qw[:all];', '$|++;', $body, '';
     my $status;
     {
         open my $saved_out, '>&', \*STDOUT or die "dup stdout: $!";
         open my $saved_err, '>&', \*STDERR or die "dup stderr: $!";
-        open STDOUT, '>', "$log"            or die "open log: $!";
-        open STDERR, '>&', \*STDOUT          or die "dup stderr: $!";
+        open STDOUT,        '>',  "$log"   or die "open log: $!";
+        open STDERR,        '>&', \*STDOUT or die "dup stderr: $!";
         $status = system $^X, '-Mblib', '-e', $code;
-        open STDOUT, '>&', $saved_out        or die "restore stdout: $!";
-        open STDERR, '>&', $saved_err        or die "restore stderr: $!";
+        open STDOUT, '>&', $saved_out or die "restore stdout: $!";
+        open STDERR, '>&', $saved_err or die "restore stderr: $!";
     }
     open my $fh, '<', "$log" or die "read log: $!";
     my $out = do { local $/; <$fh> };
@@ -69,12 +62,9 @@ sub run_child {
 sub check_clean {
     my ( $out, $status, $label ) = @_;
     like( $out, qr/\bWORKED\b/, "$label: the work completed" );
-    is( $status, 0, "$label: the process exited 0" )
-        or diag "child output was:\n$out";
-    unlike( $out, qr/Can't undef active subroutine/, "$label: no global-destruction croak" )
-        or diag "child output was:\n$out";
+    is( $status, 0, "$label: the process exited 0" )                                         or diag "child output was:\n$out";
+    unlike( $out, qr/Can't undef active subroutine/, "$label: no global-destruction croak" ) or diag "child output was:\n$out";
 }
-
 subtest 'one fiber parked in the shared CV is clean' => sub {
     my ( $out, $status ) = run_child(<<'CHILD');
 async {
@@ -85,7 +75,6 @@ async {
 CHILD
     check_clean( $out, $status, 'one parker' );
 };
-
 subtest 'four fibers that never park are clean' => sub {
     my ( $out, $status ) = run_child(<<'CHILD');
 async {
@@ -96,7 +85,6 @@ async {
 CHILD
     check_clean( $out, $status, 'no parker' );
 };
-
 subtest 'two parkers that never overlap are clean' => sub {
     my ( $out, $status ) = run_child(<<'CHILD');
 async {
@@ -107,7 +95,6 @@ async {
 CHILD
     check_clean( $out, $status, 'sequential parkers' );
 };
-
 subtest 'two fibers parked concurrently in the same CV' => sub {
     my ( $out, $status ) = run_child(<<'CHILD');
 async {
@@ -118,8 +105,8 @@ async {
 CHILD
     check_clean( $out, $status, 'two concurrent parkers' );
 };
-
 subtest 'a shared closure called from many fibers, as eg/affinity.pl does' => sub {
+
     # The shape a committed demo actually uses, and the one a user writes by accident. The fiber body is
     # hoisted into a named closure so the park happens inside one shared CV.
     my ( $out, $status ) = run_child(<<'CHILD');
@@ -133,5 +120,4 @@ async {
 CHILD
     check_clean( $out, $status, 'shared closure' );
 };
-
 done_testing();

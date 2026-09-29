@@ -139,7 +139,7 @@ subtest 're-parking after the deadline fired fails fast instead of deadlocking' 
             sub {
                 $e1 = dies { $ch->get };
                 my $t1 = time;
-                $e2 = dies { $ch->get };
+                $e2      = dies { $ch->get };
                 $elapsed = ( time - $t1 ) * 1000;
             }
         );

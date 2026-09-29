@@ -142,41 +142,41 @@ package Acme::Parataxis v0.1.1 {
     }
 
     sub _bind_functions ($l) {
-        affix $l, 'init_system',                       [],                             Int;
-        affix $l, 'create_fiber',                      [ Pointer [SV], Pointer [SV] ], Int;
-        affix $l, 'spawn_fiber',                       [ Pointer [SV], Pointer [SV] ], Pointer [SV];
-        affix $l, 'coro_call',                         [ Int, Pointer [SV] ],          Pointer [SV];
-        affix $l, 'run_fiber_checked',                 [ Int, Pointer [SV] ],          Int;
-        affix $l, 'coro_transfer',                     [ Int, Pointer [SV] ],          Pointer [SV];
-        affix $l, 'coro_yield',                        [ Pointer [SV] ],               Pointer [SV];
-        affix $l, 'is_finished',                       [Int],                          Int;
-        affix $l, 'get_fiber_by_id',                   [Int],                          Pointer [SV];
-        affix $l, 'get_live_fiber_count',              [],                             Int;
-        affix $l, 'get_fiber_capacity',                [],                             Int;
-        affix $l, 'destroy_coro',                      [Int],                          Void;
-        affix $l, 'para_release_cv_depth',             [ Pointer [SV] ],               Void;
-        affix $l, 'para_cvreg_purge_fiber',            [Int],                          Void;
-        affix $l, 'force_depth_zero',                  [ Pointer [SV] ],               Void;
-        affix $l, 'cleanup',                           [],                             Void;
-        affix $l, 'get_os_thread_id_export',           [],                             Int;
-        affix $l, 'get_current_parataxis_id',          [],                             Int;
-        affix $l, 'submit_c_job',                      [ Int, LongLong, Int ],         Int;
-        affix $l, 'drain_jobs',                        [ Pointer [SV] ],               Void;
-        affix $l, 'check_for_completion',              [],                             Int;
-        affix $l, 'get_outstanding_jobs',              [],                             Int;
-        affix $l, 'recall_sleep_jobs_for_fiber',       [Int],                          Int;
-        affix $l, 'get_job_result',                    [Int],                          Pointer [SV];
-        affix $l, 'get_job_coro_id',                   [Int],                          Int;
-        affix $l, 'free_job_slot',                     [Int],                          Void;
-        affix $l, 'get_thread_pool_size',              [],                             Int;
-        affix $l, 'get_max_thread_pool_size',          [],                             Int;
-        affix $l, 'get_fd_setsize',                    [],                             Int;
-        affix $l, 'set_max_threads',                   [Int],                          Void;
-        affix $l, 'get_max_fibers',                    [],                             Int;
-        affix $l, 'set_max_fibers',                    [Int],                          Void;
-        affix $l, [ 'set_preempt_threshold' => '_set_preempt_threshold' ], [LongLong], Void;
-        affix $l, [ 'maybe_yield' => '_maybe_yield' ], [],                             Pointer [SV];
-        affix $l, 'get_preempt_count',                 [],                             LongLong;
+        affix $l, 'init_system',                                           [],                             Int;
+        affix $l, 'create_fiber',                                          [ Pointer [SV], Pointer [SV] ], Int;
+        affix $l, 'spawn_fiber',                                           [ Pointer [SV], Pointer [SV] ], Pointer [SV];
+        affix $l, 'coro_call',                                             [ Int, Pointer [SV] ],          Pointer [SV];
+        affix $l, 'run_fiber_checked',                                     [ Int, Pointer [SV] ],          Int;
+        affix $l, 'coro_transfer',                                         [ Int, Pointer [SV] ],          Pointer [SV];
+        affix $l, 'coro_yield',                                            [ Pointer [SV] ],               Pointer [SV];
+        affix $l, 'is_finished',                                           [Int],                          Int;
+        affix $l, 'get_fiber_by_id',                                       [Int],                          Pointer [SV];
+        affix $l, 'get_live_fiber_count',                                  [],                             Int;
+        affix $l, 'get_fiber_capacity',                                    [],                             Int;
+        affix $l, 'destroy_coro',                                          [Int],                          Void;
+        affix $l, 'para_release_cv_depth',                                 [ Pointer [SV] ],               Void;
+        affix $l, 'para_cvreg_purge_fiber',                                [Int],                          Void;
+        affix $l, 'force_depth_zero',                                      [ Pointer [SV] ],               Void;
+        affix $l, 'cleanup',                                               [],                             Void;
+        affix $l, 'get_os_thread_id_export',                               [],                             Int;
+        affix $l, 'get_current_parataxis_id',                              [],                             Int;
+        affix $l, 'submit_c_job',                                          [ Int, LongLong, Int ],         Int;
+        affix $l, 'drain_jobs',                                            [ Pointer [SV] ],               Void;
+        affix $l, 'check_for_completion',                                  [],                             Int;
+        affix $l, 'get_outstanding_jobs',                                  [],                             Int;
+        affix $l, 'recall_sleep_jobs_for_fiber',                           [Int],                          Int;
+        affix $l, 'get_job_result',                                        [Int],                          Pointer [SV];
+        affix $l, 'get_job_coro_id',                                       [Int],                          Int;
+        affix $l, 'free_job_slot',                                         [Int],                          Void;
+        affix $l, 'get_thread_pool_size',                                  [],                             Int;
+        affix $l, 'get_max_thread_pool_size',                              [],                             Int;
+        affix $l, 'get_fd_setsize',                                        [],                             Int;
+        affix $l, 'set_max_threads',                                       [Int],                          Void;
+        affix $l, 'get_max_fibers',                                        [],                             Int;
+        affix $l, 'set_max_fibers',                                        [Int],                          Void;
+        affix $l, [ 'set_preempt_threshold' => '_set_preempt_threshold' ], [LongLong],                     Void;
+        affix $l, [ 'maybe_yield' => '_maybe_yield' ],                     [],                             Pointer [SV];
+        affix $l, 'get_preempt_count',                                     [],                             LongLong;
 
         # Capture the main interpreter context
         init_system();
@@ -420,7 +420,8 @@ package Acme::Parataxis v0.1.1 {
                             if $ENV{PARATAXIS_TRACE};
                         fiber {
                             $tok->register;
-                            try { await_sleep($left); $tok->cancel } catch ($e) { }
+                            try { await_sleep($left); $tok->cancel } catch ($e) {
+                            }
                         };
                         $fiber->[F_DEADLINE_ARMED] = $eff->{abs};
                     }
@@ -618,7 +619,9 @@ package Acme::Parataxis v0.1.1 {
             $tok->register if $tok ne $deadline;
             my $val;
             my $err;
-            try { $val = $code->() } catch ($e) { $err = $e }
+            try { $val = $code->() } catch ($e) {
+                $err = $e
+            }
             $deadline->unregister;
             $tok->unregister                  if $tok ne $deadline;
             pop @{ $cf->[F_DEADLINE_SCOPES] } if defined $scope_abs;    # leave the stack for any enclosing scope
@@ -633,9 +636,12 @@ package Acme::Parataxis v0.1.1 {
             return $child->result;
         }
         my $rv;
-        my $ok  = 1;
+        my $ok = 1;
         my $err;
-        try { $rv = $child->await } catch ($e) { $ok = 0; $err = $e }
+        try { $rv = $child->await } catch ($e) {
+            $ok  = 0;
+            $err = $e
+        }
         warn "with_timeout teardown: ok=$ok child_done=" .
             $child->is_done .
             " child_error=" .
@@ -707,13 +713,17 @@ package Acme::Parataxis v0.1.1 {
         push @{ $fiber->[F_CANCEL_SCOPES] }, $tok;
         $tok->register;    # block-wide: this fiber stays registered while the scope is open
         my @val;
-
         my $err;
+
         if (wantarray) {
-            try { @val = $code->($tok) } catch ($e) { $err = $e }
+            try { @val = $code->($tok) } catch ($e) {
+                $err = $e
+            }
         }
         else {
-            try { $val[0] = $code->($tok) } catch ($e) { $err = $e }
+            try { $val[0] = $code->($tok) } catch ($e) {
+                $err = $e
+            }
         }
         $tok->unregister;
         pop @{ $fiber->[F_CANCEL_SCOPES] };
@@ -775,9 +785,12 @@ package Acme::Parataxis v0.1.1 {
         state $have_nursery = do { require Acme::Parataxis::Nursery; 1 };
         my $nursery = Acme::Parataxis::Nursery->new;
         my $rv;
-        my $ok  = 1;
+        my $ok = 1;
         my $err;
-        try { $rv = $code->($nursery) } catch ($e) { $ok = 0; $err = $e }
+        try { $rv = $code->($nursery) } catch ($e) {
+            $ok  = 0;
+            $err = $e
+        }
 
         # The block died: its children must not be orphaned, so cancel them and drain below.
         $nursery->token->cancel unless $ok;
@@ -839,7 +852,9 @@ package Acme::Parataxis v0.1.1 {
                     next if $tok->cancelled;
                     my $rv;
                     my $map_err;
-                    try { $rv = $code->($val) } catch ($e) { $map_err = $e }
+                    try { $rv = $code->($val) } catch ($e) {
+                        $map_err = $e
+                    }
                     if ($map_err) {
                         $first_error //= $map_err;    # the first mapper error wins
                         $tok->cancel;                 # fail fast: siblings stop at their next item boundary
@@ -864,9 +879,12 @@ package Acme::Parataxis v0.1.1 {
             }
             $wg->done;
         };
-        my $ok  = 1;
+        my $ok = 1;
         my $err;
-        try { $wg->wait } catch ($e) { $ok = 0; $err = $e }
+        try { $wg->wait } catch ($e) {
+            $ok  = 0;
+            $err = $e
+        }
         unless ($ok) {
 
             # The caller was interrupted while parked (an enclosing nursery/with_timeout): cancel the pool and
@@ -874,7 +892,8 @@ package Acme::Parataxis v0.1.1 {
             $tok->cancel;
 
             # A separate variable on purpose: $err is the caller's own error and is rethrown below.
-            try { $wg->wait } catch ($drain_err) { }
+            try { $wg->wait } catch ($drain_err) {
+            }
             die $err;
         }
         die $first_error if defined $first_error;
@@ -1053,7 +1072,8 @@ package Acme::Parataxis v0.1.1 {
         # the handle goes on to the driver as it always did. An in-memory file answers -1, which is under any
         # ceiling, and needs no watch anyway.
         my $fd;
-        try { $fd = fileno $fh } catch ($e) { }    # not a handle at all: no descriptor to check
+        try { $fd = fileno $fh } catch ($e) {
+        }    # not a handle at all: no descriptor to check
         if ( defined $fd && $fd >= Acme::Parataxis::fd_setsize() ) {
             warn "Acme::Parataxis: $reason() refused: descriptor $fd is at or past this platform's FD_SETSIZE (" .
                 Acme::Parataxis::fd_setsize() .
@@ -1089,7 +1109,7 @@ package Acme::Parataxis v0.1.1 {
         finally { $dereg->() }    # idempotent: on an interrupt _park already ran it, on a natural wake this is the cleanup
         if ( !$ok ) {
             if ( defined $deadline && $deadline->cancelled && ref($err) && $err->isa('Acme::Parataxis::Error::Timeout') ) {
-                $out = -1;    # this wait's own deadline expired; the pool path resumes (not throws) on timeout
+                $out = -1;        # this wait's own deadline expired; the pool path resumes (not throws) on timeout
             }
             else { $dying = $err }
         }
@@ -1176,10 +1196,11 @@ package Acme::Parataxis v0.1.1 {
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];
     }
+
     sub set_preempt_threshold {
-        my $o   = _arg_offset( $_[0] );
+        my $o = _arg_offset( $_[0] );
         croak 'set_preempt_threshold() expects a threshold value' unless @_ > $o;
-        Acme::Parataxis::_set_preempt_threshold( $_[ $o ] // 0 );
+        Acme::Parataxis::_set_preempt_threshold( $_[$o] // 0 );
     }
     sub tid            { get_os_thread_id_export() }
     sub current_fid    { get_current_parataxis_id() }
@@ -1253,7 +1274,9 @@ package Acme::Parataxis v0.1.1 {
                 require Acme::Parataxis::CancellationToken;
                 my $is_tok = 0;
                 if ( ref $on_shutdown ne 'CODE' ) {
-                    try { $is_tok = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) { $is_tok = 0 }
+                    try { $is_tok = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) {
+                        $is_tok = 0
+                    }
                 }
                 croak 'run() on_shutdown must be a true value, a code ref, or a CancellationToken' unless ref $on_shutdown eq 'CODE' || $is_tok;
             }
@@ -1314,7 +1337,9 @@ package Acme::Parataxis v0.1.1 {
             require Acme::Parataxis::CancellationToken;
             my $is_shutdown_token = 0;
             if ( ref $on_shutdown ne 'CODE' ) {
-                try { $is_shutdown_token = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) { $is_shutdown_token = 0 }
+                try { $is_shutdown_token = $on_shutdown->isa('Acme::Parataxis::CancellationToken') || 0 } catch ($e) {
+                    $is_shutdown_token = 0
+                }
             }
             $shutdown_token  = $is_shutdown_token         ? $on_shutdown : Acme::Parataxis::CancellationToken->new;
             $shutdown_cb     = ref $on_shutdown eq 'CODE' ? $on_shutdown : undef;
@@ -1478,7 +1503,7 @@ package Acme::Parataxis v0.1.1 {
         # A clean stop must NOT purge: its parked leftovers are still resumable (their own jobs/waits will
         # fire), and the next run drains them -- tearing them down here would leak unusable records that
         # pin get_live_fiber_count() forever, which the cross-run stress tests assert against.
-        if (!$run_ok) {
+        if ( !$run_ok ) {
             para_cvreg_purge_fiber($_) for grep { !$PRESET_FIBERS{$_} } _live_fiber_ids();
         }
         $IS_RUNNING = 0;              # always leave the scheduler reusable, even when a fiber blew up

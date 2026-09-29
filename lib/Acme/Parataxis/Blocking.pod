@@ -21,14 +21,14 @@ Version 0.001_001
 =head1 DESCRIPTION
 
 Runs CPU-bound Perl work on a dedicated background Perl interpreter (a real OS thread cloned with
-C<threads-E<gt>create>) and returns an C<Acme::Parataxis::Future> carrying its result, so a second of
-JSON/image-code work never stalls your cooperative fibers.
+C<threads-E<gt>create>) and returns an C<Acme::Parataxis::Future> carrying its result, so a second of JSON/image-code
+work never stalls your cooperative fibers.
 
-This is the one part of the Acme::Parataxis project that uses C<threads.pm>, and it keeps that machinery lazy: C<threads>,
-C<threads::shared>, and C<Thread::Queue> are only C<require>d inside the first C<spawn_blocking> call, so loading any
-other part of this distribution never loads them and stays free of any threads associations:
-Acme::Parataxis is about cooperatively scheduling fibers in a single interpreter, and perl's native
-threads are only a means to get a second, isolated interpreter for work that the C pool cannot run.
+This is the one part of the Acme::Parataxis project that uses C<threads.pm>, and it keeps that machinery lazy:
+C<threads>, C<threads::shared>, and C<Thread::Queue> are only C<require>d inside the first C<spawn_blocking> call, so
+loading any other part of this distribution never loads them and stays free of any threads associations:
+Acme::Parataxis is about cooperatively scheduling fibers in a single interpreter, and perl's native threads are only a
+means to get a second, isolated interpreter for work that the C pool cannot run.
 
 C<spawn_blocking> requires a Perl built with ithreads (C<useithreads>); on a non-threaded perl it croaks with a clear
 message, and loading this library never touches C<threads> (they are only C<require>d on the first call), so
@@ -40,10 +40,10 @@ mock clock.
 
 =head2 C<spawn_blocking( $code, @args )>
 
-Also callable as a plain function: C<spawn_blocking( sub { ... }, @args )>. The args arrive in the closure's C<@_>,
-and the result (or C<die>), is marshalled back through C<threads::shared>; unshareable results (a CODE ref, a
-resource) become the Future's error instead of crashing the caller. The future composes with C<await>,
-C<with_timeout>, C<with_cancel>, and C<wait_all> exactly like any other.
+Also callable as a plain function: C<spawn_blocking( sub { ... }, @args )>. The args arrive in the closure's C<@_>, and
+the result (or C<die>), is marshalled back through C<threads::shared>; unshareable results (a CODE ref, a resource)
+become the Future's error instead of crashing the caller. The future composes with C<await>, C<with_timeout>,
+C<with_cancel>, and C<wait_all> exactly like any other.
 
 Hard limits, like the C pool's: each call clones a fresh interpreter, so the closure sees only a copy-in copy-out
 snapshot - plain/structured values cross intact, in-place mutations never leak back, and the closure must not call back
@@ -69,13 +69,13 @@ Returns the configured C<spawn_blocking> capacity.
 threads' interpreter clone (C<perl_clone>) access-violates on some 5.42.x builds (notably Strawberry MSWin32) once
 certain things are loaded, crashing the whole process at the first C<threads-E<gt>create>. Two separate triggers are
 known. (1) A C<feature 'class'> file that declares a C<method DESTROY> on a second class block in the same file - the
-in-tree guard classes (C<Semaphore::Guard>, and the L<Acme::Parataxis::Sync> mutex/rwlock guards) are therefore
-classic blessed packages, not perlclasses. (2) Independently and content-independently, merely loading particular
-namespaces has the same crash - observed here for the whole C<Acme::Parataxis::Sync> family (C<Sync>,
-C<Sync<I>::Mutex> etc.), C<Acme::Parataxis::TVar>, and C<Acme::Parataxis::Driver>. On an affected perl there is no
-in-library workaround (the module's contents and even the guard classes are irrelevant to trigger (2)); if you load any
-of those namespaces and then intend to use C<spawn_blocking>, test on a short-lived process first, or arrange for the
-closures to run before such modules load.
+in-tree guard classes (C<Semaphore::Guard>, and the L<Acme::Parataxis::Sync> mutex/rwlock guards) are therefore classic
+blessed packages, not perlclasses. (2) Independently and content-independently, merely loading particular namespaces
+has the same crash - observed here for the whole C<Acme::Parataxis::Sync> family (C<Sync>, C<Sync<I>::Mutex> etc.),
+C<Acme::Parataxis::TVar>, and C<Acme::Parataxis::Driver>. On an affected perl there is no in-library workaround (the
+module's contents and even the guard classes are irrelevant to trigger (2)); if you load any of those namespaces and
+then intend to use C<spawn_blocking>, test on a short-lived process first, or arrange for the closures to run before
+such modules load.
 
 A second Windows-only behavior is a stall, not a crash. While any socket wait is in flight anywhere in the process - a
 fiber parked in C<await_read> or C<await_write>, or another thread blocked in a raw recv - the C<perl_clone> behind the
@@ -83,9 +83,9 @@ first C<threads-E<gt>create> blocks until that wait returns: the clone duplicate
 (C<PerlIO_fdupopen>), and Windows holds the duplication while a socket has an outstanding operation. The stall tracks
 the wait's remaining time, not a fixed budget (measured: 4969 ms for a 5000 ms parked read; 493 ms when only 478 ms
 remained). It is identical with C<select()> and with C<WSAPoll>, so no Parataxis mechanism is involved - it is the
-known Windows behavior described at https://perlmonks.org/?node_id=1078634 - and Linux and the BSDs are unaffected.
-If the added latency matters, arrange C<spawn_blocking> calls before any fiber starts reading, or keep socket waits
-out of the picture during a spawn.
+known Windows behavior described at https://perlmonks.org/?node_id=1078634 - and Linux and the BSDs are unaffected. If
+the added latency matters, arrange C<spawn_blocking> calls before any fiber starts reading, or keep socket waits out of
+the picture during a spawn.
 
 =head1 SEE ALSO
 

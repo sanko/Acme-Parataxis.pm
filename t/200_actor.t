@@ -55,7 +55,7 @@ subtest 'a handler die fails its own ask, and the actor keeps running' => sub {
             }
         );
         my $reply = $actor->ask( { cmd => 'boom' } );
-        my $err = dies { $reply->await };
+        my $err   = dies { $reply->await };
         ok $err, 'the ask threw';
         like "$err", qr/handler exploded/, 'the handler message is preserved';
         is $actor->ask( { cmd => 'ok' } )->await, 'ok', 'the actor survived and still answers';
@@ -87,7 +87,7 @@ subtest 'with_timeout aborts an ask, and the actor is untouched' => sub {
             }
         );
         my $reply = $actor->ask( { cmd => 'slow' } );
-        my $err = dies {
+        my $err   = dies {
             with_timeout( 10, sub { $reply->await } );
         };
         ok $err, 'the ask timed out';
