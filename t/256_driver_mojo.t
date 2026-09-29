@@ -174,7 +174,7 @@ ok $N >= 8,                             "the high-volume workload kept a workabl
 # their descriptors clustered past a ceiling, or whether await_read hit its timeout (undef) or returned something
 # else. Those three answers point at different bugs, so the failure diagnostic carries all of them along with the
 # reactor actually in play. Only ever runs after the count assertion has already failed.
-sub lost_diagnosis ( $got, $fd, $loop, $n, $ms ) {
+sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap ) {
     my @lost = grep { !( defined $got->[$_] && $got->[$_] == 1 ) } 0 .. $#$got;
     my @kept = grep {   defined $got->[$_] && $got->[$_] == 1     } 0 .. $#$got;
     my @out  = ( 'lost ' . @lost . " of $n parked reads" );
@@ -233,6 +233,45 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms ) {
     # Total elapsed separates "the stragglers used the whole timeout" (the batch ran ~5000ms) from "they were lost
     # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
     push @out, sprintf( 'batch elapsed %.0fms (await_read timeout was 5000ms)', $ms );
+
+    push @out, layer_census( \@lost, $fd, $snap );
+    return join "\n", @out;
+}
+
+# The fork. Parataxis and the reactor are asked separately whether each lost descriptor is still being watched, and
+# the kernel is asked independently whether it is readable, so the loss lands in exactly one layer. A bare "lost 66
+# of 300" cannot do this: the count is the same whether the watch was never made, was made and dropped on the way
+# to Mojo, or was live and the event never came back.
+sub layer_census ( $lost, $fd, $snap ) {
+    return 'no mid-batch census: the sampler did not run' if !$snap;
+    my $bits = $snap->{bits};
+    return 'no mid-batch census: the sampler produced no data' if !defined $bits || !length $bits;
+
+    # One character per batch index, so index into the string rather than looking a descriptor up. @$lost holds
+    # *indices*, not descriptors, and conflating the two asks each layer about the wrong things entirely.
+    my ( $p, $m, $k ) = ( 0, 0, 0 );
+    for my $i (@$lost) {
+        next if $i < 0 || $i >= length $bits;
+        my $v = ord( substr $bits, $i, 1 ) - ord('0');
+        $p += $v & 1;
+        $m += $v & 2 ? 1 : 0;
+        $k += $v & 4 ? 1 : 0;
+    }
+    my $n = scalar @$lost;
+    my @out;
+    push @out, sprintf( 'mid-batch census over %d lost reads: Parataxis watched %d, the reactor held %d, '
+            . 'the kernel called %d readable (driver->watch_count %d, %d descriptors sampled)',
+        $n, $p, $m, $k, $snap->{watch_ct}, $snap->{n} );
+
+    # The verdict, stated as a consequence of the three numbers above rather than as a guess.
+    my $why
+        = $p == 0 ? 'the watch was never registered, so the fault is in await_read or Driver::Mojo::_watch'
+        : $m == 0 ? 'Parataxis armed its own table but the watch never reached the reactor, so the fault is in '
+        . 'Driver::Mojo::_watch'
+        : $k == 0 ? 'the descriptor was watched but not readable, so the batch never wrote to it'
+        :          'all three layers held it and the kernel had data, so the watch was live and the event was lost '
+        . 'above the kernel, inside the reactor';
+    push @out, "reading of the loss: $why";
     return join "\n", @out;
 }
 
@@ -248,6 +287,59 @@ sub fd_span ( $f ) {
     return "$s[0]..$s[-1] ($n values, all consecutive)";
 }
 
+# attach_loop() hands back the driver it *replaced*, not the one it just built, so the live driver is not reachable
+# from a test without help. Driver::wrap() is the single call that constructs it, so note what comes out of that.
+# Test-side only: nothing under lib/ changes and the shim returns exactly what the original returned.
+my $LIVE_DRIVER;
+BEGIN {
+    require Acme::Parataxis::Driver;
+    no warnings 'redefine';
+    my $orig_wrap = \&Acme::Parataxis::Driver::wrap;
+    *Acme::Parataxis::Driver::wrap = sub { my $d = $orig_wrap->(@_); $LIVE_DRIVER = $d; return $d };
+}
+
+# Is the kernel willing to read this descriptor right now? The referee in the three-way comparison below: whatever
+# Parataxis and the reactor agree about is only interesting next to what the kernel itself says.
+sub fd_readable ($fh) {
+    my $vec = '';
+    vec( $vec, fileno($fh), 1 ) = 1;
+    my $n = select( $vec, undef, undef, 0 );
+    return $n > 0 ? 1 : 0;
+}
+
+# What each layer believed it was holding, sampled at the instant every watch is armed and every byte written and
+# before the scheduler has resumed anything. This has to be taken mid-batch: detach_loop() unwinds every watch and
+# timer at the end of the subtest, so a count read after the run is zero on all three sides and cannot tell them
+# apart. The three views localise a loss to exactly one layer:
+#   Parataxis watches it, the reactor does not  -> Driver::Mojo::_watch armed its own table but never reached Mojo
+#   neither holds it                             -> await_read never registered a watch at all
+#   both hold it, the kernel calls it readable  -> the watch was live and the loss is above the kernel, in Mojo
+sub armed_snapshot ( $loop, $waiters ) {
+    my $driver  = $LIVE_DRIVER;
+    my $reactor = eval { $loop->reactor };
+    my $io      = ( $reactor && ref $reactor->{io} eq 'HASH' ) ? $reactor->{io} : {};
+
+    # One character per waiter, three bits each: 1 Parataxis has it in its watch table, 2 the reactor has the
+    # watch, 4 the kernel has data. A single string is what crosses back out of the fiber, and it is reduced here
+    # at the sample rather than shipped as live structures: the answer for each index is fixed at the instant the
+    # batch is fully armed, and nothing that happens afterwards can change it.
+    my $bits = '';
+    for my $fh (@$waiters) {
+        my $fd = fileno($fh);
+        next unless defined $fd;
+        my $p = ( $driver && $driver->has_watch($fh) ) ? 1 : 0;
+        my $m = exists $io->{$fd}                      ? 1 : 0;
+        my $k = fd_readable($fh)                        ? 1 : 0;
+        $bits .= chr( ord('0') + $p + 2 * $m + 4 * $k );
+    }
+    return {
+        bits     => $bits,
+        n        => scalar @$waiters,
+        watch_ct => ( $driver ? $driver->watch_count : -1 ),
+        reactor  => ref($reactor) || 'none',
+    };
+}
+
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     my $loop = Mojo::IOLoop->new;
@@ -255,6 +347,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     $submits = 0;
     my @got;
     my @fd;                 # the descriptor each fiber actually parked on, captured before the batch runs
+    my $snap;               # the three layers' views, sampled while the batch is still live
     my $t0 = time;
     Acme::Parataxis::run(
         sub {
@@ -267,6 +360,10 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
             } 0 .. $N - 1;
             await_sleep(50);
             syswrite $writers->[$_], 'x' for 0 .. $N - 1;
+
+            # Every byte is written and nothing has been resumed yet, so this is the last moment at which "who
+            # thinks it is watching what" is a meaningful question.
+            $snap = armed_snapshot( $loop, $waiters );
             $_->await for @fibers;
         }
     );
@@ -274,7 +371,8 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my $attached_submit = $submits;
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
-    is $woke, $N, "all $N parked reads woke with their byte" or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms );
+    is $woke, $N, "all $N parked reads woke with their byte"
+        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap );
     is $attached_submit, 0,  "no worker-pool job was submitted for any of the $N reads";
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
