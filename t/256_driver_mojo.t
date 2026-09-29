@@ -221,9 +221,14 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms ) {
 
     # The d_* row is therefore the real evidence, and FD_SETSIZE is only a bound on the select(2) fallback, so it
     # means something different per backend. Reporting the number alone invited reading a descriptor ceiling into a
-    # kqueue run, which the two observed losses contradict.
+    # kqueue run, which the two observed losses contradict. osname/archname and the key count lead the row because
+    # an all-undef d_* line is ambiguous: it means "this perl configured no poll backend" only if %Config is actually
+    # populated, and without the count there is no way to tell that from a broken read on the reporting machine.
+    push @out, sprintf( 'perl %vd %s %s (%d Config keys)',
+        $^V, $Config{osname} // 'unknown-os', $Config{archname} // 'unknown-arch', scalar keys %Config );
     push @out, sprintf( 'FD_SETSIZE %d, d_poll %s, d_ppoll %s, d_epoll %s, d_kqueue %s',
-        Acme::Parataxis::fd_setsize(), map { defined $Config{$_} ? $Config{$_} : 'undef' }
+        Acme::Parataxis::fd_setsize(),
+        map { exists $Config{$_} ? ( defined $Config{$_} ? $Config{$_} : 'undef' ) : 'ABSENT' }
         qw[d_poll d_ppoll d_epoll d_kqueue] );
     # Total elapsed separates "the stragglers used the whole timeout" (the batch ran ~5000ms) from "they were lost
     # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
