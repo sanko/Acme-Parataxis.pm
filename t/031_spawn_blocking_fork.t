@@ -59,13 +59,16 @@ subtest 'the caller keeps running while the child burns' => sub {
             # a tick count.
             my $t0   = time;
             my $secs = 1;
+            # Time::HiRes::time() named in full, for the same reason as in the pool-cap subtest: an imported `time` is
+            # not inherited by the forked child, so naming the sub-second clock explicitly is what makes the window this
+            # child reports usable for the comparison below.
             my $f    = spawn_blocking_fork(
                 sub {
-                    my $start = time;
+                    my $start = Time::HiRes::time();
                     my $end   = $start + $_[0];
                     my $s     = 0;
-                    while ( time < $end ) { $s += $_ % 7 for 1 .. 20_000 }
-                    return [ $s, $start, time ];
+                    while ( Time::HiRes::time() < $end ) { $s += $_ % 7 for 1 .. 20_000 }
+                    return [ $s, $start, Time::HiRes::time() ];
                 }, $secs
             );
             fiber {    # a bystander fiber that only makes progress if the loop is not blocked on the child
@@ -195,8 +198,16 @@ subtest 'a result larger than the pipe buffer still arrives' => sub {
 subtest 'the process pool is bounded by set_max_blocking_forks' => sub {
     my $rv = run(
         sub {
+            # Time::HiRes::time() is named in full rather than the imported `time`: this file imports Time::HiRes, but
+            # the closure runs in a forked child, and an inherited import is not what decides the resolution - the
+            # module does. Naming it explicitly is what guarantees the sub-second clock here. With the builtin `time`
+            # every window below rounded to a whole second, so children landing in the same second reported an empty
+            # window and the overlap test below saw none: a macOS x64 leg reported 0 overlapping pairs and peak depth 1
+            # while the pool was in fact behaving correctly.
             my @fs = map {
-                spawn_blocking_fork( sub { my $t0 = time; burn( 400_000, 'w' ); return [ $t0, time, $$ ] } );
+                spawn_blocking_fork(
+                    sub { my $t0 = Time::HiRes::time(); burn( 400_000, 'w' ); return [ $t0, Time::HiRes::time(), $$ ] }
+                );
             } 1 .. 6;
             return [ map { $_->await } @fs ];
         }
