@@ -2,6 +2,7 @@ use v5.40;
 use experimental qw[class];
 use blib;
 use Test2::V1 -ipP;
+use Config         qw[%Config];
 use IO::Socket::INET ();
 use Time::HiRes      qw[time];
 use Acme::Parataxis  qw[async fiber await_sleep await_read await_write with_timeout];
@@ -167,11 +168,82 @@ my $N = pairs_that_fit( $^O eq 'MSWin32' ? 24 : 300 );
 # back small with every assertion below still green. Ask for the number directly so that shows up as a failure.
 ok Acme::Parataxis::fd_setsize() >= 64, 'the platform reports a usable FD_SETSIZE (' . Acme::Parataxis::fd_setsize() . ')';
 ok $N >= 8,                             "the high-volume workload kept a workable $N pairs";
+
+# A lost wakeup in the high-volume batch is intermittent and platform-shaped, so a bare count is close to useless
+# when one does happen: it cannot say whether the stragglers were a contiguous tail or scattered singles, whether
+# their descriptors clustered past a ceiling, or whether await_read hit its timeout (undef) or returned something
+# else. Those three answers point at different bugs, so the failure diagnostic carries all of them along with the
+# reactor actually in play. Only ever runs after the count assertion has already failed.
+sub lost_diagnosis ( $got, $fd, $loop, $n, $ms ) {
+    my @lost = grep { !( defined $got->[$_] && $got->[$_] == 1 ) } 0 .. $#$got;
+    my @kept = grep {   defined $got->[$_] && $got->[$_] == 1     } 0 .. $#$got;
+    my @out  = ( 'lost ' . @lost . " of $n parked reads" );
+    return join "\n", @out if !@lost;
+
+    # A run of consecutive indices is one lost batch; scattered singles are a different failure.
+    my @runs;
+    for my $i (@lost) {
+        if ( @runs && $runs[-1][1] == $i - 1 ) { $runs[-1][1] = $i }
+        else                                    { push @runs, [ $i, $i ] }
+    }
+    push @out, 'lost as ' . scalar(@runs) . ' run(s) of index: '
+        . join( ', ', map { $_->[0] == $_->[1] ? $_->[0] : "$_->[0]-$_->[1]" } @runs );
+
+    # What await_read returned, so a timeout can be told apart from a wrong or empty read.
+    my %count;
+    $count{ defined $got->[$_] ? $got->[$_] : 'undef (timed out)' }++ for @lost;
+    push @out, 'await_read returned: ' . join( ', ', map { "$_ x $count{$_}" } sort keys %count );
+
+    # Descriptor numbers decide between the two live theories: clustering past FD_SETSIZE or some other ceiling is a
+    # bound, scattering evenly through the range is a race.
+    push @out, 'lost fds: ' . fd_span( [ map { $fd->[$_] } @lost ] );
+    push @out, 'kept fds: ' . fd_span( [ map { $fd->[$_] } @kept ] );
+
+    # Where the lost descriptors sit inside the full range, stated as a plain fact: a lost set that is entirely in
+    # the top half points at a bound, one scattered evenly through the range points at a race. The reader decides.
+    my @lost_fd = sort { $a <=> $b } grep { defined } map { $fd->[$_] } @lost;
+    my @all_fd  = sort { $a <=> $b } grep { defined } map { $fd->[$_] } 0 .. $#$got;
+    my $mid = $all_fd[ int( @all_fd / 2 ) ];
+    push @out, sprintf( 'descriptors in play span %d..%d; every lost fd is %s the midpoint (%d)',
+        $all_fd[0], $all_fd[-1], $lost_fd[0] > $mid ? 'above' : 'below', $mid )
+        if @lost_fd && @all_fd > 1;
+
+    # Which reactor was really in play. Mojo::Reactor::Poll is the wrapper for all of the backends, so name the
+    # backend too: on macOS it means kqueue, and that is the detail that separates a poll-bound bug from a kqueue one.
+    my $reactor = eval { $loop->reactor } || 'unknown';
+    my $backend = 'unknown';
+    for my $b (qw[KQueue Epoll Poll]) {
+        $backend = $b if ref($reactor) ne 'unknown' && $reactor->isa( "Mojo::Reactor::$b" );
+    }
+    push @out, 'reactor: ' . ref($reactor) . " (backend: $backend)";
+    push @out, sprintf( 'FD_SETSIZE %d, d_poll %s, d_ppoll %s, d_epoll %s, d_kqueue %s',
+        Acme::Parataxis::fd_setsize(), map { defined $Config{$_} ? $Config{$_} : 'undef' }
+        qw[d_poll d_ppoll d_epoll d_kqueue] );
+    # Total elapsed separates "the stragglers used the whole timeout" (the batch ran ~5000ms) from "they were lost
+    # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
+    push @out, sprintf( 'batch elapsed %.0fms (await_read timeout was 5000ms)', $ms );
+    return join "\n", @out;
+}
+
+# Min..max of a descriptor list, plus whether it is contiguous, which separates "one block" from "all over".
+sub fd_span ( $f ) {
+    return 'none' if !@$f;
+    my @s = sort { $a <=> $b } @$f;
+    my $n = scalar @s;
+    return "$s[0] (1 value)" if $n == 1;
+    for my $i ( 1 .. $#s ) {
+        return sprintf( '%d..%d, %d values, not contiguous', $s[0], $s[-1], $n ) if $s[$i] != $s[ $i - 1 ] + 1;
+    }
+    return "$s[0]..$s[-1] ($n values, all consecutive)";
+}
+
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
-    Acme::Parataxis->attach_loop( Mojo::IOLoop->new );
+    my $loop = Mojo::IOLoop->new;
+    Acme::Parataxis->attach_loop($loop);
     $submits = 0;
     my @got;
+    my @fd;                 # the descriptor each fiber actually parked on, captured before the batch runs
     my $t0 = time;
     Acme::Parataxis::run(
         sub {
@@ -179,6 +251,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
             # this exercises N descriptors parked at once rather than N reads that were ready from the start.
             my @fibers = map {
                 my $i = $_;
+                $fd[$i] = fileno( $waiters->[$i] );
                 fiber { $got[$i] = await_read( $waiters->[$i], 5000 ) }
             } 0 .. $N - 1;
             await_sleep(50);
@@ -190,7 +263,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my $attached_submit = $submits;
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
-    is $woke,            $N, "all $N parked reads woke with their byte";
+    is $woke, $N, "all $N parked reads woke with their byte" or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms );
     is $attached_submit, 0,  "no worker-pool job was submitted for any of the $N reads";
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
