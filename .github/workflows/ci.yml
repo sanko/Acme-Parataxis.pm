@@ -139,7 +139,7 @@ jobs:
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -DDEBUGGING=both","variant":"threads-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -Duselongdouble -DDEBUGGING=both","variant":"threads-longdouble-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads -Dusequadmath -DDEBUGGING=both","variant":"threads-quadmath-debugging","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
-          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads","payload_mb":12,"variant":"threads-payload-12mb","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dusethreads","name":"Linux / x64-gcc-v5.42.0-threads-payload-12mb","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.40.2","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04","toolchain":"clang"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"x86_64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04","toolchain":"clang"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","variant":"default","platform_name":"linux","os":"ubuntu-26.04-arm","toolchain":"gcc"},
@@ -152,8 +152,12 @@ jobs:
         #~ t/357 sizes the payload its cloned interpreter allocates. At the 4 MiB default the clone stayed inside
         #~ the arena; 12 MiB used to fault with SIGSEGV (exit 139), and the documented 4 MiB case was passing while
         #~ still printing heap warnings, so a payload that fits the allocator hides the very bug the test is for.
-        #~ matrix.payload_mb is empty on every other leg, and the test falls back to its own 4 MiB default there.
-        export PARATAXIS_SB_PAYLOAD_MB=${{ matrix.payload_mb }}
+        #~ The task is one shared script and `${{ matrix.* }}` in it is evaluated here, where no matrix context
+        #~ exists, so the leg identifies itself by the matrix `name` that run-direct.yml exports as RAW_NAME. Every
+        #~ other leg leaves the variable unset and t/357 falls back to its own 4 MiB default.
+        case "$RAW_NAME" in
+          *payload-12mb*) export PARATAXIS_SB_PAYLOAD_MB=12 ;;
+        esac
         #~ Bootstrap cpanm via its canonical one-liner; on a writable perl (a
         #~ source build) it lands in the perl's own bin dir, which the runner
         #~ puts on PATH. Distro perl is read-only to the runner user, so
