@@ -5,8 +5,12 @@ use Config;
 skip_all 'spawn_blocking requires a threaded perl (useithreads)', 1 if !( defined $Config{useithreads} && $Config{useithreads} eq 'define' );
 use Acme::Parataxis           qw[run fiber await_sleep with_timeout];
 use Acme::Parataxis::Blocking qw[spawn_blocking set_max_blocking_threads max_blocking_threads];
-use threads;
-use threads::shared;    # after threads (compile-time import installs share()'s ref prototype)
+
+# Compile-time `use threads;` would abort this file on a non-ithreads perl before the skip_all above could run, so
+# defer both to `use if` (no-op when useithreads is undefined). The compile-time import still installs share()'s ref
+# prototype on threaded perls, mirroring the guarded idiom in eg/blocking_offload.pl.
+use if ( defined $Config{useithreads} && $Config{useithreads} eq 'define' ), 'threads';
+use if ( defined $Config{useithreads} && $Config{useithreads} eq 'define' ), 'threads::shared';
 use Time::HiRes qw[time];
 $|++;
 
