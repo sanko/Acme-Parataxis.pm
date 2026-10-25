@@ -8,22 +8,20 @@ Acme::Parataxis - Perl Coroutines Using Real OS Fibers via FFI
 use v5.40;
 use Acme::Parataxis qw[:all];
 $|++;
-
 async {
     say 'Main task started';
-
     my $f1 = fiber {
         say '  Task 1: Sleeping...';
         await_sleep(1000);
+        say '  Task 1: Waking up';
         return 'Coffee!';
     };
-
     my $f2 = fiber {
         say '  Task 2: Calculating... (simulated CPU work)';
         my $sum = 0;
         for ( 1 .. 100 ) {
             $sum += $_;
-            maybe_yield();    # Be a good neighbor
+            yield;    # Be a good neighbor
         }
         say '  Task 2: Complete. Will return ' . $sum;
         return $sum;
@@ -33,6 +31,15 @@ async {
     say 'Result 1: ' . await($f1);
     say 'Result 2: ' . await($f2);
 };
+
+# Output:
+# Main task started
+#   Task 1: Sleeping...
+#   Task 2: Calculating... (simulated CPU work)
+#   Task 2: Complete. Will return 5050
+#   Task 1: Waking up
+# Result 1: Coffee!
+# Result 2: 5050
 ```
 
 # DESCRIPTION
@@ -240,7 +247,7 @@ async {
 };
 ```
 
-## `pmap( { concurrency =` $n, }, sub ( $item ) { ... }, @items )>
+## `pmap( { concurrency => $n, }, sub ( $item ) { ... }, @items )`
 
 `pmap( )` maps a code reference over a list in parallel using a bounded worker pool: `@items` are handed to at most
 `$n` concurrent fibers at a time, and the results are returned in input order. The optional `concurrency` controls

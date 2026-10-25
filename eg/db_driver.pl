@@ -47,7 +47,6 @@ my @QUERIES          = ( 1 .. 12, 1 .. 12 );    # 24, two rounds so the row coun
 my $EXPECTED_ROWS    = 2 * ( 12 * 13 / 2 );
 my $PORT             = 0;                       # set once the child reports the port it bound
 
-# ---------------------------------------------------------------- the database
 # A child perl running a non-blocking, round-robin line server. It never forks
 # and never threads, so this is the same shape on every platform; concurrency
 # comes from holding each connection's answer until its own deadline instead of
@@ -120,7 +119,6 @@ while (1) {
 }
 CHILD
 
-# ------------------------------------------------------------------ the driver
 # One driver, two transports. Everything above read_reply() is identical; the
 # only difference in the whole file is whether a wait calls await_read() or
 # sysread().
@@ -215,8 +213,6 @@ sub dbh_disconnect {
     my ($dbh) = @_;
     close $dbh->{sock};
 }
-
-# ------------------------------------------------------------------- run them
 my ( $pfh, $ppath ) = tempfile( 'parataxis-db-XXXXXX', TMPDIR => 1, UNLINK => 1 );
 close $pfh;
 

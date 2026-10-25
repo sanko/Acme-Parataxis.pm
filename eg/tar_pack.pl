@@ -45,9 +45,8 @@ my $CHUNKS_PER_FILE = int( ( $FILE_BYTES + $CHUNK - 1 ) / $CHUNK );
 # spawn_blocking do not mix - see section 5, which is a bug report rather than a demonstration.
 # The point here is explicit await boundaries that you place on purpose, and a transparently
 # unblocked sysread() would take the placement away and hand it to the scheduler.
-# --------------------------------------------------------------------------------------------------
+#
 # A tree to pack.
-# --------------------------------------------------------------------------------------------------
 my $TREE = File::Temp->newdir( CLEANUP => 0 );
 
 END {
@@ -75,13 +74,11 @@ sub build_tree {
     return @paths;
 }
 
-# --------------------------------------------------------------------------------------------------
 # The cancellable read: hash a file, and keep its bytes, one chunk at a time.
 #
 # The await_sleep(0) is the entire point of this sub. It is the boundary a cancel lands on, and it is
 # a choice: with it, a Ctrl-C during a 4MB file costs one chunk of work. Without it, the file is
 # atomic as far as the scheduler is concerned and the signal waits for all of it.
-# --------------------------------------------------------------------------------------------------
 sub read_hashed {
     my ( $path, $on_chunk ) = @_;
     open my $fh, '<:raw', $path or die "open $path: $!";
@@ -100,7 +97,6 @@ sub read_hashed {
     return ( $sha->hexdigest, length($body), $body );
 }
 
-# --------------------------------------------------------------------------------------------------
 # Read the finished .tar.gz back and prove it is a real archive.
 #
 # Four API details here are load-bearing, and every one of them fails quietly rather than loudly:
@@ -115,9 +111,7 @@ sub read_hashed {
 # And gzread() overwrites the variable you hand it, including on the final zero-length read, so
 # appending is the only safe accumulator - read straight into one variable and the last call erases
 # the data.
-# --------------------------------------------------------------------------------------------------
-sub verify_archive {
-    my ($path) = @_;
+sub verify_archive($path) {
     my $next = Archive::Tar->iter( $path, 1 );
     my @got;
     while ( my $f = $next->() ) {
@@ -127,22 +121,18 @@ sub verify_archive {
     return @got;
 }
 
-sub show_entries {
-    my ( $rows, $expected, $label ) = @_;
+sub show_entries( $rows, $expected, $label ) {
     printf "  %-28s %d entries\n", $label, scalar @$rows;
     my $ok = ( join( q{,}, map {"$_->[0]:$_->[1]:$_->[2]"} @$rows ) eq join( q{,}, map {"$_->[0]:$_->[1]:$_->[2]"} @$expected ) ) ? 'yes' : 'NO';
     printf "  %-28s %s\n", '  names, sizes and digests match', $ok;
     return $ok eq 'yes';
 }
 
-# --------------------------------------------------------------------------------------------------
 # The build itself. One sub, so section 4 can hand it to a thread and time it here.
 #
 # The arguments are deliberately plain - paths, sizes, a destination - because that is exactly what
 # survives the copy-in/copy-out boundary of a cloned interpreter. See section 4.
-# --------------------------------------------------------------------------------------------------
-sub build_archive {
-    my ( $out, $paths, $expected_ref ) = @_;
+sub build_archive( $out, $paths, $expected_ref ) {
     my $tar = Archive::Tar->new;
     for my $i ( 0 .. $#$paths ) {
         my ( $digest, $size, $body ) = read_hashed( $paths->[$i], undef );
@@ -153,7 +143,6 @@ sub build_archive {
     return -s $out;
 }
 
-# --------------------------------------------------------------------------------------------------
 # A closure that really is incremental, which is what section 4 needs.
 #
 # Archive::Tar cannot do this: it assembles the whole archive and write() emits it in one call, so
@@ -164,9 +153,7 @@ sub build_archive {
 # The arguments are three plain scalars on purpose. A cloned interpreter gets a copy-in/copy-out
 # snapshot, so anything passed in has to be something that survives being copied; see the Blocking
 # documentation for what does not.
-# --------------------------------------------------------------------------------------------------
-sub gzip_stream {
-    my ( $src, $dst, $chunk ) = @_;
+sub gzip_stream ( $src, $dst, $chunk ) {
     open my $in,  '<:raw', $src or die "open $src: $!";
     open my $out, '>:raw', $dst or die "open $dst: $!";
     my $zw  = Compress::Zlib::gzopen( $out, 'wb' );
@@ -182,14 +169,11 @@ sub gzip_stream {
     return "$read/$passes";
 }
 
-# --------------------------------------------------------------------------------------------------
 # An incompressible payload. The tree above is deliberately repetitive so the ratio in section 1 is
 # dramatic, but repetitive data gzips at about 66ms for 12MB, which is too short to reliably catch a
 # cancel in the middle. Random bytes take about 216ms and barely compress at all, which is both the
 # slow case and the honest one: backing up files that are already compressed looks like this.
-# --------------------------------------------------------------------------------------------------
-sub build_incompressible {
-    my ( $path, $bytes ) = @_;
+sub build_incompressible ( $path, $bytes ) {
     open my $fh, '>:raw', $path or die "open $path: $!";
     if ( open my $ur, '<:raw', '/dev/urandom' ) {    # fast, and everywhere this demo is likely to run
         my $buf;
@@ -218,9 +202,7 @@ sub build_incompressible {
     return $path;
 }
 
-# --------------------------------------------------------------------------------------------------
 # A token that a signal handler can reach, and a way to fire one without needing a real terminal.
-# --------------------------------------------------------------------------------------------------
 sub token_for_signal {
     my $tok = Acme::Parataxis::CancellationToken->new( kind => 'cancel' );
     $SIG{INT} = sub { $tok->cancel };
@@ -228,8 +210,7 @@ sub token_for_signal {
 }
 
 # Cancel from inside the program, at a chosen moment, using the same path a real Ctrl-C takes.
-sub canceller {
-    my ( $tok, $after_ms ) = @_;
+sub canceller ( $tok, $after_ms ) {
     my $f = fiber {
         await_sleep($after_ms);
         $tok->cancel;
@@ -242,9 +223,7 @@ my $mb    = $FILE_COUNT * $FILE_BYTES / 1_048_576;
 say "Packing $FILE_COUNT files, " . sprintf( '%.1f MB', $mb ) . ', in ' . $CHUNK . ' byte chunks.';
 say '';
 
-# --------------------------------------------------------------------------------------------------
-# 1. The happy path, and the boundary you are choosing.
-# --------------------------------------------------------------------------------------------------
+# The happy path, and the boundary you are choosing.
 my @expected;
 my $t0 = Time::HiRes::time();
 Acme::Parataxis::run(
@@ -263,9 +242,7 @@ say '';
 say "  Every file in that archive was read in $CHUNK byte chunks with an await boundary between";
 say '  them, so a cancel could have landed mid-file. Nothing cancelled it, so it did not.';
 
-# --------------------------------------------------------------------------------------------------
-# 2. Cancelling the read, with the cancel landing inside a file rather than before the first one.
-# --------------------------------------------------------------------------------------------------
+# Cancelling the read, with the cancel landing inside a file rather than before the first one.
 say '';
 say '2. Ctrl-C during the read, cancelled at a chunk boundary.';
 say '';
@@ -325,9 +302,7 @@ say '';
     say '  not true.';
 }
 
-# --------------------------------------------------------------------------------------------------
-# 3. What a half-written archive actually does, measured rather than asserted.
-# --------------------------------------------------------------------------------------------------
+# What a half-written archive actually does, measured rather than asserted.
 say '';
 say '3. A half-written archive, and what the standard tools make of it.';
 say '';
@@ -419,9 +394,7 @@ say '';
     say '  either, however the process died.';
 }
 
-# --------------------------------------------------------------------------------------------------
-# 4. Offloading the build, and the one trap in this whole file.
-# --------------------------------------------------------------------------------------------------
+# Offloading the build, and the one trap in this whole file.
 say '';
 say '4. The same build on a thread.';
 say '';
@@ -531,8 +504,7 @@ else {
     say '  moving while this thread does something else.';
 }
 
-# --------------------------------------------------------------------------------------------------
-# 5. Two features in this distribution that must not be used in the same program.
+# Two features in this distribution that must not be used in the same program.
 #
 # This section is a bug report, not a demonstration, and the numbers in it were measured on the
 # threaded 5.44.0 build. It is here because the combination is easy to reach by accident: a program
@@ -559,7 +531,6 @@ else {
 # Nothing in this file needs transparent unblocking - the reads are chunked by hand precisely so the
 # await boundaries are visible and movable. If you do want both features in one program, keep the
 # worker free of the wrapped operations, or do the I/O before the thread exists.
-# --------------------------------------------------------------------------------------------------
 say '';
 say '5. enable_transparent_unblocking() and spawn_blocking do not mix.';
 say '';

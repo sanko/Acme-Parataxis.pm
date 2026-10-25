@@ -7,8 +7,8 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
 
     # Drives readiness through a Mojo::IOLoop. The loop and Parataxis cooperate: Mojo never runs Parataxis callbacks
     # and Parataxis never runs Mojo callbacks; the reactor simply collects fd events and the tokencallback tells the
-    # scheduler which fibers to resume. The passed $loop may itself be a Mojo::Reactor -- anything with the reactor
-    # API (io/watch/remove/timer/one_tick) - so a worker's own mini-loop can be run by Parataxis too.
+    # scheduler which fibers to resume. The passed $loop may itself be a Mojo::Reactor (anything with the reactor
+    # API (io/watch/remove/timer/one_tick)) so a worker's own mini-loop can be run by Parataxis too.
     field $loop : param;
     field $reactor;
     field %read_cb;     # fileno => coderef
@@ -34,7 +34,7 @@ class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
         croak 'Mojo driver cannot watch a closed filehandle' unless defined $fd;
 
         # has_watch() compares handles, not descriptor numbers, so a false here means this handle has no slot of its
-        # own -- it is new to us, or the number it was just given belonged to a closed handle we were still holding.
+        # own... it is new to us, or the number it was just given belonged to a closed handle we were still holding.
         # Either way the callbacks keyed to this number are not this handle's, and a stale direction left behind is
         # live: a handle that only ever asked to read would have POLLOUT set from the previous owner and its dead
         # write callback fired. Clear the slot before claiming it.

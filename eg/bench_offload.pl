@@ -1,4 +1,3 @@
-#!/usr/bin/perl
 # Offloading work: does it actually buy anything?
 #
 # "Should I run this in a fiber, or off the thread?" has a short answer, and it is not the one the
@@ -73,6 +72,7 @@ use File::Temp      ();
 use File::Spec      ();
 use Digest::SHA     ();
 use Time::HiRes     ();
+#
 my $ROUNDS = shift                                                                                            // 3;
 my $TREE   = shift                                                                                            // 20;
 my $SIZE   = shift                                                                                            // 262_144;
@@ -85,9 +85,7 @@ $cores ||= 1;
 # way the spawn_blocking rows skip themselves when Blocking is not installed.
 my $REAL_FORK = $^O eq 'MSWin32' ? 0 : 1;
 
-# ----------------------------------------------------------------------------------------------------------
 # The fixture and the clock.
-# ----------------------------------------------------------------------------------------------------------
 my $dir = File::Temp->newdir( CLEANUP => 1 );
 my @files;
 for my $i ( 1 .. $TREE ) {
@@ -147,9 +145,7 @@ sub subset {
     return @s;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # Workload A: CPU-bound.
-# ----------------------------------------------------------------------------------------------------------
 my @cpu;
 push @cpu, [
     'inline (1 fiber)',
@@ -215,7 +211,6 @@ for my $c (@cpu) {
     printf "  %-20s %10.1f %8.2fx   %.1f\n", $name, $min, $min / $base, $spread;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # Workload B: wait-bound.
 #
 # N pipes, each fronted by its own forked "service" that blocks until it is asked, then takes RTT
@@ -225,7 +220,6 @@ for my $c (@cpu) {
 # pipe by the time the serial reader gets to them, so it pays max(latency) either way and every
 # variant ties at 1.00x. Measured that way first; it is a convincing way to conclude that
 # concurrency does not help.
-# ----------------------------------------------------------------------------------------------------------
 my $N   = 8;
 my $RTT = 40;
 

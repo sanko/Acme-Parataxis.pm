@@ -60,9 +60,7 @@ END {
     File::Path::remove_tree($d) if defined $d && -d $d;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # A tree worth walking: a few directories, a few files each, some nested, one deliberately empty.
-# ----------------------------------------------------------------------------------------------------------
 sub build_tree {
     my ( $root, $count, $bytes ) = @_;
     my @dirs = map { File::Spec->catdir( $root, "d$_" ) } ( 0 .. 2 );
@@ -81,9 +79,7 @@ sub build_tree {
     return $root;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # The yardstick. A heartbeat fiber ticks every 10ms; anything that blocks the OS thread starves it.
-# ----------------------------------------------------------------------------------------------------------
 sub measure {
     my ( $label, $note, $work ) = @_;
     my $ticks = 0;
@@ -104,13 +100,11 @@ sub measure {
     return ( $ms, $ticks, @r );
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # Hashing, several ways. They all produce the same digests; they differ only in what they do to the other fibers.
 #
 # addfile is XS: it opens the file, loops over the reads, and feeds the digest entirely inside C. A CORE::GLOBAL
 # override is a Perl sub, so there is nothing for it to intercept - the whole digest is one opaque call to the
 # scheduler's point of view, and it cannot be interrupted part way through.
-# ----------------------------------------------------------------------------------------------------------
 sub hash_addfile {
     my ($path) = @_;
     return Digest::SHA->new(256)->addfile($path)->hexdigest;
@@ -140,15 +134,13 @@ Acme::Parataxis::run(
         say "Hashing a tree of $FILE_COUNT files, $mb MB total.";
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
-        # 1. The walk, and the mistake almost everyone makes with it.
+        # The walk, and the mistake almost everyone makes with it.
         #
         # Milliseconds are the wrong yardstick here and would be a trap: a walk of a local directory tree costs a
         # few microseconds per entry, so the whole thing lands inside one 10ms tick and every version below measures
         # ~0ms and one tick whether or not the walk cooperates. What is measurable, and what actually matters, is
         # how many turns the walk hands to a sibling - so that is what gets counted. A companion fiber parked on
         # await_sleep(0) is resumed once per yield, and zero times if the walk never gives the thread back.
-        # ------------------------------------------------------------------------------------------------------
         say '1. File::Find, and how many turns it hands to a sibling.';
         say '';
         my $sibling_runs = sub {
@@ -226,9 +218,7 @@ Acme::Parataxis::run(
         File::Find::find( { no_chdir => 1, wanted => sub { push @sorted, $File::Find::name if -f $_ }, }, $root );
         @sorted = sort @sorted;
 
-        # ------------------------------------------------------------------------------------------------------
-        # 2. The naive hasher.
-        # ------------------------------------------------------------------------------------------------------
+        # The naive hasher.
         say '2. Hashing it the obvious way.';
         say '';
         my ( $ms_c, $ticks_c, @naive ) = measure(
@@ -239,9 +229,7 @@ Acme::Parataxis::run(
             }
         );
 
-        # ------------------------------------------------------------------------------------------------------
-        # 3. The cooperative hasher - and the one knob that matters.
-        # ------------------------------------------------------------------------------------------------------
+        # The cooperative hasher - and the one knob that matters.
         say '3. The same digests, with the read loop in Perl.';
         say '';
         my ( $ms_d, $ticks_d, @chunked ) = measure(
@@ -254,9 +242,7 @@ Acme::Parataxis::run(
         say "  Same digests: " . ( ( join q{,}, @naive ) eq ( join q{,}, @chunked ) ? 'yes' : 'NO' );
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
-        # 4. One fiber per file, bounded.
-        # ------------------------------------------------------------------------------------------------------
+        # One fiber per file, bounded.
         say '4. One fiber per file, capped at four in flight.';
         say '';
         my $sem = Acme::Parataxis::Semaphore->new( count => 4 );
@@ -306,9 +292,7 @@ Acme::Parataxis::run(
         say "  Same digests: " . ( ( join q{,}, @naive ) eq ( join q{,}, @by_file ) ? 'yes' : 'NO' );
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
-        # 5. The diagnosis.
-        # ------------------------------------------------------------------------------------------------------
+        # The diagnosis.
         say '5. Why none of that made it faster.';
         say '';
         printf "  %-42s %6.1f ms\n", 'addfile loop',            $ms_c;
@@ -365,13 +349,11 @@ Acme::Parataxis::run(
         say '  expecting a speedup.';
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
-        # 6. The one tuning knob that is worth reaching for.
+        # The one tuning knob that is worth reaching for.
         #
         # Same digest, same Compat, same thread - only the chunk size changes. This is the largest single effect in
         # the file, and it is a factor of five, which is worth knowing before deciding a cooperative read loop is
         # "slower than addfile".
-        # ------------------------------------------------------------------------------------------------------
         say '6. The knob that does matter: chunk size.';
         say '';
         my ( %by_size, %ticks_by );
@@ -412,9 +394,7 @@ Acme::Parataxis::run(
         say '  the cost. If you will, hash_addfile is faster than both of them and uninterruptible.';
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
-        # 7. Getting the work off this thread.
-        # ------------------------------------------------------------------------------------------------------
+        # Getting the work off this thread.
         say '7. The part that is actually worth parallelising.';
         say '';
 

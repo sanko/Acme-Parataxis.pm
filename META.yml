@@ -22,7 +22,7 @@ configure_requires:
   Test2::V1: '0'
   perl: v5.40.0
 dynamic_config: 1
-generated_by: 'App::mii v1.0.0, CPAN::Meta::Converter version 2.150013'
+generated_by: 'App::mii v1.0.0, CPAN::Meta::Converter version 2.150015'
 keywords: []
 license: artistic_2
 meta-spec:

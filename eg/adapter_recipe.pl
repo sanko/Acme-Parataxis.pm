@@ -1,4 +1,3 @@
-#!/usr/bin/perl
 # Turning a blocking call into an awaitable one.
 #
 # "Make this synchronous thing asynchronous" is one question with three different answers, and picking the wrong one
@@ -16,13 +15,11 @@ $|++;
 use Acme::Parataxis qw[:all];
 use Time::HiRes     ();
 
-# ----------------------------------------------------------------------------------------------------------
 # The yardstick.
 #
 # A heartbeat fiber ticks every 10ms. Anything that blocks the OS thread starves it, so the tick count measures how
 # much of the program was frozen. Every measurement runs comparable work and reports both wall time and ticks, so
 # "it did not block" is a number and not a vibe.
-# ----------------------------------------------------------------------------------------------------------
 sub measure {
     my ( $label, $note, $work ) = @_;
     my $ticks = 0;
@@ -62,14 +59,12 @@ sub drop_pipe {
     return;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # Everything below this point is compiled before Compat is installed, so it keeps the raw builtins. Two of these are
 # here to be measured twice, and that is the only reason they are named.
 #
 # A real block. Not sleep, and not on purpose: sleep 0.3 truncates to sleep 0 in raw CORE::sleep, so a fractional
 # sleep is not a blocking call at all until Compat rounds it back up. select is untouched by Compat in either
 # direction, which makes it the honest example of something the cheap fix cannot reach.
-# ----------------------------------------------------------------------------------------------------------
 sub stall_with_select {
     select undef, undef, undef, 0.3;
     return;
@@ -83,11 +78,9 @@ sub read_from_pipe_before {
     return $buf;
 }
 
-# ----------------------------------------------------------------------------------------------------------
 # The install. Opt-in, and where it goes is the entire subject of this file: below the code that loads what it
 # depends on, above the code you want changed. Everything textually above keeps the raw builtins, everything below
 # gets the cooperative ones.
-# ----------------------------------------------------------------------------------------------------------
 BEGIN { Acme::Parataxis->enable_transparent_unblocking() }
 
 # The same shape as stall_with_select, compiled after the install. This one is *not* cooperative, and section 4
@@ -121,9 +114,7 @@ Acme::Parataxis::run(
         say '  in the program ran. Only the first of the three is something Compat can fix.';
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
         # Section 2: what one install buys, and what it does not.
-        # ------------------------------------------------------------------------------------------------------
         say 'After the install: sleep/read/sysread cooperate.';
         say '';
         $reader = stall_pipe(300);
@@ -152,7 +143,6 @@ Acme::Parataxis::run(
         say '  cannot recompile -- a precompiled dependency, a .so -- is permanently outside this fix.';
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
         # Section 3: the adapter for code you cannot recompile.
         #
         # If the read is in code compiled before the install, the answer is to stop asking it to do the waiting.
@@ -171,7 +161,6 @@ Acme::Parataxis::run(
         # error, it reads a single byte per readiness check: measured here, draining 512KB that way took 235ms
         # against 1ms for 64KB reads. The length you want is yours to pass. The read's own return value is then the
         # only honest source of "how many arrived", because readiness promises only that *something* is there.
-        # ------------------------------------------------------------------------------------------------------
         say 'Wrapping the pre-install read yourself: the general adapter.';
         say '';
         $reader = stall_pipe(300);
@@ -197,9 +186,7 @@ Acme::Parataxis::run(
         say '  all". If you treat -1 as a length, or as success, a timeout silently becomes a one-byte read.';
         say '';
 
-        # ------------------------------------------------------------------------------------------------------
         # Section 4: the two cases with no in-process answer.
-        # ------------------------------------------------------------------------------------------------------
         say 'The two cases nothing here fixes.';
         say '';
         measure( 'select(undef,undef,undef,0.3)', '<- parked, and it stays parked', sub { stall_with_select_after() } );

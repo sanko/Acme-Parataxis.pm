@@ -49,8 +49,8 @@ subtest 'Destroyed fiber id stays reserved until its jobs drain' => sub {
 
     # Run 3: after the stale job is reclaimed the id is released and can be
     # handed out safely again. Release only happens once the main thread drains
-    # the completed job, which is scheduling-dependent -- a fixed sleep window is
-    # too thin under load -- so poll with short-lived probe fibers until A's slot
+    # the completed job, which is scheduling-dependent --a fixed sleep window is
+    # too thin under load-- so poll with short-lived probe fibers until A's slot
     # is observed being handed out again (bounded so a real regression still fails).
     my ( $fidC, $deadline ) = ( undef, time() + 5 );
     async {
