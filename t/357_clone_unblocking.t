@@ -67,6 +67,7 @@ sub run_one_clone {
     );
     return ( $rc, $buf, $joined );
 }
+
 # The payload size goes in the subtest name so every run says which size it actually exercised. A green run that
 # silently fell back to the default is the exact failure this test cannot otherwise catch: it passed at 4 MB while
 # the corruption was still live, and a misconfigured CI env var would have reproduced that invisibly.

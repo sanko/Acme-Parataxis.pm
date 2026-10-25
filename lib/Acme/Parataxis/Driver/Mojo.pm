@@ -3,7 +3,7 @@ no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Driver::Mojo v0.1.1 : isa(Acme::Parataxis::Driver) {
     use Carp qw[croak];
-    use Scalar::Util qw[blessed];
+    use builtin qw[blessed];
 
     # Drives readiness through a Mojo::IOLoop. The loop and Parataxis cooperate: Mojo never runs Parataxis callbacks
     # and Parataxis never runs Mojo callbacks; the reactor simply collects fd events and the tokencallback tells the

@@ -18,8 +18,8 @@ class Acme::Parataxis::TVar v0.1.1 {
     use Acme::Parataxis;
     use Acme::Parataxis::Error;          # for the internal STM_Retry control-flow exception
     use Acme::Parataxis::Sync::Mutex;    # the global commit lock
-    use Scalar::Util qw[refaddr];
-    use Carp         qw[croak];
+    use builtin qw[refaddr];
+    use Carp    qw[croak];
     field $value : reader : param;       # committed value
     field $version : reader = 0;         # bumped on every committed write; the conflict detector
     field @waiters;                      # fids parked by retry() whose read sets include this TVar

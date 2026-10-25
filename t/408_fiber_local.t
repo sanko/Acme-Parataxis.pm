@@ -1,6 +1,6 @@
 use v5.40;
 use blib;
-use Scalar::Util    qw[refaddr];
+use builtin         qw[refaddr];
 use Acme::Parataxis qw[async fiber yield await_sleep];
 use Acme::Parataxis::Local;
 use Test2::V1 -ipP;

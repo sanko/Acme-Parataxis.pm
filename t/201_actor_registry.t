@@ -2,7 +2,7 @@ use v5.40;
 use blib;
 use Acme::Parataxis qw[async yield];
 use Acme::Parataxis::Actor;
-use Scalar::Util qw[weaken];
+use builtin qw[weaken];
 use Test2::V1 -ipP;
 $|++;
 #

@@ -17,7 +17,6 @@ use Acme::Parataxis::Driver::IOAsync;
 # OS hands the freed number back. The first two assertions are red without the fix and green with it.
 #
 # Nothing here needs a fiber or a run loop. The defect is in the bookkeeping, so the bookkeeping is what is tested.
-
 # A pipe whose read end carries exactly $fd, or an empty list if the OS will not co-operate within a bounded number
 # of tries. A pipe is the cheapest watchable handle whose number returns to the free list on close.
 sub pipe_on_fd ($fd) {
@@ -71,7 +70,10 @@ sub exercise ( $name, $build, $reusable ) {
     #    Parataxis does can be observed end to end here, and asserting it would either pass vacuously or report a
     #    red test for somebody else's bug. What Parataxis does own -- the two assertions above -- is asserted for both.
     if ($reusable) {
-        my $registered = eval { $driver->watch_read( $b, sub { } ); 1 };
+        my $registered = eval {
+            $driver->watch_read( $b, sub { } );
+            1;
+        };
         if ( !$registered ) {
             my $err = $@;
             chomp $err;
@@ -84,8 +86,8 @@ sub exercise ( $name, $build, $reusable ) {
         }
     }
     else {
-        note("$name: the loop has no end-to-end behaviour for a recycled descriptor to assert against, "
-            . 'so the two loop-facing assertions below are made for Mojo only');
+        note( "$name: the loop has no end-to-end behaviour for a recycled descriptor to assert against, " .
+                'so the two loop-facing assertions below are made for Mojo only' );
     }
     $driver->reset;
     close $b;
@@ -130,15 +132,12 @@ sub exercise ( $name, $build, $reusable ) {
     }
     else { note('the OS did not recycle the descriptor, so there is no stale slot to reset') }
 }
-
 subtest 'Driver::Mojo' => sub {
     plan skip_all => 'Mojo::IOLoop not installed' unless eval { require Mojo::IOLoop; 1 };
     exercise( 'Mojo', sub { Acme::Parataxis::Driver::Mojo->new( loop => Mojo::IOLoop->new ) }, 1 );
 };
-
 subtest 'Driver::IOAsync' => sub {
     plan skip_all => 'IO::Async::Loop not installed' unless eval { require IO::Async::Loop; 1 };
     exercise( 'IOAsync', sub { Acme::Parataxis::Driver::IOAsync->new( loop => IO::Async::Loop->new ) }, 0 );
 };
-
 done_testing;

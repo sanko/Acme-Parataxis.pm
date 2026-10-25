@@ -10,7 +10,7 @@ package Acme::Parataxis v0.1.1 {
     use Time::HiRes    qw[usleep];
     use Exporter       qw[import];
     use Carp           qw[croak];
-    use Scalar::Util   qw[refaddr];
+    use builtin        qw[refaddr];
     use Acme::Parataxis::Error;
     our %EXPORT_TAGS = (
         all => [

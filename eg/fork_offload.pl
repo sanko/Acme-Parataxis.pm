@@ -4,8 +4,8 @@ $|++;
 use Config;
 use Acme::Parataxis           qw[run fiber await_sleep with_timeout];
 use Acme::Parataxis::Blocking qw[spawn_blocking_fork set_max_blocking_forks max_blocking_forks kill_blocking_fork];
-use POSIX ();
-use Time::HiRes qw[time];
+use POSIX                     ();
+use Time::HiRes               qw[time];
 
 # CPU offload for a perl that has no threads. spawn_blocking() needs a
 # useithreads build because it clones an interpreter with threads->create; this
@@ -41,8 +41,7 @@ use Time::HiRes qw[time];
 #   kill_blocking_fork() on a runaway child and exits 0.
 if ( !( defined $Config{d_fork} && $Config{d_fork} eq 'define' ) || $^O eq 'MSWin32' ) {
     print "This platform has no real fork(2) (MSWin32 emulates it with threads.pm),\n",
-        "so spawn_blocking_fork() is unavailable here. Use perl eg/blocking_offload.pl\n",
-        "on a useithreads build instead.\n";
+        "so spawn_blocking_fork() is unavailable here. Use perl eg/blocking_offload.pl\n", "on a useithreads build instead.\n";
     exit 0;
 }
 my $POOL = 2;      # concurrent children; --pool to raise
@@ -70,7 +69,7 @@ die "--jobs must be >= 1\n" if $JOBS < 1;
 # from the windows the children actually ran in, and the cap is checked against
 # those rather than against a shared tally that would always read zero.
 sub churn ( $tag, $ms ) {
-    my $start = time();                                          # not $^T: that is the parent's, and every child inherits it
+    my $start = time();                # not $^T: that is the parent's, and every child inherits it
     my $end   = $start + $ms / 1000;
     my $sum   = 0;
     1 while time() < $end && ( $sum = ( $sum * 31 + $tag ) % 2147483647 );
@@ -78,7 +77,6 @@ sub churn ( $tag, $ms ) {
 }
 my $cap = set_max_blocking_forks($POOL);
 die "set_max_blocking_forks($POOL) reported $cap" unless $cap == $POOL;
-
 my $ticks = 0;
 my $done  = 0;
 my $rv    = run(
@@ -102,7 +100,7 @@ my $rv    = run(
             }
             1;
         };
-        my @out   = map { $_->await } @fs;                          # results come back in spawn order
+        my @out   = map { $_->await } @fs;                              # results come back in spawn order
         my $slow  = spawn_blocking_fork( sub { churn( 99, 1500 ) } );
         my $timed = !eval {
             with_timeout( 50, sub { return $slow->await } );
@@ -113,7 +111,7 @@ my $rv    = run(
         # The difference from the thread pool: a runaway child can be signalled
         # for real, so the work actually stops.
         my $runaway = spawn_blocking_fork( sub { my $n = 0; $n++ while 1 } );
-        await_sleep(200);                                            # let it get properly stuck
+        await_sleep(200);    # let it get properly stuck
         my $delivered = kill_blocking_fork($runaway);
         my $killed_at = time();
         my $killed    = eval { $runaway->await; 1 } ? 0 : 1;
@@ -125,15 +123,15 @@ my $rv    = run(
         my $after_kill = spawn_blocking_fork( sub { churn( 8, 20 ) }, 8 )->await;
         $done = 1;
         return {
-            out          => \@out,
-            timed        => $timed,
-            again        => $again,
-            ticks        => $ticks,
-            delivered    => $delivered,
-            killed       => $killed,
-            kill_took    => $kill_took,
-            kill_err     => $err,
-            after_kill   => $after_kill,
+            out        => \@out,
+            timed      => $timed,
+            again      => $again,
+            ticks      => $ticks,
+            delivered  => $delivered,
+            killed     => $killed,
+            kill_took  => $kill_took,
+            kill_err   => $err,
+            after_kill => $after_kill,
         };
     }
 );
@@ -145,7 +143,7 @@ my $rv    = run(
 my $high = 0;
 {
     my @events = map { ( [ $_->{start}, +1 ], [ $_->{end}, -1 ] ) } @{ $rv->{out} };
-    my $depth = 0;
+    my $depth  = 0;
     for my $e ( sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @events ) {
         $depth += $e->[1];
         $high = $depth if $depth > $high;
@@ -154,25 +152,24 @@ my $high = 0;
 my $fail = 0;
 sub problem ($msg) { print "verify FAIL: $msg\n"; ++$fail }
 my @out = @{ $rv->{out} };
-problem "expected $JOBS results, got " . scalar @out                                                        unless @out == $JOBS;
-problem "closures did not overlap at all (peak depth $high)"                                             if $high == 0;
-problem "cap raised to $POOL but $high children ran at once"                                              if $high > $POOL;
-problem "a cooperative fiber completed only $rv->{ticks} ticks while $JOBS closures churned"              if !$rv->{ticks};
+problem "expected $JOBS results, got " . scalar @out unless @out == $JOBS;
+problem "closures did not overlap at all (peak depth $high)"                                 if $high == 0;
+problem "cap raised to $POOL but $high children ran at once"                                 if $high > $POOL;
+problem "a cooperative fiber completed only $rv->{ticks} ticks while $JOBS closures churned" if !$rv->{ticks};
 problem "closure results did not come back in spawn order" unless join( ',', map { $_->{tag} } @out ) eq join( ',', 1 .. $JOBS );
-problem "a closure result was not carried across intact"        if grep { !$_->{sum} || ref($_) ne 'HASH' } @out;
-problem "the closures did not each run in their own process"    if scalar( keys %{ { map { $_->{pid} => 1 } @out } } ) != $JOBS;
-problem "with_timeout(50) did not time out a 1500 ms closure"   unless $rv->{timed};
+problem "a closure result was not carried across intact"     if grep { !$_->{sum} || ref($_) ne 'HASH' } @out;
+problem "the closures did not each run in their own process" if scalar( keys %{ { map { $_->{pid} => 1 } @out } } ) != $JOBS;
+problem "with_timeout(50) did not time out a 1500 ms closure"               unless $rv->{timed};
 problem "a fresh spawn_blocking_fork after the timeout gave a wrong answer" unless $rv->{again}{tag} == 7;
-problem "kill_blocking_fork() did not signal the runaway child"   unless $rv->{delivered};
-problem "the signalled child's Future did not resolve with an error" unless $rv->{killed};
-problem "the signalled child reported: $rv->{kill_err}"           unless $rv->{kill_err} =~ /signal|never delivered/;
+problem "kill_blocking_fork() did not signal the runaway child"             unless $rv->{delivered};
+problem "the signalled child's Future did not resolve with an error"        unless $rv->{killed};
+problem "the signalled child reported: $rv->{kill_err}"                     unless $rv->{kill_err} =~ /signal|never delivered/;
 problem "the Future took " . sprintf( '%.1f', $rv->{kill_took} ) . "s to resolve after the signal" if $rv->{kill_took} > 10;
-problem "the pool lost a permit to the killed child"              unless $rv->{after_kill}{tag} == 8;
+problem "the pool lost a permit to the killed child" unless $rv->{after_kill}{tag} == 8;
 problem "set_max_blocking_forks reported a different cap"         if max_blocking_forks() != $POOL;
-problem "threads.pm was loaded, but this path must never load it"  if exists $INC{'threads.pm'};
-
-print sprintf "%d closures (%d ms each) through %d forked children in %.2fs; peak == %d, cap == %d\n", $JOBS, $BURN, $POOL, time() - $^T,
-    $high, max_blocking_forks();
+problem "threads.pm was loaded, but this path must never load it" if exists $INC{'threads.pm'};
+print sprintf "%d closures (%d ms each) through %d forked children in %.2fs; peak == %d, cap == %d\n", $JOBS, $BURN, $POOL, time() - $^T, $high,
+    max_blocking_forks();
 print sprintf "while they churned, a plain fiber ticked %d times at 25 ms -- the scheduler never stopped.\n", $rv->{ticks};
 print sprintf "with_timeout(50) vs a 1500 ms closure: %s. composition works, and the abandoned child\n",
     $rv->{timed} ? 'timed out' : 'finished (unexpected!)';

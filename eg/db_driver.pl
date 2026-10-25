@@ -2,7 +2,7 @@ use v5.40;
 use blib;
 $|++;
 use Acme::Parataxis qw[:all];
-use File::Temp qw[tempfile];
+use File::Temp      qw[tempfile];
 use IO::Socket::INET;
 use Time::HiRes qw[time];
 
@@ -42,11 +42,10 @@ use Time::HiRes qw[time];
 # subroutine during global destruction" on the way out. INSIDE_MAX is
 # measured rather than assumed: if the waits had not actually overlapped,
 # the demo would report that instead of claiming a speedup.
-
 my $QUERY_LATENCY_MS = 20;
 my @QUERIES          = ( 1 .. 12, 1 .. 12 );    # 24, two rounds so the row count is 2 * 78
 my $EXPECTED_ROWS    = 2 * ( 12 * 13 / 2 );
-my $PORT             = 0;                      # set once the child reports the port it bound
+my $PORT             = 0;                       # set once the child reports the port it bound
 
 # ---------------------------------------------------------------- the database
 # A child perl running a non-blocking, round-robin line server. It never forks
@@ -129,10 +128,8 @@ my ( $INSIDE, $INSIDE_MAX ) = ( 0, 0 );
 
 sub dbh_connect {
     my ($transport) = @_;
-    my $sock
-        = IO::Socket::INET->new( PeerHost => '127.0.0.1', PeerPort => $PORT, Proto => 'tcp',
-        Blocking => ( $transport eq 'block' ? 1 : 0 ) )
-        or return;
+    my $sock = IO::Socket::INET->new( PeerHost => '127.0.0.1', PeerPort => $PORT, Proto => 'tcp', Blocking => ( $transport eq 'block' ? 1 : 0 ) ) or
+        return;
     $sock->autoflush(1);
     return { sock => $sock, transport => $transport, buf => '' };
 }
@@ -230,30 +227,24 @@ close $pfh;
 # "syntax error at -e line 1, at EOF". A file path cannot be mangled that way.
 my ( $sfh, $spath ) = tempfile( 'parataxis-db-server-XXXXXX', TMPDIR => 1, UNLINK => 1 );
 print $sfh $SERVER or die "cannot write the database program: $!";
-close $sfh or die "cannot write the database program: $!";
-
-open my $child, '-|', $^X, $spath, $ppath, $QUERY_LATENCY_MS
-    or die "cannot start the database: $!";
-
+close $sfh         or die "cannot write the database program: $!";
+open my $child, '-|', $^X, $spath, $ppath, $QUERY_LATENCY_MS or die "cannot start the database: $!";
 for ( 1 .. 200 ) {
     if ( open my $rfh, '<', $ppath ) {
         chomp( my $l = <$rfh> // '' );
         close $rfh;
         if ( $l && $l =~ /\A([0-9]+)\z/ ) { $PORT = $1; last }
     }
-
     select undef, undef, undef, 0.05;
 }
 die "the database never reported a port\n" if !$PORT;
 say "parataxis database driver: talking to a blocking server on 127.0.0.1:$PORT";
-say sprintf '  %d queries, %d rows expected, %dms server latency per query',
-    scalar @QUERIES, $EXPECTED_ROWS, $QUERY_LATENCY_MS;
-
+say sprintf '  %d queries, %d rows expected, %dms server latency per query', scalar @QUERIES, $EXPECTED_ROWS, $QUERY_LATENCY_MS;
 run(
     sub {
         # 1. The synchronous driver. One connection, every query in sequence,
         #    every call blocking the whole interpreter.
-        my $t0        = time;
+        my $t0 = time;
         my @blocking;
         my $dbh_block = dbh_connect('block') or die "connect: $!";
         for my $sql (@QUERIES) {
@@ -263,19 +254,19 @@ run(
         }
         dbh_disconnect($dbh_block);
         my $t_block = time() - $t0;
-        say sprintf '  synchronous : %d rows in %6.3fs  (%.1fms per query, one call at a time)',
-            scalar @blocking, $t_block, $t_block * 1000 / scalar @QUERIES;
+        say sprintf '  synchronous : %d rows in %6.3fs  (%.1fms per query, one call at a time)', scalar @blocking, $t_block,
+            $t_block * 1000 / scalar @QUERIES;
 
         # 2. The asynchronous driver. Same protocol, same SQL, a parked
         #    transport, and one connection per query so every wait is in flight
         #    at the same time.
         ( $INSIDE, $INSIDE_MAX ) = ( 0, 0 );
-        my $t1 = time;
+        my $t1   = time;
         my @jobs = map {
             spawn(
                 sub {
-                    my $sql = $QUERIES[$_];
-                    my $dbh = dbh_connect('park') or die "connect: $!";
+                    my $sql  = $QUERIES[$_];
+                    my $dbh  = dbh_connect('park') or die "connect: $!";
                     my $rows = dbh_selectall( $dbh, "SELECT * FROM widgets WHERE id <= $sql" );
                     dbh_disconnect($dbh);
                     $rows;
@@ -289,8 +280,8 @@ run(
             push @parked, @$rows;
         }
         my $t_park = time() - $t1;
-        say sprintf '  asynchronous: %d rows in %6.3fs  (%.1fms per query, all in flight at once)',
-            scalar @parked, $t_park, $t_park * 1000 / scalar @QUERIES;
+        say sprintf '  asynchronous: %d rows in %6.3fs  (%.1fms per query, all in flight at once)', scalar @parked, $t_park,
+            $t_park * 1000 / scalar @QUERIES;
         say sprintf '  %d fibers were resident in the one shared closure read_reply() at the same time', $INSIDE_MAX;
         say '';
 
@@ -300,23 +291,19 @@ run(
         #    the wall clock is the consequence and is only given a loose bound
         #    so a loaded machine cannot make this flaky.
         my @bad;
-        push @bad, "row count: got " . scalar(@parked) . ", expected $EXPECTED_ROWS"
-            if @parked != $EXPECTED_ROWS;
-        push @bad, 'the two transports returned different rows' if join( "\0", @blocking ) ne join( "\0", @parked );
-        push @bad, "the waits never overlapped: only $INSIDE_MAX fiber(s) in the shared closure at once"
-            if $INSIDE_MAX < 2;
+        push @bad, "row count: got " . scalar(@parked) . ", expected $EXPECTED_ROWS" if @parked != $EXPECTED_ROWS;
+        push @bad, 'the two transports returned different rows'                      if join( "\0", @blocking ) ne join( "\0", @parked );
+        push @bad, "the waits never overlapped: only $INSIDE_MAX fiber(s) in the shared closure at once" if $INSIDE_MAX < 2;
         push @bad, sprintf 'no speedup: async %.3fs vs sync %.3fs', $t_park, $t_block if $t_park * 3 > $t_block;
         die "self-test failed:\n  - $_\n" for @bad;
-
-        say sprintf '  identical rows from both transports: %d', scalar @parked;
+        say sprintf '  identical rows from both transports: %d',                             scalar @parked;
         say sprintf '  %.1fx faster with the same server, the same SQL and the same result', $t_block / $t_park;
         say '  the only difference was await_read() where the driver used to call sysread().';
         stop();
     }
 );
-
 close $child;
-my $reaped = 0;           # the database stops on its own once it has no clients left
+my $reaped = 0;    # the database stops on its own once it has no clients left
 for ( 1 .. 40 ) {
     $reaped = waitpid( $child, 1 );
     last if $reaped > 0;

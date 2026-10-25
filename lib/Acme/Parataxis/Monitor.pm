@@ -17,8 +17,8 @@ use feature 'class';
 class Acme::Parataxis::Monitor v0.1.1 {
     use Acme::Parataxis;
     use Acme::Parataxis::Future;
-    use Carp         qw[croak];
-    use Scalar::Util qw[blessed weaken];
+    use Carp    qw[croak];
+    use builtin qw[blessed weaken];
     field $target : param = undef;    # the watched fiber/future/actor object; a fiber id is resolved to its object first
     field $fid    : param = undef;    # optionally supplied watch target by id instead of by object
     field $future;                    # the single-resolution future that backs ->await/->result/->is_ready

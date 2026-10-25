@@ -124,9 +124,9 @@ built without ithreads and leaves the property that loading this distribution ac
 
 =item *
 
-Cancellation can actually stop the work. Cancelling the C<await> behaves exactly as it does for C<spawn_blocking> -
-it withdraws the waiter and changes nothing else - but a child is a process, so
-C<kill_blocking_fork> can signal it and end the work for real. See below.
+Cancellation can actually stop the work. Cancelling the C<await> behaves exactly as it does for C<spawn_blocking> - it
+withdraws the waiter and changes nothing else - but a child is a process, so C<kill_blocking_fork> can signal it and
+end the work for real. See below.
 
 =item *
 
@@ -178,9 +178,9 @@ program. The future then resolves with an error, never with a partial result.
 
 =head2 C<set_max_blocking_forks( $count )>
 
-Sets the concurrency cap for C<spawn_blocking_fork> children. The default is 4, or whatever the
-C<PARATAXIS_SBF_FORKS> environment variable holds, and this call must happen before the first C<spawn_blocking_fork> -
-once the pool is in use its capacity is live and changing it croaks. Returns the new cap.
+Sets the concurrency cap for C<spawn_blocking_fork> children. The default is 4, or whatever the C<PARATAXIS_SBF_FORKS>
+environment variable holds, and this call must happen before the first C<spawn_blocking_fork> - once the pool is in use
+its capacity is live and changing it croaks. Returns the new cap.
 
     set_max_blocking_forks(8);    # up to 8 forked children at once
 

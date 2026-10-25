@@ -2,9 +2,9 @@ use v5.40;
 use experimental qw[class];
 use blib;
 use Test2::V1 -ipP;
-use Config         qw[%Config];
+use Config           qw[%Config];
 use IO::Socket::INET ();
-use Socket         qw[MSG_PEEK MSG_DONTWAIT];
+use Socket           qw[MSG_PEEK MSG_DONTWAIT];
 use Time::HiRes      qw[time];
 use Acme::Parataxis  qw[async fiber await_sleep await_read await_write with_timeout];
 #
@@ -177,7 +177,7 @@ ok $N >= 8,                             "the high-volume workload kept a workabl
 # reactor actually in play. Only ever runs after the count assertion has already failed.
 sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
     my @lost = grep { !( defined $got->[$_] && $got->[$_] == 1 ) } 0 .. $#$got;
-    my @kept = grep {   defined $got->[$_] && $got->[$_] == 1     } 0 .. $#$got;
+    my @kept = grep { defined $got->[$_] && $got->[$_] == 1 } 0 .. $#$got;
     my @out  = ( 'lost ' . @lost . " of $n parked reads" );
     return join "\n", @out if !@lost;
 
@@ -185,15 +185,14 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
     my @runs;
     for my $i (@lost) {
         if ( @runs && $runs[-1][1] == $i - 1 ) { $runs[-1][1] = $i }
-        else                                    { push @runs, [ $i, $i ] }
+        else                                   { push @runs, [ $i, $i ] }
     }
-    push @out, 'lost as ' . scalar(@runs) . ' run(s) of index: '
-        . join( ', ', map { $_->[0] == $_->[1] ? $_->[0] : "$_->[0]-$_->[1]" } @runs );
+    push @out, 'lost as ' . scalar(@runs) . ' run(s) of index: ' . join( ', ', map { $_->[0] == $_->[1] ? $_->[0] : "$_->[0]-$_->[1]" } @runs );
 
     # What await_read returned, so a timeout can be told apart from a wrong or empty read.
     my %count;
     $count{ defined $got->[$_] ? $got->[$_] : 'undef (timed out)' }++ for @lost;
-    push @out, 'await_read returned: ' . join( ', ', map { "$_ x $count{$_}" } sort keys %count );
+    push @out, 'await_read returned: ' . join( ', ', map {"$_ x $count{$_}"} sort keys %count );
 
     # Descriptor numbers decide between the two live theories: clustering past FD_SETSIZE or some other ceiling is a
     # bound, scattering evenly through the range is a race.
@@ -202,10 +201,11 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
 
     # Where the lost descriptors sit inside the full range, stated as a plain fact: a lost set that is entirely in
     # the top half points at a bound, one scattered evenly through the range points at a race. The reader decides.
-    my @lost_fd = sort { $a <=> $b } grep { defined } map { $fd->[$_] } @lost;
-    my @all_fd  = sort { $a <=> $b } grep { defined } map { $fd->[$_] } 0 .. $#$got;
-    my $mid = $all_fd[ int( @all_fd / 2 ) ];
-    push @out, sprintf( 'descriptors in play span %d..%d; every lost fd is %s the midpoint (%d)',
+    my @lost_fd = sort { $a <=> $b } grep {defined} map { $fd->[$_] } @lost;
+    my @all_fd  = sort { $a <=> $b } grep {defined} map { $fd->[$_] } 0 .. $#$got;
+    my $mid     = $all_fd[ int( @all_fd / 2 ) ];
+    push @out,
+        sprintf( 'descriptors in play span %d..%d; every lost fd is %s the midpoint (%d)',
         $all_fd[0], $all_fd[-1], $lost_fd[0] > $mid ? 'above' : 'below', $mid )
         if @lost_fd && @all_fd > 1;
 
@@ -215,26 +215,26 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
     # anything. The syscall is chosen inside core's IO::Poll::_poll, which exposes no accessor to ask, so say that
     # rather than invent one. MOJO_REACTOR overrides the whole choice, so report it when set.
     my $reactor = eval { $loop->reactor };
-    push @out, 'reactor: ' . ( ref($reactor) || 'unknown (no reactor)' )
-        . ( $ENV{MOJO_REACTOR} ? " (MOJO_REACTOR=$ENV{MOJO_REACTOR})" : '' );
-    push @out, 'the wait syscall is chosen inside IO::Poll::_poll and is not introspectable; '
-        . 'read it from the d_* row below';
+    push @out, 'reactor: ' . ( ref($reactor) || 'unknown (no reactor)' ) . ( $ENV{MOJO_REACTOR} ? " (MOJO_REACTOR=$ENV{MOJO_REACTOR})" : '' );
+    push @out, 'the wait syscall is chosen inside IO::Poll::_poll and is not introspectable; ' . 'read it from the d_* row below';
 
     # The d_* row is therefore the real evidence, and FD_SETSIZE is only a bound on the select(2) fallback, so it
     # means something different per backend. Reporting the number alone invited reading a descriptor ceiling into a
     # kqueue run, which the two observed losses contradict. osname/archname and the key count lead the row because
     # an all-undef d_* line is ambiguous: it means "this perl configured no poll backend" only if %Config is actually
     # populated, and without the count there is no way to tell that from a broken read on the reporting machine.
-    push @out, sprintf( 'perl %vd %s %s (%d Config keys)',
-        $^V, $Config{osname} // 'unknown-os', $Config{archname} // 'unknown-arch', scalar keys %Config );
-    push @out, sprintf( 'FD_SETSIZE %d, d_poll %s, d_ppoll %s, d_epoll %s, d_kqueue %s',
+    push @out,
+        sprintf( 'perl %vd %s %s (%d Config keys)', $^V, $Config{osname} // 'unknown-os', $Config{archname} // 'unknown-arch', scalar keys %Config );
+    push @out,
+        sprintf(
+        'FD_SETSIZE %d, d_poll %s, d_ppoll %s, d_epoll %s, d_kqueue %s',
         Acme::Parataxis::fd_setsize(),
-        map { exists $Config{$_} ? ( defined $Config{$_} ? $Config{$_} : 'undef' ) : 'ABSENT' }
-        qw[d_poll d_ppoll d_epoll d_kqueue] );
+        map { exists $Config{$_} ? ( defined $Config{$_} ? $Config{$_} : 'undef' ) : 'ABSENT' } qw[d_poll d_ppoll d_epoll d_kqueue]
+        );
+
     # Total elapsed separates "the stragglers used the whole timeout" (the batch ran ~5000ms) from "they were lost
     # and the batch returned early", and a run duration near the 5000ms timeout means every lost read sat it out.
     push @out, sprintf( 'batch elapsed %.0fms (await_read timeout was 5000ms)', $ms );
-
     push @out, layer_census( \@lost, $fd, $snap, $arms_end, $awaiting );
     return join "\n", @out;
 }
@@ -250,23 +250,29 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
     # Keyed by descriptor, never by position in the batch. An earlier per-index bit string assumed one descriptor
     # produced exactly one bit, and a descriptor with no fileno broke that silently, so a batch index could name
     # the wrong descriptor and the whole classification was fiction. This form has no positions to get wrong.
-    my %para   = map { $_ => 1 } grep { length } split /,/, ( $snap->{para}   // '' );
-    my %mojo   = map { $_ => 1 } grep { length } split /,/, ( $snap->{mojo}   // '' );
-    my %kernel = map { $_ => 1 } grep { length } split /,/, ( $snap->{kernel} // '' );
-    my %peek   = map { $_ => 1 } grep { length } split /,/, ( $snap->{peek}   // '' );
-    push @out, sprintf( 'mid-batch census: %d waiters on %d distinct descriptors (%d without a fileno), '
-            . 'driver->watch_count %d, Parataxis holding %d, the reactor holding %d, select() calling %d readable, '
-            . 'recv(MSG_PEEK) finding %d',
-        $snap->{n}, $snap->{distinct}, $snap->{skipped}, $snap->{watch_ct},
-        scalar keys %para, scalar keys %mojo, scalar keys %kernel, scalar keys %peek );
+    my %para   = map { $_ => 1 } grep {length} split /,/, ( $snap->{para}   // '' );
+    my %mojo   = map { $_ => 1 } grep {length} split /,/, ( $snap->{mojo}   // '' );
+    my %kernel = map { $_ => 1 } grep {length} split /,/, ( $snap->{kernel} // '' );
+    my %peek   = map { $_ => 1 } grep {length} split /,/, ( $snap->{peek}   // '' );
+    push @out,
+        sprintf(
+        'mid-batch census: %d waiters on %d distinct descriptors (%d without a fileno), ' .
+            'driver->watch_count %d, Parataxis holding %d, the reactor holding %d, select() calling %d readable, ' .
+            'recv(MSG_PEEK) finding %d',
+        $snap->{n},        $snap->{distinct}, $snap->{skipped},    $snap->{watch_ct},
+        scalar keys %para, scalar keys %mojo, scalar keys %kernel, scalar keys %peek
+        );
     push @out, '  descriptors claimed by more than one waiter: ' . fd_span( [ split /,/, ( $snap->{dupes} // '' ) ] )
         if length( $snap->{dupes} // '' );
     my @disagree = grep { ( $kernel{$_} ? 1 : 0 ) != ( $peek{$_} ? 1 : 0 ) } keys %kernel, keys %peek;
-    push @out, '  select() and recv(MSG_PEEK) disagree about ' . scalar(@disagree)
-        . ' descriptors, so trust neither: the readable count above is not evidence'
+    push @out,
+        '  select() and recv(MSG_PEEK) disagree about ' .
+        scalar(@disagree) .
+        ' descriptors, so trust neither: the readable count above is not evidence'
         if @disagree;
-    push @out, "  $awaiting of them were still reporting no data when the 500ms wait ran out, so the readable"
-        . ' count above is a floor, not the whole picture'
+    push @out,
+        "  $awaiting of them were still reporting no data when the 500ms wait ran out, so the readable" .
+        ' count above is a floor, not the whole picture'
         if $awaiting > 0;
 
     # Every lost read is classified on its own descriptor's three answers. Branching on whether a *total* came out
@@ -279,27 +285,21 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
         if ( !defined $d ) { $unmapped++; next }
         my ( $p, $m, $k ) = ( $para{$d} ? 1 : 0, $mojo{$d} ? 1 : 0, $kernel{$d} ? 1 : 0 );
         $k_all += $k;
-        $how{
-            !$p && !$m ? ( $k ? 'unwatched by both layers, kernel had data'
-                             : 'unwatched by both layers, kernel had nothing' )
-            : $p && !$m  ? 'watched by Parataxis, absent from the reactor'
-            : !$p && $m  ? 'in the reactor, absent from Parataxis'
-            : !$k        ? 'watched by both, kernel had nothing'
-            :              'watched by both, kernel had data'
-        }++;
+        $how{ !$p &&
+                !$m ? ( $k ? 'unwatched by both layers, kernel had data' : 'unwatched by both layers, kernel had nothing' ) : $p &&
+                !$m ? 'watched by Parataxis, absent from the reactor'                                                       : !$p &&
+                $m  ? 'in the reactor, absent from Parataxis' : !$k ? 'watched by both, kernel had nothing' : 'watched by both, kernel had data' }++;
     }
-    push @out, sprintf( '  of the %d lost reads, %d were unmappable, and the kernel had data for %d:',
-        scalar @$lost, $unmapped, $k_all );
+    push @out, sprintf( '  of the %d lost reads, %d were unmappable, and the kernel had data for %d:', scalar @$lost, $unmapped, $k_all );
     push @out, "  $_: $how{$_}" for sort keys %how;
 
     # Late or never is the one thing a snapshot cannot answer by itself, so say it from the two arming tallies
     # against the size of the batch. Phrased off the counts rather than off "the unwatched fibers", which would
     # claim there were unwatched reads in the cases where every read was watched and the fault is elsewhere.
-    my $at_sample = defined $snap->{arm_n}    ? $snap->{arm_n}    : -1;
-    my $at_end    = defined $arms_at_end     ? $arms_at_end     : -1;
+    my $at_sample = defined $snap->{arm_n} ? $snap->{arm_n} : -1;
+    my $at_end    = defined $arms_at_end   ? $arms_at_end   : -1;
     my $batch     = $snap->{n};
-    push @out, sprintf( '  the driver was asked to arm %d watches by the sample and %d by the end of a %d-read batch',
-        $at_sample, $at_end, $batch );
+    push @out, sprintf( '  the driver was asked to arm %d watches by the sample and %d by the end of a %d-read batch', $at_sample, $at_end, $batch );
 
     # What those arming calls were keyed on. %watches is fileno => the handle being watched, so two registrations
     # that arrive with the same descriptor number collapse into a single slot and watch_count falls by exactly the
@@ -308,20 +308,20 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
     # descriptor; no repeat here means the missing slots were never created at all. Stated as the count it is, with
     # the repeats listed, because a bare shortfall has twice now been read as a ceiling.
     if ( defined $snap->{arm_distinct} ) {
-        my @dupes = grep { length } split /,/, ( $snap->{arm_dupes} // '' );
-        push @out, sprintf( '  those %d arming calls used %d distinct descriptors, collapsing %d watches into a '
-                . 'descriptor number claimed more than once: %s',
-            $at_sample, $snap->{arm_distinct}, $at_sample - $snap->{arm_distinct},
-            @dupes ? fd_span( \@dupes ) : 'none, so no two registrations shared a descriptor' );
+        my @dupes = grep {length} split /,/, ( $snap->{arm_dupes} // '' );
+        push @out,
+            sprintf(
+            '  those %d arming calls used %d distinct descriptors, collapsing %d watches into a ' . 'descriptor number claimed more than once: %s',
+            $at_sample, $snap->{arm_distinct},
+            $at_sample - $snap->{arm_distinct},
+            @dupes ? fd_span( \@dupes ) : 'none, so no two registrations shared a descriptor'
+            );
     }
     my $never = $batch - $at_end;
     push @out,
-        $never > 0
-        ? sprintf( '  so %d of the %d reads were NEVER asked to arm a watch, even by the end of the batch',
-            $never, $batch )
-        : $at_sample < $at_end
-        ? '  so every read did arm, but some armed only after the sample: they were LATE'
-        : '  so every read was armed by the sample and none armed after it';
+        $never > 0           ? sprintf( '  so %d of the %d reads were NEVER asked to arm a watch, even by the end of the batch', $never, $batch ) :
+        $at_sample < $at_end ? '  so every read did arm, but some armed only after the sample: they were LATE' :
+        '  so every read was armed by the sample and none armed after it';
 
     # The dominant class, with its reading spelled out. Every class is listed above, so this is a summary of what
     # is already on the record rather than the only thing on it.
@@ -331,15 +331,11 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
         'unwatched by both layers, kernel had data' =>
             'the kernel had data and no layer was watching: the watch was never registered for these reads',
         'watched by Parataxis, absent from the reactor' =>
-            'Parataxis armed its own table but the watch never reached the reactor, so the fault is in '
-            . 'Driver::Mojo::_watch',
-        'in the reactor, absent from Parataxis' =>
-            'the reactor held a watch Parataxis had not recorded, so the two tables disagree',
-        'watched by both, kernel had nothing' =>
-            'watched by both layers but the descriptor was not readable, so the batch never wrote to it',
-        'watched by both, kernel had data' =>
-            'the watch was live on both sides and the kernel had data, so the readiness event was lost above the '
-            . 'kernel, inside the reactor',
+            'Parataxis armed its own table but the watch never reached the reactor, so the fault is in ' . 'Driver::Mojo::_watch',
+        'in the reactor, absent from Parataxis' => 'the reactor held a watch Parataxis had not recorded, so the two tables disagree',
+        'watched by both, kernel had nothing'   => 'watched by both layers but the descriptor was not readable, so the batch never wrote to it',
+        'watched by both, kernel had data'      =>
+            'the watch was live on both sides and the kernel had data, so the readiness event was lost above the ' . 'kernel, inside the reactor',
     );
     my ($top) = sort { $how{$b} <=> $how{$a} || $a cmp $b } keys %how;
     push @out, "reading of the loss: $why{$top}" if $top;
@@ -347,7 +343,7 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
 }
 
 # Min..max of a descriptor list, plus whether it is contiguous, which separates "one block" from "all over".
-sub fd_span ( $f ) {
+sub fd_span ($f) {
     return 'none' if !@$f;
     my @s = sort { $a <=> $b } @$f;
     my $n = scalar @s;
@@ -362,6 +358,7 @@ sub fd_span ( $f ) {
 # from a test without help. Driver::wrap() is the single call that constructs it, so note what comes out of that.
 # Test-side only: nothing under lib/ changes and the shim returns exactly what the original returned.
 my $LIVE_DRIVER;
+
 BEGIN {
     require Acme::Parataxis::Driver;
     no warnings 'redefine';
@@ -422,7 +419,9 @@ sub fd_peekable ($fh) {
 # it only ever meant "the sample was taken before the data landed". This is a synchronous loop in the main fiber,
 # so no parked fiber gets a chance to wake and eat its byte first, and the census still sees the batch as written.
 sub wait_for_data ( $waiters, $budget_ms ) {
-    my @fds = grep { defined } map { eval { fileno($_) } } @$waiters;
+    my @fds = grep {defined} map {
+        eval { fileno($_) }
+    } @$waiters;
     my $deadline = time + $budget_ms / 1000;
     my $missing  = scalar @fds;
     while ( $missing > 0 ) {
@@ -455,7 +454,7 @@ sub armed_snapshot ( $loop, $waiters ) {
         # Both layers key their tables by descriptor, so a descriptor claimed by two waiters is one watch, not two.
         # That makes "300 reads" and "227 watches" arithmetically consistent without anything being lost at all, and
         # this whole diagnostic has been comparing watch counts against read counts without ever checking it.
-        push @dupe, $fd if $seen{$fd}++;
+        push @dupe,   $fd if $seen{$fd}++;
         push @para,   $fd if $driver && $driver->has_watch($fh);
         push @mojo,   $fd if exists $io->{$fd};
         push @kernel, $fd if fd_readable($fh);
@@ -472,34 +471,31 @@ sub armed_snapshot ( $loop, $waiters ) {
         dupes    => join( ',', sort { $a <=> $b } @dupe ),
         skipped  => $skipped,
         arm_n    => $arm_n,
+
         # The descriptor each arming call actually passed in, distinct count and repeats. Without this the census
         # compares "300 arms" against "176 watches" and has no way to tell a collapsed key from a missing one: both
         # arithmetic routes land on the same two numbers, and the 176 figure has been sitting in the log looking like
         # a resource bound. _track_watch keys by fileno, so a number claimed twice collapses two registrations into
         # one and the count falls by exactly the number of repeats. This is the line that settles it.
         arm_distinct => scalar keys %{ { map { $_ => 1 } grep { $_ ne '?' } split /,/, ( $arm_fds // '' ) } },
-        arm_dupes    => join( ',', sort { $a <=> $b }
-            grep { $_ ne '?' }
-            grep { $repeat{$_}++ > 0 }
-            ( split /,/, ( $arm_fds // '' ) ) ),
-        watch_ct => ( $driver ? $driver->watch_count : -1 ),
-        reactor  => ref($reactor) || 'none',
+        arm_dupes    => join( ',', sort { $a <=> $b } grep { $_ ne '?' } grep { $repeat{$_}++ > 0 } ( split /,/, ( $arm_fds // '' ) ) ),
+        watch_ct     => ( $driver ? $driver->watch_count : -1 ),
+        reactor      => ref($reactor) || 'none',
     };
 }
-
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     my ( $writers, $waiters ) = socket_pairs($N);
     my $loop = Mojo::IOLoop->new;
     Acme::Parataxis->attach_loop($loop);
     $submits = 0;
-    $arm_n   = 0;           # this subtest's arming tally only, not the whole file's
+    $arm_n   = 0;    # this subtest's arming tally only, not the whole file's
     $arm_fds = '';
     my @got;
-    my @fd;                 # the descriptor each fiber actually parked on, captured before the batch runs
-    my $snap;               # the three layers' views, sampled while the batch is still live
-    my $arms_end;           # the same tally once the batch has finished, to tell "late" from "never"
-    my $awaiting = -1;      # descriptors still reporting no data at the sample, i.e. the waiter's budget ran out
-    my $t0 = time;
+    my @fd;                # the descriptor each fiber actually parked on, captured before the batch runs
+    my $snap;              # the three layers' views, sampled while the batch is still live
+    my $arms_end;          # the same tally once the batch has finished, to tell "late" from "never"
+    my $awaiting = -1;     # descriptors still reporting no data at the sample, i.e. the waiter's budget ran out
+    my $t0       = time;
     Acme::Parataxis::run(
         sub {
             # Park every fiber on its own descriptor first; the writer only fires once all $N watches are armed, so
@@ -525,9 +521,8 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
     $arms_end = $arm_n;
     Acme::Parataxis->detach_loop;
     my $woke = grep { defined $_ && $_ == 1 } @got;
-    is $woke, $N, "all $N parked reads woke with their byte"
-        or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap, $arms_end, $awaiting );
-    is $attached_submit, 0,  "no worker-pool job was submitted for any of the $N reads";
+    is $woke, $N, "all $N parked reads woke with their byte" or diag lost_diagnosis( \@got, \@fd, $loop, $N, $ms, $snap, $arms_end, $awaiting );
+    is $attached_submit, 0, "no worker-pool job was submitted for any of the $N reads";
     ok $ms < 15000, sprintf( 'the whole batch completed in %.0fms', $ms );
 };
 subtest 'the pool-submission counter is live, not vacuous' => sub {

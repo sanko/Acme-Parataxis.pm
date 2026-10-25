@@ -13,9 +13,9 @@ class Acme::Parataxis::Supervisor v0.1.1 {
     use Acme::Parataxis qw[fiber];
     use Acme::Parataxis::Channel;
     use Acme::Parataxis::Error;
-    use Scalar::Util qw[blessed];
-    use Time::HiRes  qw[time];
-    use Carp         qw[croak];
+    use builtin     qw[blessed];
+    use Time::HiRes qw[time];
+    use Carp        qw[croak];
 
     # Restart strategy. OneForOne restarts only the child that died; OneForAll restarts every child
     # (they share state the death may have broken); RestForOne restarts the dead child and

@@ -7,12 +7,15 @@ package Acme::Parataxis::Blocking v0.1.1 {
     use Acme::Parataxis qw[fiber await_sleep await_read];
     use Acme::Parataxis::Future;
     use Acme::Parataxis::Semaphore;
-    our %EXPORT_TAGS = ( all => [
-            our @EXPORT_OK = qw[
-            spawn_blocking set_max_blocking_threads max_blocking_threads
-            spawn_blocking_fork set_max_blocking_forks max_blocking_forks kill_blocking_fork
-            ]
-    ] );
+    our %EXPORT_TAGS = (
+        all => [
+            our @EXPORT_OK
+                = qw[
+                spawn_blocking set_max_blocking_threads max_blocking_threads
+                spawn_blocking_fork set_max_blocking_forks max_blocking_forks kill_blocking_fork
+                ]
+        ]
+    );
 
     # spawn_blocking interpreter pool: at most $SB_MAX background interpreters run closures at once, bounded by an
     # Acme::Parataxis::Semaphore created on first use (PARATAXIS_SB_THREADS overrides the default 4).
@@ -22,7 +25,7 @@ package Acme::Parataxis::Blocking v0.1.1 {
     # spawn_blocking_fork process pool: a separate semaphore and a separate cap, because a forked child and a cloned
     # interpreter are different resources and coupling them would make one starve the other silently.
     my $SBF_MAX = do { my $e = $ENV{PARATAXIS_SBF_FORKS}; ( defined $e && $e =~ /\A[1-9][0-9]*\z/ ) ? int($e) : 4 };
-    my $SBF_PERMITS;    # Acme::Parataxis::Semaphore, capacity $SBF_MAX; down() before a fork, up() at reap
+    my $SBF_PERMITS;     # Acme::Parataxis::Semaphore, capacity $SBF_MAX; down() before a fork, up() at reap
     my %SBF_CHILDREN;    # Future address => the pid of the child that will resolve it, so kill_blocking_fork() can find it
 
     # Read exactly $want bytes off a pipe, parking between chunks, and return what arrived. Deliberately not built on
@@ -33,6 +36,7 @@ package Acme::Parataxis::Blocking v0.1.1 {
         my $buf = '';
         while ( length($buf) < $want ) {
             my $ready = await_read( $fh, $timeout );
+
             # The deadline came round with the child still running: its own runtime is the only clock that matters here
             next if $ready < 0;
             my $n = sysread( $fh, my $chunk, $want - length($buf) );
@@ -44,11 +48,11 @@ package Acme::Parataxis::Blocking v0.1.1 {
 
     # Reap a child without blocking the run loop, and return its exit status as (exited, status, signal).
     # WNOHANG in a park loop rather than a blocking waitpid: the loop's other fibers have to keep running.
-    sub _fork_reap ( $pid ) {
+    sub _fork_reap ($pid) {
         my $reaped = 0;
         while ( ( $reaped = waitpid( $pid, POSIX::WNOHANG() ) ) == 0 ) { await_sleep(1) }
         return ( 1, $? >> 8, $? & 127 ) if $reaped == $pid;
-        return ( 0, undef, undef );    # already reaped by something else, or not ours
+        return ( 0, undef,   undef );                         # already reaped by something else, or not ours
     }
 
     # Index at which user arguments start in @_: 0 when it is a plain call, 1 when $_[0] is a self (package name or
@@ -193,13 +197,11 @@ package Acme::Parataxis::Blocking v0.1.1 {
         my @args = @_[ $o + 1 .. $#_ ];
         @_ = ();
         croak 'spawn_blocking_fork() requires a CODE ref' unless ref $code eq 'CODE';
-        croak 'spawn_blocking_fork() is not available on this platform (no fork(2); d_fork is '
-            . ( defined $Config{d_fork} ? $Config{d_fork} : 'undef' ) . ')'
+        croak 'spawn_blocking_fork() is not available on this platform (no fork(2); d_fork is ' .
+            ( defined $Config{d_fork} ? $Config{d_fork} : 'undef' ) . ')'
             unless $Config{d_fork} && $Config{d_fork} eq 'define';
-        croak 'spawn_blocking_fork() is not available on MSWin32, where perl\'s fork() is a threads.pm emulation'
-            if $^O eq 'MSWin32';
-        croak 'spawn_blocking_fork() must be called from inside a scheduled fiber (inside run())'
-            if Acme::Parataxis->current_fid < 0;
+        croak 'spawn_blocking_fork() is not available on MSWin32, where perl\'s fork() is a threads.pm emulation' if $^O eq 'MSWin32';
+        croak 'spawn_blocking_fork() must be called from inside a scheduled fiber (inside run())'                 if Acme::Parataxis->current_fid < 0;
         croak 'spawn_blocking_fork() is wall-clock only and cannot be driven by the mock clock of run(virtual => 1)'
             if defined Acme::Parataxis->virtual_now;
         state $have_marshal = do { require POSIX; require Storable; 1 };
@@ -261,30 +263,29 @@ package Acme::Parataxis::Blocking v0.1.1 {
         eval {
             fiber {
                 my $header = _fork_read_exactly( $rd, 9, 5000 );    # 1 tag byte + an 8-byte length
-                my $tag = length($header) ? substr( $header, 0, 1 ) : '';
-                my $len = length($header) == 9 ? unpack( 'Q>', substr( $header, 1 ) ) : 0;
-                my $body = $len ? _fork_read_exactly( $rd, $len, 5000 ) : '';
+                my $tag    = length($header)      ? substr( $header, 0, 1 )               : '';
+                my $len    = length($header) == 9 ? unpack( 'Q>', substr( $header, 1 ) )  : 0;
+                my $body   = $len                 ? _fork_read_exactly( $rd, $len, 5000 ) : '';
                 close $rd;
                 my ( $reaped, $status, $sig ) = _fork_reap($pid);
                 delete $SBF_CHILDREN{ builtin::refaddr($fut) };
                 $SBF_PERMITS->up;
+
                 if ( length($header) != 9 || length($body) != $len ) {
                     $fut->set_error(
-                        "the forked child never delivered a result ("
-                            . (
-                            !$reaped ? 'its status is unknown, it may already have been reaped elsewhere'
-                            : $sig    ? "it died on signal $sig"
-                            :            sprintf( 'it exited with status %d', $status )
-                            )
-                            . ')'
+                        "the forked child never delivered a result (" . (
+                            !$reaped ? 'its status is unknown, it may already have been reaped elsewhere' :
+                                $sig ? "it died on signal $sig" :
+                                sprintf( 'it exited with status %d', $status )
+                            ) .
+                            ')'
                     );
                 }
                 elsif ( $tag eq 'X' ) { $fut->set_error($body) }
                 else {
                     my $thawed = eval { Storable::thaw($body) };
                     if ( !defined $thawed || ref($thawed) ne 'ARRAY' ) {
-                        $fut->set_error("the forked child's result could not be read back: "
-                                . ( $@ || 'the thawed payload was not an array ref' ) );
+                        $fut->set_error( "the forked child's result could not be read back: " . ( $@ || 'the thawed payload was not an array ref' ) );
                     }
                     elsif ( $thawed->[0] ) { $fut->set_result( $thawed->[1] ) }
                     else                   { $fut->set_error( $thawed->[1] ) }
@@ -327,8 +328,7 @@ package Acme::Parataxis::Blocking v0.1.1 {
         my $max = $_[$o];
         @_ = ();
         croak 'set_max_blocking_forks() requires a positive integer' unless defined $max && $max =~ /\A[1-9][0-9]*\z/;
-        croak 'set_max_blocking_forks() must be called before the first spawn_blocking_fork() (the process pool is '
-            . 'already in use)'
+        croak 'set_max_blocking_forks() must be called before the first spawn_blocking_fork() (the process pool is ' . 'already in use)'
             if $SBF_PERMITS;
         $SBF_MAX = int($max);
         return $SBF_MAX;

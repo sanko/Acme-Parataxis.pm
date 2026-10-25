@@ -3,7 +3,7 @@ no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Driver v0.1.1 {
     use Carp qw[croak];
-    use Scalar::Util qw[blessed];
+    use builtin qw[blessed];
 
     # Base class for the event-loop drivers behind Acme::Parataxis->attach_loop(). A driver wraps an existing CPAN
     # event loop (Mojo::IOLoop, IO::Async::Loop, ...) so that await_read / await_write / await_sleep are serviced by
@@ -27,6 +27,7 @@ class Acme::Parataxis::Driver v0.1.1 {
     method reset {
         my @fhs = values %watches;
         $self->unwatch($_) for @fhs;
+
         # unwatch() matches on identity, so it cannot find the slot of a handle that was closed while it was being
         # watched - fileno() is undef by then, and there is no number left to look up. Such a slot would survive
         # every reset, leaving pending() permanently true so the next run keeps handing control to a loop with
@@ -40,7 +41,6 @@ class Acme::Parataxis::Driver v0.1.1 {
     }
 
     # -- shared bookkeeping helpers. Subclasses call these when they (de)register with the underlying loop. --
-
     # The key is the descriptor number, but a number is not an identity: the OS recycles it the moment a handle is
     # closed, so a slot can outlive the handle it was made for and be handed on to an unrelated one. The slot's
     # value is that handle, held here, so refaddr() is a stable identity for as long as the slot exists, and every
@@ -106,7 +106,7 @@ class Acme::Parataxis::Driver v0.1.1 {
     # A plain package sub declared outside the class block, since it returns a driver rather than dispatching on one.
     # Called as Acme::Parataxis::Driver::wrap($loop).
     sub wrap ($loop) {
-        Carp::croak 'wrap() requires an event-loop object' unless Scalar::Util::blessed($loop);
+        Carp::croak 'wrap() requires an event-loop object' unless builtin::blessed($loop);
         return $loop if $loop->isa('Acme::Parataxis::Driver');
         my $pkg = ref $loop;
         if ( $pkg =~ /^Mojo::/ || $loop->isa('Mojo::IOLoop') || $loop->isa('Mojo::Reactor') ) {

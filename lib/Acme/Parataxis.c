@@ -332,7 +332,6 @@ typedef struct para_fiber_t {
 #endif
 #endif
 
-
     /*
      * Perl Interpreter State Pointers.
      * These must be saved and restored during every context switch.
@@ -1194,11 +1193,10 @@ DLLEXPORT int get_os_thread_id_export() { return get_os_thread_id(); }
 DLLEXPORT int get_thread_pool_size() { return current_thread_count; }
 /** @brief Returns the maximum number of worker threads allowed in the pool. */
 DLLEXPORT int get_max_thread_pool_size() { return max_thread_pool_size; }
-
-/** @brief Sets the threshold for automatic yield-based preemption. */
-DLLEXPORT void set_preempt_threshold(int64_t threshold) { preempt_threshold = threshold; }
 /** @brief Returns the current count towards the preemption threshold. */
 DLLEXPORT int64_t get_preempt_count() { return preempt_count; }
+/** @brief Sets the threshold for automatic yield-based preemption. */
+DLLEXPORT void set_preempt_threshold(int64_t threshold) { preempt_threshold = threshold; }
 
 /**
  * @brief Checks if automatic preemption should occur.
@@ -1272,7 +1270,7 @@ static void para_report_reified_at_switch(pTHX_ para_fiber_t * from, const char 
     }
 }
 
-/* ---- diagnostic: PARA_DIAG=1 dumps swap-time depth/pad state ---- */
+/* diagnostic: PARA_DIAG=1 dumps swap-time depth/pad state */
 static int para_diag_enabled(void) {
     static int on = -1;
     if (on < 0)
@@ -1284,7 +1282,6 @@ static int para_diag_enabled(void) {
 
 /** @brief Monotonic swap counter, so the PARA_DIAG dumps from one swap can be told apart. */
 static unsigned long para_diag_swapno = 0;
-
 
 /* ------------------------------------------------------------------------------------------
  * Parked-frame depth registry.
@@ -1527,8 +1524,8 @@ static void para_cvreg_remove(CV * cv, I32 depth) {
 /** @brief Ground truth for "is a frame of this CV live anywhere": walk the running stack and every fiber's.
  *
  * The registry is a cache of where parked frames are, populated on every swap (Pass 0) and drained on
- * every resume (Pass 1). A frame that leaves without a swap in between -- a longjmp out of a cancelled
- * or timed-out fiber body, or a fiber whose cxstack is unwound by a die -- is never drained, so the
+ * every resume (Pass 1). A frame that leaves without a swap in between (a longjmp out of a cancelled
+ * or timed-out fiber body, or a fiber whose cxstack is unwound by a die) is never drained, so the
  * cache can claim a depth that nothing occupies. Callers that need to know whether a CV is *really*
  * active must ask the stacks, not the cache. */
 static int para_si_cx_has_frame(PERL_SI * si, CV * cv);
@@ -1649,7 +1646,7 @@ static void _clean_landing_pad(pTHX_ CV * cv, I32 depth) {
     }
 }
 
-/* ---- diagnostic: swap-time pad dump ---- */
+/* diagnostic: swap-time pad dump */
 static void para_diag_pads(pTHX_ const char * tag, PERL_SI * si) {
     if (!si || !si->si_cxstack)
         return;
@@ -1768,8 +1765,8 @@ static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * t
         if (was_on_stack)
             continue; /* a live frame is entitled to the depth Pass 1 gave it */
         /* The register only knows *claims*, never frames. A frame that is still live can be parked on
-         * either stack -- including in a nested runlevel of it, which is not visible from the si the
-         * context happens to have stored -- so ask the runlevel chains of both stacks before unwinding
+         * either stack including in a nested runlevel of it, which is not visible from the si the
+         * context happens to have stored so ask the runlevel chains of both stacks before unwinding
          * the fabricated depth. A live frame means nothing may use pad 0 or depth 0 until it pops, so
          * the entry stays pinned and the next swap retries this settle. */
         if (para_cv_live_on_swap(aTHX_ from, to, e->cv)) {
@@ -1832,7 +1829,6 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
 #ifdef DEBUGGING
     from->scopestack_name = PL_scopestack_name;
 #endif
-
     // The Save Stack (Tracks 'local' variables and destructors)
     from->savestack = PL_savestack;
     from->savestack_ix = PL_savestack_ix;
@@ -1865,7 +1861,7 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     from->defstash = PL_defstash;
     from->errors = PL_errors;
 
-    /* Load target state from 'to' context */
+    // Load target state from 'to' context
     PL_curstackinfo = to->si;
     PL_curstack = to->curstack;
     PL_mainstack = to->mainstack;
@@ -1875,27 +1871,28 @@ void swap_perl_state(para_fiber_t * from, para_fiber_t * to) {
     PL_stack_max = PL_stack_base + AvMAX(PL_curstack);
     PL_stack_sp = PL_stack_base + to->stack_sp_offset;
     AvFILLp(PL_curstack) = to->stack_sp_offset;  // Keep stack AV metadata synced
-
+    //
     PL_markstack = to->markstack;
     PL_markstack_ptr = to->markstack_ptr;
     PL_markstack_max = to->markstack_max;
-
+    //
     PL_scopestack = to->scopestack;
     PL_scopestack_ix = to->scopestack_ix;
     PL_scopestack_max = to->scopestack_max;
 #ifdef DEBUGGING
     PL_scopestack_name = to->scopestack_name;
 #endif
-
     PL_savestack = to->savestack;
     PL_savestack_ix = to->savestack_ix;
     PL_savestack_max = to->savestack_max;
 
+    //
     PL_tmps_stack = to->tmps_stack;
     PL_tmps_ix = to->tmps_ix;
     PL_tmps_floor = to->tmps_floor;
     PL_tmps_max = to->tmps_max;
 
+    //
     PL_top_env = to->top_env;
     PL_curcop = to->curcop;
     PL_op = to->op;
@@ -1939,32 +1936,31 @@ void restore_perl_state(para_fiber_t * to) {
     PL_curstackinfo = to->si;
     PL_curstack = to->curstack;
     PL_mainstack = to->mainstack;
-
+    //
     PL_stack_base = AvARRAY(PL_curstack);
     PL_stack_max = PL_stack_base + AvMAX(PL_curstack);
     PL_stack_sp = PL_stack_base + to->stack_sp_offset;
     AvFILLp(PL_curstack) = to->stack_sp_offset;
-
+    //
     PL_markstack = to->markstack;
     PL_markstack_ptr = to->markstack_ptr;
     PL_markstack_max = to->markstack_max;
-
+    //
     PL_scopestack = to->scopestack;
     PL_scopestack_ix = to->scopestack_ix;
     PL_scopestack_max = to->scopestack_max;
 #ifdef DEBUGGING
     PL_scopestack_name = to->scopestack_name;
 #endif
-
     PL_savestack = to->savestack;
     PL_savestack_ix = to->savestack_ix;
     PL_savestack_max = to->savestack_max;
-
+    //
     PL_tmps_stack = to->tmps_stack;
     PL_tmps_ix = to->tmps_ix;
     PL_tmps_floor = to->tmps_floor;
     PL_tmps_max = to->tmps_max;
-
+    //
     PL_curcop = to->curcop;
     PL_op = to->op;
     PL_comppad = to->comppad;
@@ -1980,7 +1976,7 @@ void restore_perl_state(para_fiber_t * to) {
     PL_curstash = to->curstash;
     PL_defstash = to->defstash;
     PL_errors = to->errors;
-
+    //
     if (PL_comppad)
         PL_curpad = AvARRAY(PL_comppad);
     else
@@ -2036,7 +2032,7 @@ static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
     /* Only the SI header needs zeroing; the control stacks are managed through their own ix/count fields and never read
      * beyond them. */
     memset(si, 0, sizeof(PERL_SI));
-
+    //
     si->si_cxmax = 64;
     si->si_cxstack = ctx_stack;
     si->si_cxix = -1;
@@ -2053,7 +2049,7 @@ static void alloc_perl_stacks(pTHX_ para_fiber_t * c) {
             root = root->si_prev;
         si->si_prev = root;
     }
-
+    //
     c->si = si;
 }
 
@@ -2094,17 +2090,17 @@ static void reset_perl_stacks(pTHX_ para_fiber_t * c) {
     /* exit()/POPSTACK_TO(PL_mainstack) inside this fiber must stop at the fiber's own argument stack instead of
      * unwinding the shared main contexts whose pads are not current while a fiber runs. */
     c->mainstack = c->curstack;
-
+    //
     c->markstack_ptr = c->markstack;
     *c->markstack_ptr = 0;
     c->markstack_max = c->markstack + sz;
-
+    //
     c->scopestack_ix = 0;
     c->scopestack_max = sz;
-
+    //
     c->savestack_ix = 0;
     c->savestack_max = sz;
-
+    //
     c->tmps_ix = -1;
     c->tmps_floor = -1;
     c->tmps_max = sz;
@@ -2153,7 +2149,7 @@ void init_perl_stacks(para_fiber_t * c) {
      * release loop. */
     c->tmps_ix = -1;
     c->tmps_floor = -1;
-
+    //
     reset_perl_stacks(aTHX_ c);
 }
 
@@ -3187,7 +3183,7 @@ static void _clear_pads_in_stack(pTHX_ PERL_SI * si) {
  * @param sv A code reference whose CV is to be released. Anything else is ignored.
  */
 /* Note the signature: no pTHX_. This is an Affix entry point, and every other function in the affix
- * table that takes an SV follows the same shape -- DLLEXPORT, plain C parameters, dTHX inside the body
+ * table that takes an SV follows the same shape; DLLEXPORT, plain C parameters, dTHX inside the body
  * (see force_depth_zero, drain_jobs, coro_yield). Written with pTHX_ it still compiled and worked on
  * the Linux build, because there aTHX_ expands to a full "PerlInterpreter *my_perl," declaration that
  * reads as a leading parameter; Affix is reading that signature to decide what to pass, and under
@@ -3274,8 +3270,8 @@ static void _purge_fresh_pads(pTHX_ PERL_SI * si) {
  *
  * A run ends with remaining fibers parked in two cases: the deadlock detector fires (the "FATAL:
  * deadlock detected" report) or an unobserved fiber death aborts the scheduler loop. By design those
- * parked fibers are never destroyed -- their C records keep the fids occupied so a later run cannot
- * be misread as deadlocked -- but their parked frames have to leave the depth registry at the moment
+ * parked fibers are never destroyed (their C records keep the fids occupied so a later run cannot
+ * be misread as deadlocked) but their parked frames have to leave the depth registry at the moment
  * the torn-down stack is detected, exactly as destroy_coro()'s purge leaves them on destruction.
  * Left behind, a parked claim keeps CvDEPTH fabricated above depths no live frame occupies and Pass
  * 1c refuses to settle it while the frame still counts as live, so every later park of the same CV
@@ -3329,7 +3325,7 @@ DLLEXPORT void para_cvreg_purge_fiber(int fiber_id) {
     _purge_fresh_pads(aTHX_ c->si);
     c->si->si_cxix = -1;
 
-    /* Settle right now every CV this purge left with no claims and no live frame anywhere -- the exact
+    /* Settle right now every CV this purge left with no claims and no live frame anywhere. The exact
      * state Pass 1c releases a pin in, run here so the level is unwound even if the process ends before
      * any further swap. A CV another fiber still claims (max_depth > 0) or frames (para_cv_frame_live)
      * is left to that fiber's own swaps. */
@@ -3365,7 +3361,7 @@ DLLEXPORT void destroy_coro(int fiber_id) {
     /* A cloned interpreter (threads->create, and the spawn_blocking worker on top of it) duplicates the module's
      * Fiber handles, which carry the parent's opaque fiber ids, and the worker's perl_destruct then DESTROYs them.
      * The record itself, its stacks, and every SV it references were allocated in the parent interpreter's arena,
-     * so the worker must not free -- or decrement a reference on -- any of it, or the CRT aborts on the cross-pool
+     * so the worker must not free [or decrement a reference on] any of it, or the CRT aborts on the cross-pool
      * free ("Free to wrong pool ... not ..."). The worker's copy is inert: the parent still owns the record and
      * frees it when the parent's own Fiber object is destroyed. Non-ithreads perls cannot run perl_clone at all, and
      * aTHX is not a real expression there, so the guard is compiled out and the single interpreter owns everything. */

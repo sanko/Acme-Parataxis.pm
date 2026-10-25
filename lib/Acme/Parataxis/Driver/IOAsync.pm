@@ -3,7 +3,7 @@ no warnings qw[experimental::class recursion];
 use feature 'class';
 class Acme::Parataxis::Driver::IOAsync v0.1.1 : isa(Acme::Parataxis::Driver) {
     use Carp qw[croak];
-    use Scalar::Util qw[blessed];
+    use builtin qw[blessed];
 
     # Drives readiness through an IO::Async::Loop. IO::Async allows only one watch_io stanza per filehandle, but a
     # read and a write may be established as two separate watch_io() calls (IO::Async >= 0.805). To keep the one-slot
