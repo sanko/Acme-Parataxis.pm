@@ -6,8 +6,10 @@ $|++;
 #
 my $log = '';
 
-# Set threshold to 5
+# Set threshold to 5, once via the documented function form and once via the
+# class-method form (both must route to the same C setter).
 Acme::Parataxis::set_preempt_threshold(5);
+Acme::Parataxis->set_preempt_threshold(5);
 my $c1 = Acme::Parataxis->new(
     code => sub {
         for ( 1 .. 10 ) {

@@ -1,4 +1,7 @@
 ---
+concurrency:
+  cancel-in-progress: true
+  group: '${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}'
 jobs:
   results:
     if: always()

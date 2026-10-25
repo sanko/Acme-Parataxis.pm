@@ -5,12 +5,11 @@ use Test2::V1 -ipP;
 $|++;
 #
 subtest 'A created-but-never-run fiber does not block scheduler exit' => sub {
-    ok eval {
+    ok lives {
         async {
             my $f = Acme::Parataxis->new( code => sub { return 'idle' } );
             pass 'created a fiber object, never spawned it';
         };
-        1;
     }, 'async with an idle ->new fiber returns';
 };
 subtest 'Nested async shares the scheduler and returns the block result' => sub {
