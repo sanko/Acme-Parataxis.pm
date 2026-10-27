@@ -319,7 +319,8 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg_add gmake curl"}
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"}
         ]
       os_version: 7.8
       task: |
