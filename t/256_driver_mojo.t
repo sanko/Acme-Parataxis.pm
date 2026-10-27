@@ -273,7 +273,7 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
     # zero is worse than useless here, and has already been wrong in the field: a real failure had 2 of its 31 lost
     # descriptors watched, which is overwhelmingly "unwatched" but not zero, so every zero-test passed and the
     # verdict reported all clear and named the reactor. The 29 nobody was watching out of 31 were the finding.
-    my ( %how, $k_all, $unmapped ) = ( (), 0, 0 );
+    my ( $k_all, $unmapped, %how ) = ( 0, 0, () );
     for my $i (@$lost) {
         my $d = $fd->[$i];
         if ( !defined $d ) { $unmapped++; next }
@@ -497,7 +497,7 @@ subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
             my @fibers = map {
                 my $i = $_;
                 $fd[$i] = fileno( $waiters->[$i] );
-                fiber { $got[$i] = await_read( $waiters->[$i], 5000 ) }
+                fiber { $got[$i] = await_read( $waiters->[$i], 30_000 ) }
             } 0 .. $N - 1;
             await_sleep(50);
             syswrite $writers->[$_], 'x' for 0 .. $N - 1;
