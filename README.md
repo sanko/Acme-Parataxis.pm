@@ -1,6 +1,6 @@
 # NAME
 
-Acme::Parataxis - Lightweight Cooperative Fibers and Native OS Thread Offloading for Perl
+Acme::Parataxis - Lightweight Cooperative Fibers
 
 # SYNOPSIS
 
