@@ -7,14 +7,8 @@ use IO::Socket::INET ();
 use Socket           qw[MSG_PEEK MSG_DONTWAIT];
 use Time::HiRes      qw[time];
 use Acme::Parataxis  qw[async fiber await_sleep await_read await_write with_timeout];
+no warnings qw[recursion];
 #
-# Fibers run on separate heap stacks; Perl's C-stack-depth heuristic can misfire and falsely report "Deep recursion"
-# once more than ~100 of them park inside the same sub (the high-volume subtest below does exactly that). Lexical
-# 'no warnings' is ignored once a framework such as Test2 is loaded, so filter it here as t/028/029/030 do. Genuine
-# runaway recursion inside a fiber surfaces as a hang or a croak the harness already catches.
-BEGIN {
-    $SIG{__WARN__} = sub { return if $_[0] =~ /^Deep recursion on subroutine/; warn @_ }
-}
 plan skip_all => 'Mojo::IOLoop not installed' unless eval { require Mojo::IOLoop; 1 };
 
 # A fresh connected loopback socket pair. The driver flips the fd being watched to non-blocking, so (as the pool
@@ -410,7 +404,7 @@ sub fd_peekable ($fh) {
 # timer at the end of the subtest, so a count read after the run is zero on all three sides and cannot tell them
 # apart. The three views localise a loss to exactly one layer:
 #   Parataxis watches it, the reactor does not  -> Driver::Mojo::_watch armed its own table but never reached Mojo
-#   neither holds it                             -> await_read never registered a watch at all
+#   neither holds it                            -> await_read never registered a watch at all
 #   both hold it, the kernel calls it readable  -> the watch was live and the loss is above the kernel, in Mojo
 # Wait until every waiter reports data, or the budget runs out, and return how many are still waiting. The census
 # asks the kernel whether the byte is there, so the byte has to have arrived before the question means anything.
@@ -547,4 +541,5 @@ subtest 'the pool-submission counter is live, not vacuous' => sub {
         *Acme::Parataxis::_submit_job = $orig_submit_job;
     }
 };
+#
 done_testing;
