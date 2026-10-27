@@ -1,5 +1,5 @@
 {
-   "abstract" : "A dangerous hybrid of cooperative fibers and preemptive native threads",
+   "abstract" : "Lightweight cooperative fibers and native OS thread offloading",
    "author" : [
       "Sanko Robinson"
    ],
