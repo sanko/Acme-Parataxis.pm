@@ -53,7 +53,7 @@ class    #
         require File::Spec;
         my $arch_dir = catdir(qw[blib arch auto Acme Parataxis]);
         mkpath( $arch_dir, $verbose );
-        my $extra_cflags = ( $^O eq 'openbsd' ) ? ' -fno-ret-protector' : '';
+        my $extra_cflags = join( ' ', '-fno-lto', ( $^O eq 'openbsd' ? '-fno-ret-protector' : () ) );
         my $extra_ldflags
             = ( $^O eq 'MSWin32' ) ?
             ( '-L' .
