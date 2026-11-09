@@ -256,13 +256,13 @@ void pin_to_core(int core_id) {
 #ifdef _WIN32
     DWORD_PTR mask = (1ULL << core_id);
     SetThreadAffinityMask(GetCurrentThread(), mask);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(__ANDROID__)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 #else
-    (void)core_id; /* Not supported on macOS/BSD standard APIs */
+    (void)core_id; /* Not supported on Android, macOS, or standard BSD APIs */
 #endif
 }
 
