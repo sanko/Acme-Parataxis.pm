@@ -3,7 +3,7 @@ no warnings 'recursion';    # fibers run on separate heap stacks; Perl's C-stack
 use experimental qw[class try];
 
 package Acme::Parataxis v0.1.3 {
-    use Affix;
+    use Affix qw[affix :types];
     use Config;
     use File::Spec;
     use File::Basename qw[dirname];
@@ -1535,10 +1535,10 @@ package Acme::Parataxis v0.1.3 {
     sub new ( $class, %args ) {
         my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef, [] ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
-        croak $fid == -3 ?
-            'could not allocate a fiber: this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
+        croak 'could not allocate a fiber: ' . $fid == -3 ?
+            'this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
             :
-            'could not allocate a fiber: the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
+            'the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
             if $fid < 0;
         $self->[F_FID] = $fid;
         return $self;
