@@ -60,13 +60,14 @@ class    #
                 File::Spec->catdir( $Config::Config{archlibexp}, 'CORE' ) . ' -l' .
                 ( $Config::Config{libperl} =~ s/^lib//r =~ s/\.a$//r =~ s/\.lib$//r ) .
                 ' -lws2_32' ) : ( $^O eq 'darwin' ? ('-undefined dynamic_lookup') : ( $^O eq 'openbsd' ? ('-Wl,-z,nobtcfi') : () ) );
+
         #~ Escape hatch for platform triage in CI (e.g. -mno-retpoline on OpenBSD). Keep these out of normal builds;
         #~ the shipped flags above are the ones we support.
-        push @extra_cflags,  grep { length } split ' ', ( $ENV{PARATAXIS_EXTRA_CFLAGS}  // '' );
-        push @extra_ldflags, grep { length } split ' ', ( $ENV{PARATAXIS_EXTRA_LDFLAGS} // '' );
+        push @extra_cflags,  grep {length} split ' ', ( $ENV{PARATAXIS_EXTRA_CFLAGS}  // '' );
+        push @extra_ldflags, grep {length} split ' ', ( $ENV{PARATAXIS_EXTRA_LDFLAGS} // '' );
         my $extra_cflags  = join ' ', @extra_cflags;
         my $extra_ldflags = join ' ', @extra_ldflags;
-        my $build = Affix::Build->new(
+        my $build         = Affix::Build->new(
             name  => 'parataxis',
             flags => {
                 cflags => join(
@@ -130,7 +131,7 @@ class    #
         require Config;
         my @libs = map { rel2abs( catdir( 'blib', $_ ) ) } qw[arch lib];
         local $ENV{PERL5LIB} = join( $Config::Config{path_sep}, @libs, ( defined $ENV{PERL5LIB} ? $ENV{PERL5LIB} : () ) );
-        my %test_args = ( ( verbosity => $verbose ), ( jobs => $jobs ), ( color => -t STDOUT ), lib => [@libs], );
+        my %test_args = ( ( verbosity => $verbose ), ( jobs => $jobs ), ( color => -t STDOUT ), lib => [@libs] );
         TAP::Harness::Env->create( \%test_args )->runtests( sort map { $_->stringify } find( qr/\.t$/, 't' ) )->has_errors;
     }
 
