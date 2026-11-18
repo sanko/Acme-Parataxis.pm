@@ -429,7 +429,8 @@ jobs:
             echo "== assembling for ${target}"
             clang --target="$target" -std=c11 -fno-lto -nostdinc -c aarch64-asm-probe.c -o "$object"
             file "$object"
-            llvm-objdump -d "$object" | sed -n '1,40p'
+            llvm-objdump -d "$object" | sed -n '1,80p'
+            llvm-nm "$object" | grep -E '_?para_(coro_switch|trampoline|entry_point)'
           done
   results:
     if: always()
