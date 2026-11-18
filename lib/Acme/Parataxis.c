@@ -59,19 +59,36 @@
  * Assembly-based coroutine context switching.
  *
  * glibc's swapcontext() saves/restores the signal mask (rt_sigprocmask) on every context switch which dominates the
- * cost of fiber switches. On x86_64 we instead switch with a tiny assembly routine that only saves the callee-saved
- * registers and the stack pointer, avoiding the syscall entirely. All other platforms keep the portable ucontext path
- * for now...
+ * cost of fiber switches. The native backends below avoid that syscall:
  *
- * This has to be decided before the includes below: OpenBSD ships no <ucontext.h> at all, so the assembly path must
- * be able to skip it, and Haiku ships no <sys/syscall.h>.
+ *   - x86-64 ELF:  save RBX/RBP/R12-R15, swap RSP, "ret" into para_trampoline.
+ *   - AArch64 ELF: save X19-X30, D8-D15 and FPCR/FPSR in a frame on the outgoing stack, swap SP, "ret" via LR.
+ *   - AArch64 Mach-O: same AArch64 frame, with underscore-prefixed symbols and Mach-O assembler directives.
+ *   - Windows PE: CreateFiber()/SwitchToFiber(). This is architecture-neutral and is the correct backend for
+ *     ARM64 as well: the OS saves the platform register (X18 on Windows ARM64) and NEON state for us.
+ *
+ * Android/Bionic is the reason AArch64 ELF cannot fall back to ucontext: its <ucontext.h> declares ucontext_t but
+ * exposes none of getcontext()/makecontext()/swapcontext(). OpenBSD has no <ucontext.h> at all. This decision has to
+ * be made before the includes below so those platforms can skip the header entirely.
  */
-#if defined(__x86_64__) && !defined(_WIN32) && defined(__ELF__)
-#define USE_ASM_CORO 1
+#if !defined(_WIN32)
+# if defined(__x86_64__) && defined(__ELF__)
+#  define USE_ASM_CORO 1
+#  define USE_X86_64_ASM_CORO 1
+# elif defined(__aarch64__) && (defined(__ELF__) || defined(__MACH__))
+#  define USE_ASM_CORO 1
+#  define USE_AARCH64_ASM_CORO 1
+# endif
+#endif
+
+#if defined(USE_AARCH64_ASM_CORO)
+/* 12 GP regs (96) + 8 FP regs (64) + FPCR/FPSR (16), kept 16-byte aligned. */
+#define PARA_ARM_FRAME_SIZE 176
 #endif
 
 /*
- * Under USE_ASM_CORO, no function ever callse para_entry_point() so let's hide it from lto-enabled compilers.
+ * Under USE_ASM_CORO, no C code ever calls para_entry_point() directly, so keep these symbols hidden and mark them
+ * used. Define this exactly once; a second definition without "used" would silently discard the LTO protection.
  */
 #if defined(__GNUC__) && !defined(_WIN32)
 #define PARA_HIDDEN __attribute__((visibility("hidden"), used))
@@ -162,11 +179,6 @@ typedef struct para_fiber_t para_fiber_t;
  * that refuse relocations against non-writable sections (Solaris and OmniOS ld: "relocations remain against
  * allocatable but non-writable sections") reject the object outright. Hidden symbols resolve at link time instead.
  */
-#if defined(__GNUC__) && !defined(_WIN32)
-#define PARA_HIDDEN __attribute__((visibility("hidden")))
-#else
-#define PARA_HIDDEN
-#endif
 
 /* C-level entry point invoked when a freshly created fiber starts running. */
 PARA_HIDDEN void para_entry_point(para_fiber_t * c);
@@ -175,9 +187,10 @@ PARA_HIDDEN void para_entry_point(para_fiber_t * c);
 /**
  * @brief Raw register-only context switch.
  *
- * Saves the callee-saved registers and the current stack pointer into *from, restores them from *to, then returns
- * (popping the return address off the target stack). A freshly created fiber's stack is pre-arranged so that the return
- * address lands in para_trampoline.
+ * The callee-saved state is pushed onto the outgoing stack and only the resulting stack pointer is stored in *from.
+ * Restoring *to therefore restores every register and "ret" (x86-64) / LR-return (AArch64) lands in the caller that
+ * was current when that context last ran. A freshly created fiber's frame is pre-arranged so that return lands in
+ * para_trampoline.
  *
  * @param from Pointer to the storage slot holding the current stack pointer.
  * @param to   Pointer to the storage slot holding the target stack pointer.
@@ -186,6 +199,7 @@ PARA_HIDDEN extern void para_coro_switch(void ** from, void ** to);
 /** @brief Initial jump target for brand-new fiber stacks. */
 PARA_HIDDEN extern void para_trampoline(void);
 
+#if defined(USE_X86_64_ASM_CORO)
 __asm__(
     ".text\n"
     ".p2align 4\n"
@@ -193,7 +207,6 @@ __asm__(
     ".hidden para_coro_switch\n"
     ".type para_coro_switch, @function\n"
     "para_coro_switch:\n"
-    "    endbr64\n"
     "    pushq %rbx\n"
     "    pushq %rbp\n"
     "    pushq %r12\n"
@@ -215,11 +228,93 @@ __asm__(
     ".hidden para_trampoline\n"
     ".type para_trampoline, @function\n"
     "para_trampoline:\n"
-    "    endbr64\n"
     "    popq %rdi\n"
     "    call para_entry_point\n"
     "    ud2\n"
     ".size para_trampoline, .-para_trampoline\n");
+
+#elif defined(USE_AARCH64_ASM_CORO)
+/*
+ * AArch64/EABI1: x19-x28, x29 (FP) and x30 (LR) are callee-saved; the low 64 bits of v8-v15 are too. x18 is the
+ * platform register (TEB pointer on Windows, reserved elsewhere) and must never be touched. X16/X17 are
+ * intra-procedure scratch, so they are safe to use while moving SP around. FPCR/FPSR are saved as well because a
+ * fiber may be suspended inside floating-point code with non-default rounding or exception state.
+ */
+#if defined(__APPLE__)
+#define PARA_ASM_SWITCH   "_para_coro_switch"
+#define PARA_ASM_TRAMP    "_para_trampoline"
+#define PARA_ASM_ENTRY    "_para_entry_point"
+#define PARA_ASM_VIS(s)   ".globl " s "\n.private_extern " s "\n"
+#define PARA_ASM_TYPE(s)  ""
+#define PARA_ASM_SIZE(s)  ""
+#else
+#define PARA_ASM_SWITCH   "para_coro_switch"
+#define PARA_ASM_TRAMP    "para_trampoline"
+#define PARA_ASM_ENTRY    "para_entry_point"
+#define PARA_ASM_VIS(s)   ".globl " s "\n.hidden " s "\n"
+#define PARA_ASM_TYPE(s)  ".type " s ", @function\n"
+#define PARA_ASM_SIZE(s)  ".size " s ", .-" s "\n"
+#endif
+
+__asm__(
+    ".text\n"
+    ".p2align 4\n"
+    PARA_ASM_VIS(PARA_ASM_SWITCH)
+    PARA_ASM_TYPE(PARA_ASM_SWITCH)
+    PARA_ASM_SWITCH ":\n"
+    "    sub sp, sp, #176\n"
+    "    stp x19, x20, [sp, #0]\n"
+    "    stp x21, x22, [sp, #16]\n"
+    "    stp x23, x24, [sp, #32]\n"
+    "    stp x25, x26, [sp, #48]\n"
+    "    stp x27, x28, [sp, #64]\n"
+    "    stp x29, x30, [sp, #80]\n"
+    "    stp d8,  d9,  [sp, #96]\n"
+    "    stp d10, d11, [sp, #112]\n"
+    "    stp d12, d13, [sp, #128]\n"
+    "    stp d14, d15, [sp, #144]\n"
+    "    mrs x16, fpcr\n"
+    "    str x16, [sp, #160]\n"
+    "    mrs x16, fpsr\n"
+    "    str x16, [sp, #168]\n"
+    "    mov x16, sp\n"
+    "    str x16, [x0]\n"          /* *from = saved frame */
+    "    ldr x16, [x1]\n"          /* x16 = *to */
+    "    mov sp, x16\n"
+    "    ldr x16, [sp, #160]\n"
+    "    msr fpcr, x16\n"
+    "    ldr x16, [sp, #168]\n"
+    "    msr fpsr, x16\n"
+    "    ldp d14, d15, [sp, #144]\n"
+    "    ldp d12, d13, [sp, #128]\n"
+    "    ldp d10, d11, [sp, #112]\n"
+    "    ldp d8,  d9,  [sp, #96]\n"
+    "    ldp x27, x28, [sp, #64]\n"
+    "    ldp x25, x26, [sp, #48]\n"
+    "    ldp x23, x24, [sp, #32]\n"
+    "    ldp x21, x22, [sp, #16]\n"
+    "    ldp x19, x20, [sp, #0]\n"
+    "    ldp x29, x30, [sp, #80]\n"
+    "    add sp, sp, #176\n"
+    "    ret\n"                    /* x30 was restored from the target frame */
+    PARA_ASM_SIZE(PARA_ASM_SWITCH)
+
+    ".p2align 4\n"
+    PARA_ASM_VIS(PARA_ASM_TRAMP)
+    PARA_ASM_TYPE(PARA_ASM_TRAMP)
+    PARA_ASM_TRAMP ":\n"
+    "    mov x0, x19\n"            /* arm_fiber_context puts the fiber pointer in saved x19 */
+    "    bl " PARA_ASM_ENTRY "\n"
+    "    udf #0\n"                 /* para_entry_point must never return */
+    PARA_ASM_SIZE(PARA_ASM_TRAMP));
+
+#undef PARA_ASM_SWITCH
+#undef PARA_ASM_TRAMP
+#undef PARA_ASM_ENTRY
+#undef PARA_ASM_VIS
+#undef PARA_ASM_TYPE
+#undef PARA_ASM_SIZE
+#endif /* USE_AARCH64_ASM_CORO */
 #endif /* USE_ASM_CORO */
 
 /**
@@ -260,7 +355,12 @@ void pin_to_core(int core_id) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
+#if defined(__ANDROID__)
+    /* Bionic has no pthread_setaffinity_np(); sched_setaffinity() takes a kernel TID, not a pthread_t. */
+    (void)sched_setaffinity(syscall(SYS_gettid), sizeof(cpu_set_t), &cpuset);
+#else
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
 #else
     (void)core_id; /* Not supported on macOS/BSD standard APIs */
 #endif
@@ -339,7 +439,7 @@ typedef struct para_fiber_t {
     void * stack_p;  /**< Pointer to dynamically allocated fiber stack (Unix only) */
     size_t stack_sz; /**< Size of the allocated stack (Unix only) */
 #ifdef USE_ASM_CORO
-    void * rsp; /**< Saved stack pointer for the assembly switch (Unix x86_64) */
+    void * rsp; /**< Saved SP (x86-64) or saved-register frame (AArch64) for the assembly switch */
 #endif
 #endif
 
@@ -2694,13 +2794,31 @@ static void install_stack_guard(void) {
  */
 static void arm_fiber_context(para_fiber_t * c, int idx) {
 #ifdef _WIN32
+    /* PE backend: the OS fiber API handles all ABI state, including ARM64's X18 and NEON registers. */
     c->context = CreateFiber(0, fiber_entry, c);
 #else
-#ifdef USE_ASM_CORO
+#if defined(USE_AARCH64_ASM_CORO)
     /*
-     * Lay out the fresh stack for the assembly switch. When the switch routine resumes this context it first pops the
-     * six dummy saved registers, then "returns" into para_trampoline. The trampoline pops the fiber pointer and
-     * tail-calls para_entry_point with the correct ABI stack alignment.
+     * Forge the frame that para_coro_switch will restore. Slots 0 and 11 are saved x19 and x30 respectively: the
+     * switch's final "ret" therefore enters para_trampoline, which copies x19 into x0 and calls para_entry_point(c).
+     * The remaining x19-x30 slots are zero, as are the callee-saved FP registers. FPCR/FPSR are inherited from the
+     * thread arming the fiber so a fiber never starts with a different rounding/exception environment than its parent.
+     */
+    uint64_t * frame = (uint64_t *)((char *)c->stack_p + c->stack_sz);
+    uint64_t fpcr = 0, fpsr = 0;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+    __asm__ __volatile__("mrs %0, fpsr" : "=r"(fpsr));
+    frame -= PARA_ARM_FRAME_SIZE / sizeof(*frame);
+    memset(frame, 0, PARA_ARM_FRAME_SIZE);
+    frame[0]  = (uint64_t)(uintptr_t)c;                    /* x19 */
+    frame[11] = (uint64_t)(uintptr_t)&para_trampoline;     /* x30 / LR */
+    frame[20] = fpcr;
+    frame[21] = fpsr;
+    c->rsp = frame;
+#elif defined(USE_ASM_CORO)
+    /*
+     * x86-64 ELF: six dummy saved registers, a forged return address, then the fiber pointer. "ret" in
+     * para_coro_switch lands in para_trampoline, which pops the fiber pointer into RDI and calls para_entry_point.
      */
     void ** slot = (void **)((char *)c->stack_p + c->stack_sz);
     slot -= 8; /* 6 saved regs + return address + fiber pointer */
