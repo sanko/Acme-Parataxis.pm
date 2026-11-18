@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Native AArch64 ELF and Mach-O fiber context-switch backends. Windows ARM64 continues to use the OS fiber API, which is architecture-neutral.
+
+### Fixed
+
+- Android/Termux builds: removed a duplicate `PARA_HIDDEN` definition, switched CPU affinity to Bionic's `sched_setaffinity()` with a kernel TID, and stopped falling through to `getcontext`/`makecontext`/`swapcontext`, which Bionic does not expose.
+- Removed the `endbr64` workaround from the x86-64 trampoline. I misunderstood how it addressed CET/IBT rather than OpenBSD Retguard and seems have only worked by coincidence. The supported Retguard and BTI linker flags remain in place.
+- Fixed the shared-CV pad collision behind `Perl_pp_entersub` assertion failures (`AvFILLp(av) == -1`) on real concurrent HTTP tests. Parataxis now swaps per-fiber padlists at every context switch instead of trying to make one global `CvDEPTH` safe for every fiber, so two fibers can never reuse the same pad layer.
+  - `t/255_http_mock_pool.t` no longer flags pad-collision failure as TODO (let's see how far that gets me...)
+
 ## [v0.1.3] - 2026-10-28
 
 ### Fixed
