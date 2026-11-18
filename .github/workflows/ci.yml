@@ -3,6 +3,36 @@ concurrency:
   cancel-in-progress: true
   group: '${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}'
 jobs:
+  asm-cross-check:
+    name: AArch64 asm cross-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install LLVM
+        run: sudo apt-get update -y && sudo apt-get install -y clang lld llvm file
+      - name: Assemble the AArch64 backend for ELF and Mach-O
+        run: |
+          set -euo pipefail
+          #~ Pull the AArch64 inline-asm block straight out of the shipped C source so this check cannot drift from it.
+          #~ The extracted text already switches on __APPLE__, so each target assembles the same source the builder uses.
+          #~ PE/COFF has no hand-written AArch64 switch: _WIN32 uses CreateFiber()/SwitchToFiber() on every architecture.
+          {
+            echo '/* Generated from lib/Acme/Parataxis.c by CI; do not edit. */'
+            perl -0777 -ne '
+              ($block) = /(#if defined\(__APPLE__\)\n#define PARA_ASM_SWITCH.*?)#endif \/\* USE_AARCH64_ASM_CORO \*\//s
+                or die "AArch64 asm block not found in lib/Acme/Parataxis.c\n";
+              print $block;
+            ' lib/Acme/Parataxis.c
+          } > aarch64-asm-probe.c
+          for target in aarch64-linux-gnu arm64-apple-macos11; do
+            object="aarch64-asm-probe-${target}.o"
+            echo "== assembling for ${target}"
+            clang --target="$target" -std=c11 -fno-lto -nostdinc -c aarch64-asm-probe.c -o "$object"
+            file "$object"
+            llvm-objdump -d "$object" | sed -n '1,80p'
+            llvm-nm "$object" | grep -E '_?para_(coro_switch|trampoline|entry_point)'
+          done
+        shell: bash
   dragonflybsd:
     name: DragonFly BSD
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
@@ -325,6 +355,53 @@ jobs:
       os_version: 7.8
       task: |
         export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Record the exact toolchain for the SIGILL investigation; the smoker reports clang 19 with threaded perl.
+        perl -V:version -V:cc -V:ccflags -V:ldflags -V:usethreads -V:useithreads 2>/dev/null || true
+        clang -v 2>&1 | sed -n '1,3p' || true
+        #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
+        #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
+        #~ install aborts the whole run even though it succeeded. cpanm lands in
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        elif command -v fetch >/dev/null 2>&1; then fetch -o /tmp/cpanmin.pl https://cpanmin.us
+        else echo 'no http downloader available' >&2; exit 1; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+        rm -f /tmp/cpanmin.pl
+        export PATH="$(dirname "$(perl -e 'print $^X')"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}:"' 2>/dev/null):$PATH"
+        command -v cpanm
+        cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/256 Mojo, t/257 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
+        cpanm --test-only -v .
+  openbsd79:
+    name: OpenBSD 7.9 Triage
+    uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
+    with:
+      checkout_submodules: recursive
+      matrix: |-
+        [
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.44.0","prepare":"pkg_add gmake curl"}
+        ]
+      os_version: 7.9
+      task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ Record the exact toolchain and any injected flags alongside the result.
+        perl -V:version -V:cc -V:ccflags -V:ldflags -V:usethreads -V:useithreads 2>/dev/null || true
+        clang -v 2>&1 | sed -n '1,3p' || true
+        echo "PARATAXIS_EXTRA_CFLAGS=${PARATAXIS_EXTRA_CFLAGS:-}"
+        echo "PARATAXIS_EXTRA_LDFLAGS=${PARATAXIS_EXTRA_LDFLAGS:-}"
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
@@ -356,6 +433,7 @@ jobs:
       - linux
       - macos
       - openbsd
+      - openbsd79
       - netbsd
       - dragonflybsd
       - solaris
