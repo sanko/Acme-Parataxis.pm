@@ -1,0 +1,40 @@
+---
+concurrency:
+  cancel-in-progress: false
+  group: delete-actions-caches
+jobs:
+  delete-caches:
+    env:
+      GH_TOKEN: '${{ github.token }}'
+      REPOSITORY: '${{ github.repository }}'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every repository Actions cache
+        run: |
+          set -euo pipefail
+          
+          gh api \
+            --header 'Accept: application/vnd.github+json' \
+            --paginate \
+            "repos/${REPOSITORY}/actions/caches?per_page=100" \
+            --jq '.actions_caches[].id' > cache_ids.txt
+          
+          count=0
+          while IFS= read -r id; do
+            [[ -z "$id" ]] && continue
+            echo "Deleting cache ${id}"
+            gh api \
+              --method DELETE \
+              --header 'Accept: application/vnd.github+json' \
+              "repos/${REPOSITORY}/actions/caches/${id}" >/dev/null
+            count=$((count + 1))
+          done < cache_ids.txt
+          
+          echo "Deleted ${count} cache(s)."
+        shell: bash
+name: Delete all Actions caches
+on:
+  workflow_dispatch: ~
+permissions:
+  actions: write
+  contents: read
