@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Surface Affix's `dlopen()` error when the library cannot be loaded, and fix the precedence bug that mislabelled `Acme::Parataxis->new` allocation failures as a full fiber table.
 - Enforce `with_timeout()` at the block boundary too: a result that lands after the deadline now throws `Error::Timeout` even when a busy host fires the timer helper late.
 - Do not double-fail a deadline that was already delivered at a park: a block which catches its `Error::Timeout` and returns normally no longer gets a second, uncatchable timeout from `with_timeout()`'s boundary backstop.
+- Preserve the requested `exit()` status while it unwinds through nested/resumed fibers. A parent fiber re-catching a child's exit no longer re-raises it with its own unused (zero) status; this fixes Cygwin children reporting exit 0 instead of 3/7.
 
 ## [v0.1.4] - 2026-11-19
 
