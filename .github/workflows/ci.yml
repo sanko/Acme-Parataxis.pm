@@ -54,6 +54,7 @@ jobs:
           packages: |
             perl
             gcc-core
+            libcrypt-devel
             make
             curl
             ca-certificates
