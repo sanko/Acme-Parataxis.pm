@@ -620,15 +620,17 @@ jobs:
             curl -fsSL --retry 3 https://cpanmin.us -o "$HOME/cpanmin.pl" \
               || wget -qO "$HOME/cpanmin.pl" https://cpanmin.us
             "$PERL" "$HOME/cpanmin.pl" --notest App::cpanminus Module::Build::Tiny
-            rm -f "$HOME/cpanmin.pl"
             export PATH="$(dirname "$PERL"):$("$PERL" -MConfig -e "print join q(:), @Config{qw(sitebin scriptdir)}"):$PATH"
-            #~ Termux perl is not writable here, so cpanm relocates installs to
-            #~ $HOME/perl5. Adopt that local::lib before installing anything.
-            #~ Always invoke cpanm through $PERL: its installed shebang points
-            #~ at the Debian /usr/bin/perl in this image, which would install
+            #~ The downloaded cpanmin.pl is cpanm itself. Keep using that script rather
+            #~ than hunting for a generated executable: this image runs as root, so the
+            #~ bootstrap installs cpanm into the writable Termux prefix instead of
+            #~ $HOME/perl5/bin, and test -x on the old path aborted the leg.
+            #~ Always invoke it through $PERL: an installed shebang can point at the
+            #~ Debian /usr/bin/perl in this image, which would install
             #~ x86_64-linux-gnu/5.40.1 modules instead of android ones.
-            CPANM="$HOME/perl5/bin/cpanm"
-            test -x "$CPANM"
+            #~ Relocate installs into $HOME/perl5 and adopt that local::lib so they
+            #~ stay in a known writable place regardless of the prefix permissions.
+            CPANM="$HOME/cpanmin.pl"
             "$PERL" "$CPANM" --local-lib="$HOME/perl5" --notest local::lib
             eval "$("$PERL" -I "$HOME/perl5/lib/perl5" -Mlocal::lib)"
             "$PERL" -e "print qq(using \$^X on \$^O\n)"
