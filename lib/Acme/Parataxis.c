@@ -134,6 +134,9 @@ typedef CRITICAL_SECTION para_mutex_t;
 #define LOCK_INIT(m) InitializeCriticalSection(&m)
 #else
 #include <pthread.h>
+#ifdef __CYGWIN__
+#include <windows.h>
+#endif
 #include <sched.h>
 #include <signal.h>
 #include <sys/select.h>
@@ -2842,7 +2845,29 @@ PARA_HIDDEN void para_entry_point(para_fiber_t * c) {
 static void WINAPI fiber_entry(void * param) { para_entry_point((para_fiber_t *)param); }
 #else
 /** @brief POSIX makecontext callback wrapper. */
-static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
+static void __attribute__((noinline, used)) posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
+#endif
+
+#if defined(__CYGWIN__) && defined(__x86_64__)
+/*
+ * Cygwin's makecontext() restores uc_link instead of returning when it is called while a ucontext is active, so a
+ * fiber created from inside another fiber never starts. Build the initial machine context by hand instead: Cygwin
+ * x86-64 uses the Microsoft ABI (RCX for the first integer argument, 32-byte home space), and swapcontext() restores
+ * RIP/RSP from uc_mcontext. posix_entry is the C entry point; the assembler stub only adapts the ABI.
+ */
+static void para_cygwin_return(void) {
+    setcontext(&main_context.context);
+    abort();
+}
+__asm__(
+    ".globl para_cygwin_trampoline\n"
+    "para_cygwin_trampoline:\n"
+    "  subq $40, %rsp\n"          /* 32-byte home space plus alignment for the nested call */
+    "  call posix_entry\n"
+    "  addq $40, %rsp\n"
+    "  ret\n"
+);
+extern void para_cygwin_trampoline(void);
 #endif
 
 #ifndef _WIN32
@@ -2858,6 +2883,35 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
  * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
  * @return void* Pointer to the usable stack (guard page below it), or NULL.
  */
+#ifdef __CYGWIN__
+/* Cygwin's mmap() cannot commit pages when called from inside a ucontext, which is exactly where nested fibers are
+ * created. Reserve and commit through the Win32 API instead (Cygwin is a PE target and links cygwin1.dll, which
+ * forwards the kernel32 calls). The first page stays PAGE_NOACCESS as the overflow guard. */
+static void * alloc_fiber_stack(size_t sz) {
+    (void)sz;
+    init_guard_sz();
+    if (stack_cache_count > 0)
+        return stack_cache[--stack_cache_count];
+    size_t total = FIBER_STACK_SZ + fiber_guard_sz;
+    void * base = VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!base)
+        return NULL;
+    DWORD old_protect;
+    VirtualProtect(base, fiber_guard_sz, PAGE_NOACCESS, &old_protect);
+    return (char *)base + fiber_guard_sz;
+}
+
+/** @brief Returns a fiber stack to the reuse cache or releases it. */
+static void free_fiber_stack(void * p, size_t sz) {
+    (void)sz;
+    if (p && stack_cache_count < MAX_CACHED_STACKS) {
+        stack_cache[stack_cache_count++] = p;
+        return;
+    }
+    if (p)
+        VirtualFree((char *)p - fiber_guard_sz, 0, MEM_RELEASE);
+}
+#else
 static void * alloc_fiber_stack(size_t sz) {
     (void)sz;
     init_guard_sz();
@@ -2881,6 +2935,7 @@ static void free_fiber_stack(void * p, size_t sz) {
     if (p)
         munmap((char *)p - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
 }
+#endif
 
 /** @brief Previous SIGSEGV disposition, restored when a fault is not ours. */
 static struct sigaction prev_sigsegv_act;
@@ -3049,6 +3104,17 @@ static void arm_fiber_context(para_fiber_t * c, int idx) {
     slot[6] = (void *)&para_trampoline;
     slot[7] = c;
     c->rsp = slot;
+#elif defined(__CYGWIN__) && defined(__x86_64__)
+    /* See the trampoline near posix_entry: Cygwin's makecontext() jumps to uc_link when called from a fiber. */
+    getcontext(&c->context);
+    c->context.uc_stack.ss_sp = c->stack_p;
+    c->context.uc_stack.ss_size = c->stack_sz;
+    c->context.uc_link = &main_context.context;
+    uint64_t * top = (uint64_t *)((char *)c->stack_p + c->stack_sz) - 1;
+    *top = (uint64_t)(uintptr_t)para_cygwin_return; /* fake return address for the trampoline */
+    c->context.uc_mcontext.rsp = (uint64_t)(uintptr_t)top;
+    c->context.uc_mcontext.rip = (uint64_t)(uintptr_t)para_cygwin_trampoline;
+    c->context.uc_mcontext.rcx = (uint64_t)idx;     /* Microsoft ABI: first integer argument */
 #else
     getcontext(&c->context);
     c->context.uc_stack.ss_sp = c->stack_p;
@@ -3797,9 +3863,9 @@ DLLEXPORT void cleanup() {
         if (fibers[i])
             destroy_coro(i);
 #ifndef _WIN32
-#ifdef __linux__
+#ifdef __CYGWIN__
     while (stack_cache_count > 0)
-        munmap((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);
+        VirtualFree((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, 0, MEM_RELEASE);
 #else
     while (stack_cache_count > 0)
         munmap((char *)stack_cache[--stack_cache_count] - fiber_guard_sz, FIBER_STACK_SZ + fiber_guard_sz);

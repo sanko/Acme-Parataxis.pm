@@ -598,24 +598,24 @@ jobs:
             set -e
             pkg update -y
             pkg install -y perl clang make curl wget
-            echo '::notice::Termux packages installed'
+            echo "::notice::Termux packages installed"
             #~ This image also carries a Debian perl under /usr; its 5.40.1
-            #~ Config is what cpanm's generated shebang picks unless the Termux
+            #~ Config is what the generated cpanm shebang picks unless the Termux
             #~ prefix wins PATH. Pin it so every perl below is 5.44.0/android.
-            #~ bash's command hash can still hold /usr/bin/perl from the login
+            #~ The bash command hash can still hold /usr/bin/perl from the login
             #~ profile after PATH changes, so clear it and use type -P (which
             #~ ignores the hash) instead of command -v.
             export PATH="/data/data/com.termux/files/usr/bin:$PATH"
             hash -r 2>/dev/null || true
             PERL="$(type -P perl)"
-            printf 'Termux perl: %s\n' "$PERL"
+            printf "Termux perl: %s\n" "$PERL"
             test "$PERL" = /data/data/com.termux/files/usr/bin/perl
             mkdir -p "$HOME/parataxis"
             cp -a /src/. "$HOME/parataxis/"
             cd "$HOME/parataxis"
             "$PERL" -V:version -V:archname -V:useshrplib -V:ldflags
             #~ curl intermittently reports CURLE_WRITE_ERROR (23) against the
-            #~ container's /tmp. Download into the writable home directory and
+            #~ /tmp in the container. Download into the writable home directory and
             #~ keep a wget fallback so a flaky curl cannot abort the leg.
             curl -fsSL --retry 3 https://cpanmin.us -o "$HOME/cpanmin.pl" \
               || wget -qO "$HOME/cpanmin.pl" https://cpanmin.us
