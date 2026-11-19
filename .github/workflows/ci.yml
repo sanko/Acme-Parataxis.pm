@@ -596,6 +596,21 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src termux/termux-docker:x86_64 bash -lc '
             set -e
+            #~ The image ships with no chosen mirror, so pkg update rotates across
+            #~ the whole community list. Termux only HEAD-checks dists/stable/Release,
+            #~ so it can pick a mirror whose x86_64 Packages index 404s
+            #~ (termux.librehat.com did). Pin the official Cloudflare-backed mirror
+            #~ and tell pkg not to rotate it (it honours that only when a current
+            #~ mirror is already configured in the sources).
+            TERMUX_PREFIX=/data/data/com.termux/files/usr
+            TERMUX_MIRROR=https://packages-cf.termux.dev/apt/termux-main
+            if [ -f "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources" ]; then
+              sed -i -E "s|^([[:space:]]*URIs:[[:space:]]*).*|\1$TERMUX_MIRROR|" "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources"
+            fi
+            if [ -f "$TERMUX_PREFIX/etc/apt/sources.list" ] || [ ! -f "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources" ]; then
+              printf "deb %s stable main\n" "$TERMUX_MIRROR" > "$TERMUX_PREFIX/etc/apt/sources.list"
+            fi
+            export TERMUX_PKG_NO_MIRROR_SELECT=1
             pkg update -y
             pkg install -y perl clang make curl wget
             echo "::notice::Termux packages installed"
