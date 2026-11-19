@@ -687,12 +687,14 @@ static size_t fiber_guard_sz;
  * anonymous mmap at full size and rightsize_fiber_limit clamps the limit to fit. GNU/Hurd has no MAP_NORESERVE and a
  * much smaller default RLIMIT_DATA than OpenBSD, so an 8 MiB frame only fits a few dozen fibers; it gets a 2 MiB stack
  * (still twice the ~1 MB that fits Perl recursion on Windows) plus the same clamp. DragonFly has no MAP_NORESERVE
- * either but charges only brk/sbrk to RLIMIT_DATA, so 8 MiB is safe there too.
+ * either but charges only brk/sbrk to RLIMIT_DATA, so 8 MiB is safe there too. Cygwin allocates its stacks with
+ * VirtualAlloc(MEM_COMMIT), which charges the entire frame to the process commit limit up front; 8 MiB caps a runner
+ * at ~515 fibers, so it uses the same 2 MiB frame as GNU/Hurd.
  *
  * The bottom fiber_guard_sz bytes are PROT_NONE; hitting them means genuine >FIBER_STACK_SZ C-stack usage, which the
  * SIGSEGV guard handler reports instead of corrupting the heap.
  */
-#if defined(PARA_GNU_HURD)
+#if defined(PARA_GNU_HURD) || defined(__CYGWIN__)
 #define FIBER_STACK_SZ   (2 * 1024 * 1024)
 #define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_STACK)
 #elif defined(__linux__)
