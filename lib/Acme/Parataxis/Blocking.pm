@@ -1,6 +1,6 @@
 use v5.40;
 
-package Acme::Parataxis::Blocking v0.1.4 {
+package Acme::Parataxis::Blocking v0.1.5 {
     use Config;
     use Exporter        qw[import];
     use Carp            qw[croak];

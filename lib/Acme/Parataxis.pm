@@ -2,7 +2,7 @@ use v5.40;
 no warnings 'recursion';    # fibers run on separate heap stacks; Perl's C-stack-depth heuristic misfires there
 use experimental qw[class try];
 
-package Acme::Parataxis v0.1.4 {
+package Acme::Parataxis v0.1.5 {
     use Affix qw[affix :types];
     use Config;
     use File::Spec;
@@ -207,7 +207,12 @@ package Acme::Parataxis v0.1.4 {
                 last if $lib;
             }
         }
-        die 'Could not find or load ' . $lib_name unless $lib;
+        if ( !$lib ) {
+            my $why = eval { Affix::get_last_error_message() };
+            $why = '' unless defined $why;
+            $why =~ s/\s+\z//;
+            die 'Could not find or load ' . $lib_name . ( length $why ? ": $why" : '' ) . ' (tried ' . scalar(@paths) . ' paths)';
+        }
         _bind_functions($lib);
     }
 
@@ -619,13 +624,24 @@ package Acme::Parataxis v0.1.4 {
             $tok->register if $tok ne $deadline;
             my $val;
             my $err;
-            try { $val = $code->() } catch ($e) {
+            my $done_at;
+            try {
+                $val     = $code->();
+                $done_at = defined $scope_abs ? _now_ms() : undef;
+            }
+            catch ($e) {
                 $err = $e
             }
+
+            # A deadline helper can fire late on a busy host (or the awaited result can land just after the bound
+            # without any park being re-entered). Record the completion time at the boundary so an overdue block still
+            # fails, rather than reporting success merely because its timer had not woken us yet.
+            my $overdue = defined $scope_abs && defined $done_at && $done_at > $scope_abs;
             $deadline->unregister;
             $tok->unregister                  if $tok ne $deadline;
             pop @{ $cf->[F_DEADLINE_SCOPES] } if defined $scope_abs;    # leave the stack for any enclosing scope
             die $err                          if $err;                  # the ::Timeout/::Cancelled throw (or any real error) unwinds out of the child
+            die Acme::Parataxis::Error::Timeout->new if $overdue;
             return $val;
         };
 
@@ -1535,10 +1551,11 @@ package Acme::Parataxis v0.1.4 {
     sub new ( $class, %args ) {
         my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef, [] ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
-        croak 'could not allocate a fiber: ' . $fid == -3 ?
-            'this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
+        croak 'could not allocate a fiber: ' .
+            ( $fid == -3 ?
+                'this platform has no MAP_NORESERVE and the process has hit its address-space / data-segment budget (raise RLIMIT_DATA or lower set_max_fibers)'
             :
-            'the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)'
+                'the fiber table is full (destroy some fibers first, or raise the limit with set_max_fibers)' )
             if $fid < 0;
         $self->[F_FID] = $fid;
         return $self;

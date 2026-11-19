@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Cygwin: skip `<sys/syscall.h>` (it does not exist there); `SYS_gettid`-dependent helpers fall back to the pthread ID.
+- Solaris/OmniOS: request `_LARGEFILE64_SOURCE` before `perl.h`, so its `off64_t` alias resolves under `-D_FILE_OFFSET_BITS=64`.
+- GNU/Hurd: use 2 MiB fiber stacks and apply the `RLIMIT_DATA` clamp there, instead of allowing a handful of 8 MiB stacks to exhaust the data-segment budget.
+- Termux: link `libparataxis.so` against `libperl.so` when perl uses a shared library, and carry perl's own link flags, so Bionic can load the DSO at runtime.
+- Surface Affix's `dlopen()` error when the library cannot be loaded, and fix the precedence bug that mislabelled `Acme::Parataxis->new` allocation failures as a full fiber table.
+- Enforce `with_timeout()` at the block boundary too: a result that lands after the deadline now throws `Error::Timeout` even when a busy host fires the timer helper late.
+
 ## [v0.1.4] - 2026-11-19
 
 ### Added

@@ -54,6 +54,23 @@
 #define _DARWIN_C_SOURCE
 #endif
 #endif
+/*
+ * Solaris/OmniOS perl is built with -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 and reports HAS_OFF64_T, so perl.h
+ * aliases Off_t to off64_t. Its <sys/types.h> only declares off64_t when _LARGEFILE64_SOURCE is requested, and the
+ * _XOPEN_SOURCE we set above turns that announcement off. Define it explicitly before any system header is pulled in.
+ */
+#if (defined(__sun) || defined(__sun__)) && !defined(_LARGEFILE64_SOURCE)
+#define _LARGEFILE64_SOURCE 1
+#endif
+#endif
+
+/*
+ * GNU/Hurd (unlike Linux) has no working MAP_NORESERVE and charges every anonymous mmap to RLIMIT_DATA, whose default
+ * is small enough that a tableful of 64 MiB (or even 8 MiB) stacks cannot be reserved. Treat it like OpenBSD below:
+ * use a smaller stack and clamp the default fiber count to what the data-segment budget actually holds.
+ */
+#if (defined(__gnu_hurd__) || defined(__HURD__)) && !defined(PARA_GNU_HURD)
+#define PARA_GNU_HURD 1
 #endif
 
 /*
@@ -121,7 +138,7 @@ typedef CRITICAL_SECTION para_mutex_t;
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#ifndef __HAIKU__
+#if !defined(__HAIKU__) && !defined(__CYGWIN__)
 #include <sys/syscall.h>
 #endif
 #include <sys/time.h>
@@ -654,14 +671,18 @@ static size_t fiber_guard_sz;
  * anonymous mapping counts against the process memory budget at full size but a 64 MB stack times a tableful of fibers
  * gets the process SIGKILLed on Apple Silicon. For macOS we use a small reservation instead (depth - 20000).
  * OpenBSD defines MAP_NORESERVE as 0 too, so it also gets an 8 MiB reservation; its RLIMIT_DATA counts every
- * anonymous mmap at full size and rightsize_fiber_limit clamps the limit to fit. DragonFly has no MAP_NORESERVE
+ * anonymous mmap at full size and rightsize_fiber_limit clamps the limit to fit. GNU/Hurd has no MAP_NORESERVE and a
+ * much smaller default RLIMIT_DATA than OpenBSD, so an 8 MiB frame only fits a few dozen fibers; it gets a 2 MiB stack
+ * (still twice the ~1 MB that fits Perl recursion on Windows) plus the same clamp. DragonFly has no MAP_NORESERVE
  * either but charges only brk/sbrk to RLIMIT_DATA, so 8 MiB is safe there too.
  *
- * Perl recursion fits in a ~1 MB OS fiber on Windows, so 8 MB leaves ample headroom even in a DEBUGGING build. The
- * bottom fiber_guard_sz bytes are PROT_NONE; hitting them means genuine >FIBER_STACK_SZ C-stack usage, which the
+ * The bottom fiber_guard_sz bytes are PROT_NONE; hitting them means genuine >FIBER_STACK_SZ C-stack usage, which the
  * SIGSEGV guard handler reports instead of corrupting the heap.
  */
-#ifdef __linux__
+#if defined(PARA_GNU_HURD)
+#define FIBER_STACK_SZ   (2 * 1024 * 1024)
+#define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_STACK)
+#elif defined(__linux__)
 #define FIBER_STACK_SZ   (64 * 1024 * 1024)
 #define FIBER_MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_STACK)
 #elif defined(__APPLE__)
@@ -2804,8 +2825,8 @@ static void posix_entry(int fiber_id) { para_entry_point(fibers[fiber_id]); }
  *
  * The usable stack is FIBER_STACK_SZ with a PROT_NONE guard page below it. The mapping uses FIBER_MMAP_FLAGS:
  * MAP_NORESERVE as a real flag (Linux, FreeBSD), so a 64 MB reservation is free until touched, and a small
- * FIBER_STACK_SZ where it is missing or a 0-valued legacy no-op (macOS, OpenBSD), so a tableful of fibers stays
- * under the process memory budget. No
+ * FIBER_STACK_SZ where it is missing or a 0-valued legacy no-op (macOS, OpenBSD, GNU/Hurd), so a tableful of fibers
+ * stays under the process memory budget. No
  * physical pages are consumed until they are used.
  *
  * @param sz Requested usable size (ignored; all stacks are FIBER_STACK_SZ).
@@ -2872,7 +2893,7 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
             prev_sigsegv_act.sa_handler(sig);
         return;
     }
-    static const char msg[] = "Parataxis: fatal: fiber C-stack overflow (> 64MB used); aborting\n";
+    static const char msg[] = "Parataxis: fatal: fiber C-stack overflow; aborting\n";
     (void)!write(2, msg, sizeof(msg) - 1);
     signal(SIGSEGV, SIG_DFL);
 }
@@ -2891,18 +2912,19 @@ static void stack_guard_handler(int sig, siginfo_t * si, void * uc) {
  * Every fiber reserves FIBER_STACK_SZ plus one guard page of anonymous memory. Where MAP_NORESERVE is a real flag
  * (Linux, FreeBSD) the mapping is a free reservation and RLIMIT_DATA does not count it, so this is a no-op. OpenBSD
  * defines MAP_NORESERVE as 0, a legacy no-op the preprocessor sees but that reserves nothing, and its RLIMIT_DATA
- * counts every anonymous mmap at full size, so the generous DEFAULT_FIBER_LIMIT would let the very first big spawn
- * explode the process budget; the failing mmap then surfaces as a confusing table-full message. DragonFly has no
- * MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The clamp raises the soft limit
- * to the hard limit when permitted and cuts max_fibers to the number of full frames that actually fit: each
- * frame is the stack plus the per-fiber charge FIBER_CHARGED_OVERHEAD, and four frames stay free as headroom for
- * perl, the tables, the worker pool and the guard handler's alt stack. Keying on the
- * MAP_NORESERVE macro itself would compile this OUT on OpenBSD (defined as 0) and IN on DragonFly (undefined), the
- * exact inversion of the intent, so the guard names __OpenBSD__ directly.
+ * counts every anonymous mmap at full size; GNU/Hurd has no MAP_NORESERVE at all and likewise counts every mapping
+ * against a much smaller default data-segment limit. On both, the generous DEFAULT_FIBER_LIMIT would let the very
+ * first big spawn explode the process budget; the failing mmap then surfaces as a confusing table-full message.
+ * DragonFly has no MAP_NORESERVE but charges only brk/sbrk to RLIMIT_DATA, so it never clamps. The clamp raises the
+ * soft limit to the hard limit when permitted and cuts max_fibers to the number of full frames that actually fit:
+ * each frame is the stack plus the per-fiber charge FIBER_CHARGED_OVERHEAD, and four frames stay free as headroom
+ * for perl, the tables, the worker pool and the guard handler's alt stack. Keying on the MAP_NORESERVE macro itself
+ * would compile this OUT on OpenBSD (defined as 0) and IN on DragonFly (undefined), the exact inversion of the
+ * intent, so the guard names the affected platforms directly.
  */
 static void rightsize_fiber_limit(void) {
 #ifndef _WIN32
-#if defined(__OpenBSD__)
+#if defined(__OpenBSD__) || defined(PARA_GNU_HURD)
     struct rlimit rl;
     if (getrlimit(RLIMIT_DATA, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY)
         return;
