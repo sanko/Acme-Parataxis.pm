@@ -403,6 +403,7 @@ package Acme::Parataxis v0.1.5 {
                 my $now  = _now_ms();
                 my $left = $eff->{abs} - $now;
                 if ( $left <= 0 || $eff->{tok}->cancelled ) {
+
                     # This bound is being delivered to this fiber right now. Remember that so with_timeout's boundary
                     # backstop does not synthesise a second Timeout after the user catches this one and the block
                     # returns normally.
@@ -454,6 +455,7 @@ package Acme::Parataxis v0.1.5 {
         my $res = yield('WAITING');
         if ( defined( my $kind = $fiber->[F_INTERRUPT] ) ) {
             if ( $kind eq 'timeout' ) {
+
                 # The timer cancelled its bound token before waking us. Mark every fired deadline scope on this fiber
                 # as served: if the block catches this Timeout and keeps going, the boundary check must not fire again.
                 for my $sc ( @{ $fiber->[F_DEADLINE_SCOPES] // [] } ) {
@@ -615,7 +617,7 @@ package Acme::Parataxis v0.1.5 {
         # The absolute (ms-clock) bound this block's parks must respect, and a shallow copy of the spawning fiber's
         # enclosing scopes to seed the child's stack with (marked as inherited so the child never arms a helper for a
         # token it is not registered on - the owning ancestor enforces those).
-        my $scope_abs = $ms > 0 ? _now_ms() + $ms : undef;
+        my $scope_abs = $ms > 0            ? _now_ms() + $ms                                                : undef;
         my $scope     = defined $scope_abs ? { abs => $scope_abs, tok => $deadline, own => 1, served => 0 } : undef;
         my $inherited = do {
             my $pfid = Acme::Parataxis->current_fid;

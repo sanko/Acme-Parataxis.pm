@@ -38,6 +38,8 @@ jobs:
       run:
         shell: "C:\\cygwin64\\bin\\bash.exe --login -o igncr -eo pipefail '{0}'"
     env:
+      AFFIX_CC: /usr/bin/gcc
+      AFFIX_CXX: /usr/bin/g++
       CHERE_INVOKING: 1
       CYGWIN: winsymlinks:native
     name: Cygwin
@@ -60,10 +62,15 @@ jobs:
             ca-certificates
       - name: Print toolchain
         run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           uname -a
           perl -V:version -V:archname -V:useshrplib
+          command -v gcc
+          gcc --version | sed -n '1p'
+          command -v g++
       - name: Install dependencies
         run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
           perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
           rm -f /tmp/cpanmin.pl
@@ -74,6 +81,7 @@ jobs:
             || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
       - name: Build and test
         run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           perl Build.PL
           ./Build
           ./Build test --v
@@ -119,8 +127,8 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"},
-          {"platform_name":"freebsd","os":"freebsd","arch":"aarch64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"}
+          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"sed -i '' -e 's#pkgmir.geo.freebsd.org#pkg.freebsd.org#g' /etc/pkg/FreeBSD.conf && pkg install -y perl5 curl"},
+          {"platform_name":"freebsd","os":"freebsd","arch":"aarch64","toolchain":"gcc","prepare":"sed -i '' -e 's#pkgmir.geo.freebsd.org#pkg.freebsd.org#g' /etc/pkg/FreeBSD.conf && pkg install -y perl5 curl"}
         ]
       os_version: 14.1
       task: |
@@ -442,7 +450,7 @@ jobs:
       matrix: |-
         [
           {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"}
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_78","prepare":"pkg_add gmake curl"}
         ]
       os_version: 7.8
       task: |
@@ -480,10 +488,10 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_79","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Dusethreads -Accflags=-DPARATAXIS_CI_OPENBSD_79","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_79","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Dusethreads -Accflags=-DPARATAXIS_CI_OPENBSD_79","variant":"threads","prepare":"pkg_add gmake curl"},
           {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.44.0","prepare":"pkg_add gmake curl"}
         ]
       os_version: 7.9
@@ -587,13 +595,18 @@ jobs:
           docker run --rm -v "$PWD:/src:ro" -w /src termux/termux-docker:x86_64 bash -lc '
             set -e
             pkg update -y
-            pkg install -y perl clang make curl
+            pkg install -y perl clang make curl wget
             mkdir -p "$HOME/parataxis"
             cp -a /src/. "$HOME/parataxis/"
             cd "$HOME/parataxis"
             perl -V:version -V:archname -V:useshrplib -V:ldflags
-            curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
-            perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+            #~ curl intermittently reports CURLE_WRITE_ERROR (23) against the
+            #~ container's /tmp. Download into the writable home directory and
+            #~ keep a wget fallback so a flaky curl cannot abort the leg.
+            curl -fsSL --retry 3 https://cpanmin.us -o "$HOME/cpanmin.pl" \
+              || wget -qO "$HOME/cpanmin.pl" https://cpanmin.us
+            perl "$HOME/cpanmin.pl" --notest App::cpanminus Module::Build::Tiny
+            rm -f "$HOME/cpanmin.pl"
             export PATH="$(dirname "$(command -v perl)"):$(perl -MConfig -e "print join q(:), @Config{qw(sitebin scriptdir)}"):$PATH"
             command -v cpanm
             cpanm --installdeps --notest -v .
