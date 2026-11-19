@@ -2602,6 +2602,16 @@ DLLEXPORT int init_system() {
     install_stack_guard();
     rightsize_fiber_limit();
 #endif
+#ifdef __CYGWIN__
+    /* Cygwin/Berkeley sockets initialize Winsock lazily and that first call must run on the process's main stack.
+     * If a fiber makes it while executing on its own ucontext stack, IO::Socket::INET->new() fails with EINVAL and
+     * the run then stalls. Warm the layer here, while init_system() is still on the main stack. */
+    {
+        int warm_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (warm_fd >= 0)
+            close(warm_fd);
+    }
+#endif
 #ifdef _WIN32
     /* Convert the main thread into a fiber so it can be switched out */
     if (!main_fiber_handle) {

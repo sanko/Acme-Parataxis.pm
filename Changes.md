@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Do not double-fail a deadline that was already delivered at a park: a block which catches its `Error::Timeout` and returns normally no longer gets a second, uncatchable timeout from `with_timeout()`'s boundary backstop.
 - Preserve the requested `exit()` status while it unwinds through nested/resumed fibers. A parent fiber re-catching a child's exit no longer re-raises it with its own unused (zero) status; this fixes Cygwin children reporting exit 0 instead of 3/7.
 - Cygwin: fiber stacks now come from `VirtualAlloc` (with a `PAGE_NOACCESS` guard page) and the initial ucontext is armed directly instead of through `makecontext()`. Cygwin's `mmap()` cannot commit pages from inside a ucontext and its `makecontext()` jumps to `uc_link` rather than returning when called from one, which silently prevented nested fibers from ever running.
+- Cygwin: warm the socket layer on the main stack at initialization. Cygwin's first `socket()` call initializes Winsock lazily and fails with `EINVAL` when made from a fiber's ucontext, which made `IO::Socket::INET->new()` return `undef` in `t/250_socket.t` and then stalled the run.
 
 ## [v0.1.4] - 2026-11-19
 
