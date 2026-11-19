@@ -56,6 +56,7 @@ jobs:
           packages: |
             perl
             gcc-core
+            gcc-g++
             libcrypt-devel
             make
             curl
@@ -68,6 +69,7 @@ jobs:
           command -v gcc
           gcc --version | sed -n '1p'
           command -v g++
+          g++ --version | sed -n '1p'
       - name: Install dependencies
         run: |
           export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -608,6 +610,13 @@ jobs:
             perl "$HOME/cpanmin.pl" --notest App::cpanminus Module::Build::Tiny
             rm -f "$HOME/cpanmin.pl"
             export PATH="$(dirname "$(command -v perl)"):$(perl -MConfig -e "print join q(:), @Config{qw(sitebin scriptdir)}"):$PATH"
+            #~ Termux perl is not writable here, so cpanm relocates installs to
+            #~ $HOME/perl5. Adopt that local::lib before looking for cpanm.
+            if [ -x "$HOME/perl5/bin/cpanm" ]; then
+              export PATH="$HOME/perl5/bin:$PATH"
+              "$HOME/perl5/bin/cpanm" --local-lib="$HOME/perl5" --notest local::lib
+              eval "$(perl -I "$HOME/perl5/lib/perl5" -Mlocal::lib)"
+            fi
             command -v cpanm
             cpanm --installdeps --notest -v .
             cpanm --notest -v IO::Async::Loop Mojo::IOLoop || echo "::warning::event-loop drivers unavailable"
