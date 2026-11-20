@@ -74,18 +74,18 @@ class    #
                 my $core = File::Spec->catdir( $Config::Config{archlibexp}, 'CORE' );
                 push @extra_ldflags, "-L$core", "-Wl,-rpath,$core";
                 push @extra_ldflags, grep {length} split ' ', ( $Config::Config{ldflags} // '' ) if $^O eq 'android';
+
                 # Only pass -lperl when the linker can actually find an unversioned libperl in CORE. Debian's perl-base
                 # ships just the versioned libperl.so.5.xx runtime object (the unversioned symlink lives in libperl-dev),
                 # so -lperl fails there even though the loader resolves every Perl API symbol from the libperl the perl
-                # executable already loaded - exactly how ordinary XS extensions build and run on that system. Cygwin's
+                # executable already loaded ...exactly how ordinary XS extensions build and run on that system. Cygwin's
                 # import library is libperl.dll.a; Termux and most Unix perls have libperl.so or libperl.a.
-                push @extra_ldflags, '-lperl'
-                    if grep { -e File::Spec->catfile( $core, $_ ) } qw[libperl.so libperl.a libperl.dylib libperl.dll.a];
+                push @extra_ldflags, '-lperl' if grep { -e File::Spec->catfile( $core, $_ ) } qw[libperl.so libperl.a libperl.dylib libperl.dll.a];
             }
         }
 
-        #~ Escape hatch for platform triage in CI (e.g. -mno-retpoline on OpenBSD). Keep these out of normal builds;
-        #~ the shipped flags above are the ones we support.
+        # Escape hatch for platform triage in CI (e.g. -mno-retpoline on OpenBSD). Keep these out of normal builds;
+        # the shipped flags above are the ones we support.
         push @extra_cflags,  grep {length} split ' ', ( $ENV{PARATAXIS_EXTRA_CFLAGS}  // '' );
         push @extra_ldflags, grep {length} split ' ', ( $ENV{PARATAXIS_EXTRA_LDFLAGS} // '' );
         my $extra_cflags  = join ' ', @extra_cflags;
