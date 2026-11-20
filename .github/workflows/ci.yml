@@ -33,6 +33,60 @@ jobs:
             llvm-nm "$object" | grep -E '_?para_(coro_switch|trampoline|entry_point)'
           done
         shell: bash
+  cygwin:
+    defaults:
+      run:
+        shell: "C:\\cygwin64\\bin\\bash.exe --login -o igncr -eo pipefail '{0}'"
+    env:
+      AFFIX_CC: /usr/bin/gcc
+      AFFIX_CXX: /usr/bin/g++
+      CHERE_INVOKING: 1
+      CYGWIN: winsymlinks:native
+    name: Cygwin
+    runs-on: windows-latest
+    steps:
+      - name: Normalise checkout line endings
+        run: git config --global core.autocrlf input
+        shell: pwsh
+      - uses: actions/checkout@v7.0.1
+      - name: Install Cygwin toolchain
+        uses: cygwin/cygwin-install-action@v7
+        with:
+          install-dir: C:\cygwin64
+          packages: |
+            perl
+            gcc-core
+            gcc-g++
+            libcrypt-devel
+            make
+            curl
+            ca-certificates
+      - name: Print toolchain
+        run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          uname -a
+          perl -V:version -V:archname -V:useshrplib
+          command -v gcc
+          gcc --version | sed -n '1p'
+          command -v g++
+          g++ --version | sed -n '1p'
+      - name: Install dependencies
+        run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+          perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+          rm -f /tmp/cpanmin.pl
+          export PATH="$(dirname "$(command -v perl)"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}"'):$PATH"
+          command -v cpanm
+          cpanm --installdeps --notest -v .
+          cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+            || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
+      - name: Build and test
+        run: |
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          perl Build.PL
+          ./Build
+          ./Build test --v
   dragonflybsd:
     name: DragonFly BSD
     uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
@@ -75,8 +129,8 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"},
-          {"platform_name":"freebsd","os":"freebsd","arch":"aarch64","toolchain":"gcc","prepare":"pkg install -y perl5 curl"}
+          {"platform_name":"freebsd","os":"freebsd","arch":"x86_64","toolchain":"gcc","prepare":"sed -i '' -e 's#pkgmir.geo.freebsd.org#pkg.freebsd.org#g' /etc/pkg/FreeBSD.conf && pkg install -y perl5 curl"},
+          {"platform_name":"freebsd","os":"freebsd","arch":"aarch64","toolchain":"gcc","prepare":"sed -i '' -e 's#pkgmir.geo.freebsd.org#pkg.freebsd.org#g' /etc/pkg/FreeBSD.conf && pkg install -y perl5 curl"}
         ]
       os_version: 14.1
       task: |
@@ -136,6 +190,47 @@ jobs:
         cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
           || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
         cpanm --test-only -v .
+  hurd:
+    name: GNU/Hurd
+    uses: sanko/workflow-testing/.github/workflows/run-vm.yml@main
+    with:
+      checkout_submodules: recursive
+      matrix: |-
+        [
+          {"platform_name":"hurd","os":"hurd","arch":"x86_64","toolchain":"gcc","perl_version":"5.44.0","configure":"-Dusethreads","variant":"rlimit-data","name":"x64-gcc-v5.44.0-rlimit-data","prepare":"apt-get update && apt-get install -y build-essential curl"}
+        ]
+      os_version: 2025
+      task: |
+        export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        perl -V:version -V:archname -V:usethreads
+        #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
+        #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
+        #~ install aborts the whole run even though it succeeded. cpanm lands in
+        #~ the active perl's sitebin/scriptdir, which is not on PATH everywhere,
+        #~ so re-export those dirs after bootstrapping.
+        if command -v curl >/dev/null 2>&1; then curl -fsSL https://cpanmin.us -o /tmp/cpanmin.pl
+        elif command -v wget >/dev/null 2>&1; then wget -qO /tmp/cpanmin.pl https://cpanmin.us
+        else fetch -o /tmp/cpanmin.pl https://cpanmin.us; fi
+        perl /tmp/cpanmin.pl --notest App::cpanminus Module::Build::Tiny
+        rm -f /tmp/cpanmin.pl
+        export PATH="$(dirname "$(command -v perl)"):$(perl -MConfig -e 'print "$Config{sitebin}:$Config{scriptdir}"'):$PATH"
+        command -v cpanm
+        cpanm --installdeps --notest -v .
+        #~ The event-loop driver tests (t/256 Mojo, t/257 IO::Async) gate on
+        #~ `eval { require ... }`, so without these two they skip and the
+        #~ attach_loop code path ships untested. Best effort: a build failure
+        #~ on an obscure VM must not turn the whole leg red, and the tests
+        #~ still skip cleanly. META.json's test/recommends does NOT carry
+        #~ these, so --installdeps alone never brings them in.
+        cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
+          || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
+        #~ The smoker exposed this with a ~256 MB data segment. Pin the soft limit so the 2 MiB stacks plus the
+        #~ RLIMIT_DATA clamp are actually exercised instead of depending on the VM image's default.
+        ulimit -d 262144
+        ulimit -d
+        perl Build.PL
+        ./Build
+        ./Build test --v
   linux:
     name: Linux
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
@@ -175,7 +270,8 @@ jobs:
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","variant":"default","platform_name":"linux","os":"ubuntu-26.04-arm","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.40.2","configure":"-Dusethreads","variant":"threads","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
           {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","variant":"default","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"gcc"},
-          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"clang"}
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y valgrind clang build-essential libperl-dev libcrypt-dev","arch":"aarch64","perl_version":"5.42.0","configure":"-Dcc=clang","platform_name":"linux","os":"ubuntu-24.04-arm","toolchain":"clang"},
+          {"prepare":"sudo apt-get update -y && sudo apt-get install -y build-essential libcrypt-dev curl","arch":"x86_64","perl_version":"5.44.0","configure":"-Duseshrplib -Dusedl -Dusethreads","name":"x64-gcc-v5.44.0-shared-libperl","platform_name":"linux","os":"ubuntu-24.04","toolchain":"gcc"}
         ]
       task: |
         export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
@@ -187,6 +283,9 @@ jobs:
         #~ other leg leaves the variable unset and t/357 falls back to its own 4 MiB default.
         case "$RAW_NAME" in
           *payload-12mb*) export PARATAXIS_SB_PAYLOAD_MB=12 ;;
+          #~ A source-built shared libperl needs a loader hint for the perl executable itself; the DSO's own rpath is
+          #~ what the builder fix is being tested against.
+          *shared-libperl*) export LD_LIBRARY_PATH="$(pwd)/perl-dist/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
         esac
         #~ Bootstrap cpanm via its canonical one-liner; on a writable perl (a
         #~ source build) it lands in the perl's own bin dir, which the runner
@@ -216,6 +315,9 @@ jobs:
           || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
         perl Build.PL
         ./Build
+        case "$RAW_NAME" in
+          *shared-libperl*) ldd blib/arch/auto/Acme/Parataxis/libparataxis.so 2>/dev/null | grep -i perl || true ;;
+        esac
         ./Build test --v
   macos:
     name: macOS
@@ -350,7 +452,7 @@ jobs:
       matrix: |-
         [
           {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"}
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_78","prepare":"pkg_add gmake curl"}
         ]
       os_version: 7.8
       task: |
@@ -388,10 +490,10 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang","prepare":"pkg_add gmake curl"},
-          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Dusethreads","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_79","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.40.2","configure":"-Dcc=clang -Dusethreads -Accflags=-DPARATAXIS_CI_OPENBSD_79","variant":"threads","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Accflags=-DPARATAXIS_CI_OPENBSD_79","prepare":"pkg_add gmake curl"},
+          {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"clang","perl_version":"5.44.0","configure":"-Dcc=clang -Dusethreads -Accflags=-DPARATAXIS_CI_OPENBSD_79","variant":"threads","prepare":"pkg_add gmake curl"},
           {"platform_name":"openbsd","os":"openbsd","arch":"x86_64","toolchain":"gcc","perl_version":"5.44.0","prepare":"pkg_add gmake curl"}
         ]
       os_version: 7.9
@@ -440,6 +542,9 @@ jobs:
       - omnios
       - haiku
       - windows
+      - hurd
+      - cygwin
+      - termux
     uses: sanko/workflow-testing/.github/workflows/results-summary.yml@main
     with:
       title: Acme::Parataxis CI Matrix
@@ -450,11 +555,15 @@ jobs:
       checkout_submodules: recursive
       matrix: |-
         [
-          {"platform_name":"solaris","os":"solaris","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","configure":"-A'ccflags=-D__EXTENSIONS__'","prepare":"pkg install -v --accept perl-538 gcc developer/build/make bash web/curl"}
+          {"platform_name":"solaris","os":"solaris","arch":"x86_64","toolchain":"gcc","perl_version":"5.40.2","configure":"-A'ccflags=-D__EXTENSIONS__'","prepare":"pkg install -v --accept perl-538 gcc developer/build/make bash web/curl"},
+          {"platform_name":"solaris","os":"solaris","arch":"x86_64","toolchain":"gcc","perl_version":"5.44.0","configure":"-Dusethreads -Duse64bitall -A'ccflags=-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64'","variant":"strict-largefile","name":"x64-gcc-v5.44.0-strict-largefile","prepare":"pkg install -v --accept perl-538 gcc developer/build/make bash web/curl"}
         ]
       os_version: 11.4
       task: |
         export AUTOMATED_TESTING=1 AUTHOR_TESTING=0
+        #~ The strict-largefile leg deliberately omits -D__EXTENSIONS__: that flag hides the smoker's off64_t failure
+        #~ by making _LARGEFILE64_SOURCE visible even under our _XOPEN_SOURCE.
+        perl -V:version -V:archname -V:ccflags -V:usethreads -V:use64bitall
         #~ Bootstrap cpanm via a file download, never `curl | perl`: some remote
         #~ sh's run under pipefail, and curl's EPIPE (23) after a clean pipe
         #~ install aborts the whole run even though it succeeded. cpanm lands in
@@ -478,6 +587,73 @@ jobs:
         cpanm --notest -v IO::Async::Loop Mojo::IOLoop \
           || echo '::warning::event-loop drivers unavailable, t/256 and t/257 will skip'
         cpanm --test-only -v .
+  termux:
+    name: Termux (Bionic container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build and test with Termux perl
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src termux/termux-docker:x86_64 bash -lc '
+            set -e
+            #~ The image ships with no chosen mirror, so pkg update rotates across
+            #~ the whole community list. Termux only HEAD-checks dists/stable/Release,
+            #~ so it can pick a mirror whose x86_64 Packages index 404s
+            #~ (termux.librehat.com did). Pin the official Cloudflare-backed mirror
+            #~ and tell pkg not to rotate it (it honours that only when a current
+            #~ mirror is already configured in the sources).
+            TERMUX_PREFIX=/data/data/com.termux/files/usr
+            TERMUX_MIRROR=https://packages-cf.termux.dev/apt/termux-main
+            if [ -f "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources" ]; then
+              sed -i -E "s|^([[:space:]]*URIs:[[:space:]]*).*|\1$TERMUX_MIRROR|" "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources"
+            fi
+            if [ -f "$TERMUX_PREFIX/etc/apt/sources.list" ] || [ ! -f "$TERMUX_PREFIX/etc/apt/sources.list.d/main.sources" ]; then
+              printf "deb %s stable main\n" "$TERMUX_MIRROR" > "$TERMUX_PREFIX/etc/apt/sources.list"
+            fi
+            export TERMUX_PKG_NO_MIRROR_SELECT=1
+            pkg update -y
+            pkg install -y perl clang make curl wget
+            echo "::notice::Termux packages installed"
+            #~ This image also carries a Debian perl under /usr; its 5.40.1
+            #~ Config is what the generated cpanm shebang picks unless the Termux
+            #~ prefix wins PATH. Pin it so every perl below is 5.44.0/android.
+            #~ The bash command hash can still hold /usr/bin/perl from the login
+            #~ profile after PATH changes, so clear it and use type -P (which
+            #~ ignores the hash) instead of command -v.
+            export PATH="/data/data/com.termux/files/usr/bin:$PATH"
+            hash -r 2>/dev/null || true
+            PERL="$(type -P perl)"
+            printf "Termux perl: %s\n" "$PERL"
+            test "$PERL" = /data/data/com.termux/files/usr/bin/perl
+            mkdir -p "$HOME/parataxis"
+            cp -a /src/. "$HOME/parataxis/"
+            cd "$HOME/parataxis"
+            "$PERL" -V:version -V:archname -V:useshrplib -V:ldflags
+            #~ curl intermittently reports CURLE_WRITE_ERROR (23) against the
+            #~ /tmp in the container. Download into the writable home directory and
+            #~ keep a wget fallback so a flaky curl cannot abort the leg.
+            curl -fsSL --retry 3 https://cpanmin.us -o "$HOME/cpanmin.pl" \
+              || wget -qO "$HOME/cpanmin.pl" https://cpanmin.us
+            "$PERL" "$HOME/cpanmin.pl" --notest App::cpanminus Module::Build::Tiny
+            export PATH="$(dirname "$PERL"):$("$PERL" -MConfig -e "print join q(:), @Config{qw(sitebin scriptdir)}"):$PATH"
+            #~ The downloaded cpanmin.pl is cpanm itself. Keep using that script rather
+            #~ than hunting for a generated executable: this image runs as root, so the
+            #~ bootstrap installs cpanm into the writable Termux prefix instead of
+            #~ $HOME/perl5/bin, and test -x on the old path aborted the leg.
+            #~ Always invoke it through $PERL: an installed shebang can point at the
+            #~ Debian /usr/bin/perl in this image, which would install
+            #~ x86_64-linux-gnu/5.40.1 modules instead of android ones.
+            #~ Relocate installs into $HOME/perl5 and adopt that local::lib so they
+            #~ stay in a known writable place regardless of the prefix permissions.
+            CPANM="$HOME/cpanmin.pl"
+            "$PERL" "$CPANM" --local-lib="$HOME/perl5" --notest local::lib
+            eval "$("$PERL" -I "$HOME/perl5/lib/perl5" -Mlocal::lib)"
+            "$PERL" -e "print qq(using \$^X on \$^O\n)"
+            "$PERL" "$CPANM" --installdeps --notest -v .
+            "$PERL" "$CPANM" --notest -v IO::Async::Loop Mojo::IOLoop || echo "::warning::event-loop drivers unavailable"
+            "$PERL" Build.PL
+            "$PERL" Build test --v
+          '
   windows:
     name: Windows
     uses: sanko/workflow-testing/.github/workflows/run-direct.yml@main
