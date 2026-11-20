@@ -5,7 +5,7 @@ author:
 build_requires:
   Test2::V1: '0'
 configure_requires:
-  Affix: v1.4.1
+  Affix: v1.4.2
   Affix::Build: '0'
   CPAN::Meta: '2.150012'
   Exporter: '5.57'
@@ -144,7 +144,7 @@ provides:
     file: lib/Acme/Parataxis/Ticker.pm
     version: v0.1.5
 requires:
-  Affix: v1.4.1
+  Affix: v1.4.2
   File::Basename: '0'
   File::Spec: '0'
 resources:
