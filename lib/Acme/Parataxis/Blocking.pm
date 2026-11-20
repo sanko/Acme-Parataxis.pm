@@ -1,6 +1,6 @@
 use v5.40;
 
-package Acme::Parataxis::Blocking v0.1.6 {
+package Acme::Parataxis::Blocking v0.1.5 {
     use Config;
     use Exporter        qw[import];
     use Carp            qw[croak];
@@ -209,7 +209,7 @@ package Acme::Parataxis::Blocking v0.1.6 {
         # path there; this entry point exists for perls that cannot use it.
         croak 'spawn_blocking_fork() is not available on Cygwin (fork() cannot be called from a fiber stack); use spawn_blocking() instead'
             if $^O eq 'cygwin';
-        croak 'spawn_blocking_fork() must be called from inside a scheduled fiber (inside run())'                 if Acme::Parataxis->current_fid < 0;
+        croak 'spawn_blocking_fork() must be called from inside a scheduled fiber (inside run())' if Acme::Parataxis->current_fid < 0;
         croak 'spawn_blocking_fork() is wall-clock only and cannot be driven by the mock clock of run(virtual => 1)'
             if defined Acme::Parataxis->virtual_now;
         state $have_marshal = do { require POSIX; require Storable; 1 };

@@ -29,7 +29,7 @@
       },
       "configure" : {
          "requires" : {
-            "Affix" : "v1.4.1",
+            "Affix" : "v1.4.2",
             "Affix::Build" : "0",
             "CPAN::Meta" : "2.150012",
             "Exporter" : "5.57",
@@ -49,7 +49,7 @@
       },
       "runtime" : {
          "requires" : {
-            "Affix" : "v1.4.1",
+            "Affix" : "v1.4.2",
             "File::Basename" : "0",
             "File::Spec" : "0"
          }

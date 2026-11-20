@@ -7,21 +7,19 @@ use Acme::Parataxis qw[:all];
 # Cygwin's fork emulation drops the redirected child stdout that this file needs even when the child exits 0, so every
 # case fails with an empty log here. The same assertions run on every real-fork platform; skipping only removes the
 # Cygwin capture artifact, not a fiber bug (a child that never parks fails identically).
-plan skip_all => 'Cygwin fork emulation loses child stdout; this test needs a real fork'
-    if $^O eq 'cygwin';
+plan skip_all => 'Cygwin fork emulation loses child stdout; this test needs a real fork' if $^O eq 'cygwin';
 #
 sub run_child ($body) {
     my $log    = File::Temp->new( SUFFIX => '.log' );
     my $script = File::Temp->new( SUFFIX => '.pl' );
+
     # Redirect inside the child instead of dup2-ing the parent's STDOUT around system(). Cygwin's fork emulation
     # does not reliably restore the parent handles, which used to swallow both this test's TAP plan and the child's
     # output (empty logs, "No plan found" everywhere). Passing the path through the environment keeps the harness
     # stream untouched on every platform. Keep the code in a file: Windows' system LIST still goes through cmd.exe,
     # which eats the redirection metacharacters in an inline -e string.
-    my $code = join "\n",
-        'use v5.40;', 'use blib;', 'use Acme::Parataxis qw[:all];', '$|++;',
-        'BEGIN { open STDOUT, ">", $ENV{PARATAXIS_CHILD_LOG} or die $!; open STDERR, ">&", \*STDOUT or die $!; }',
-        $body, '';
+    my $code = join "\n", 'use v5.40;', 'use blib;', 'use Acme::Parataxis qw[:all];', '$|++;',
+        'BEGIN { open STDOUT, ">", $ENV{PARATAXIS_CHILD_LOG} or die $!; open STDERR, ">&", \*STDOUT or die $!; }', $body, '';
     print {$script} $code;
     close $script;
     local $ENV{PARATAXIS_CHILD_LOG} = "$log";

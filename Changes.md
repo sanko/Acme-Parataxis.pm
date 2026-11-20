@@ -9,18 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Cygwin: skip `<sys/syscall.h>` (it does not exist there); `SYS_gettid`-dependent helpers fall back to the pthread ID.
-- Solaris/OmniOS: request `_LARGEFILE64_SOURCE` before `perl.h`, so its `off64_t` alias resolves under `-D_FILE_OFFSET_BITS=64`.
-- GNU/Hurd: use 2 MiB fiber stacks and apply the `RLIMIT_DATA` clamp there, instead of allowing a handful of 8 MiB stacks to exhaust the data-segment budget.
-- Termux: link `libparataxis.so` against `libperl.so` when perl uses a shared library, and carry perl's own link flags, so Bionic can load the DSO at runtime.
-- Surface Affix's `dlopen()` error when the library cannot be loaded, and fix the precedence bug that mislabelled `Acme::Parataxis->new` allocation failures as a full fiber table.
-- Enforce `with_timeout()` at the block boundary too: a result that lands after the deadline now throws `Error::Timeout` even when a busy host fires the timer helper late.
-- Do not double-fail a deadline that was already delivered at a park: a block which catches its `Error::Timeout` and returns normally no longer gets a second, uncatchable timeout from `with_timeout()`'s boundary backstop.
-- Preserve the requested `exit()` status while it unwinds through nested/resumed fibers. A parent fiber re-catching a child's exit no longer re-raises it with its own unused (zero) status; this fixes Cygwin children reporting exit 0 instead of 3/7.
-- Cygwin: fiber stacks now come from `VirtualAlloc` (with a `PAGE_NOACCESS` guard page) and the initial ucontext is armed directly instead of through `makecontext()`. Cygwin's `mmap()` cannot commit pages from inside a ucontext and its `makecontext()` jumps to `uc_link` rather than returning when called from one, which silently prevented nested fibers from ever running.
-- Cygwin: warm the socket layer on the main stack at initialization. Cygwin's first `socket()` call initializes Winsock lazily and fails with `EINVAL` when made from a fiber's ucontext, which made `IO::Socket::INET->new()` return `undef` in `t/250_socket.t` and then stalled the run.
-- Cygwin: use 2 MiB fiber stacks. `VirtualAlloc(MEM_COMMIT)` charges the whole frame against the process commit limit up front, so 8 MiB stacks exhausted a CI runner at ~515 fibers and broke `t/301_rate_limiter.t`, `t/405_fiber_table_growth.t`, and `t/501_saturation.t`.
-- Cygwin: `spawn_blocking_fork()` now croaks with a clear message instead of killing the whole process. Cygwin cannot `fork()` from a fiber stack ("can't commit memory for stack", Win32 error 87), so the process-offload entry point is unavailable there and `t/031_spawn_blocking_fork.t` skips; Cygwin perls have ithreads and should use `spawn_blocking()`.
+- Request `_LARGEFILE64_SOURCE` before including `perl.h`, so its `off64_t` alias resolves under `-D_FILE_OFFSET_BITS=64`.
+- GNU/Hurd and Cygwin both use 2 MiB fiber stacks and clamp there instead of allowing a handful of 8 MiB stacks to exhaust the data-segment budget.
+- Enforce `with_timeout()` at the block boundary so a result that lands after the deadline throws `Error::Timeout` even when a busy host fires the timer helper late.
+- Don't double-fail a deadline that was already delivered at a park.
+- Several fixes for Cygwin:
+  - Fiber stacks now come from `VirtualAlloc` (with a `PAGE_NOACCESS` guard page) and the initial ucontext is armed directly instead of through `makecontext()`. Cygwin's `mmap()` can't commit pages from inside a ucontext and its `makecontext()` jumps to `uc_link` rather than returning when called from one, which silently prevented nested fibers from ever running.
+  - Warm the socket layer on the main stack at initialization. Cygwin's first `socket()` call initializes Winsock lazily and fails with `EINVAL` when made from a fiber's ucontext, which makes `IO::Socket::INET->new()` return `undef`.
+  - `spawn_blocking_fork()` now croaks with a clear message instead of killing the whole process because Cygwin can't `fork()` from a fiber stack. Cygwin perls have ithreads and should use `spawn_blocking()` anyway.
 
 ## [v0.1.4] - 2026-11-19
 
