@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - GNU/Hurd: cap the default fiber limit at 512 when `RLIMIT_DATA` is unlimited (as it often is there, with the real ceiling coming from the Mach task or physical memory) instead of leaving it at 65536 and letting the first large burst fail with an mmap error. `max_fibers()` now describes stacks the process can actually map, which keeps `t/405_fiber_table_growth.t` and `t/501_saturation.t` deterministic; explicit `set_max_fibers()` values are unaffected.
+- Builder should only link `-lperl` when an unversioned `libperl` is actually present in the perl's `CORE` dir.
 
 ## [v0.1.5] - 2026-11-20
 
