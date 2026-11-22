@@ -224,7 +224,7 @@ sub lost_diagnosis ( $got, $fd, $loop, $n, $ms, $snap, $arms_end, $awaiting ) {
     # rather than invent one. MOJO_REACTOR overrides the whole choice, so report it when set.
     my $reactor = eval { $loop->reactor };
     push @out, 'reactor: ' . ( ref($reactor) || 'unknown (no reactor)' ) . ( $ENV{MOJO_REACTOR} ? " (MOJO_REACTOR=$ENV{MOJO_REACTOR})" : '' );
-    push @out, 'the wait syscall is chosen inside IO::Poll::_poll and is not introspectable; ' . 'read it from the d_* row below';
+    push @out, 'the wait syscall is chosen inside IO::Poll::_poll and is not introspectable; read it from the d_* row below';
 
     # The d_* row is therefore the real evidence, and FD_SETSIZE is only a bound on the select(2) fallback, so it
     # means something different per backend. Reporting the number alone invited reading a descriptor ceiling into a
@@ -319,7 +319,7 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
         my @dupes = grep {length} split /,/, ( $snap->{arm_dupes} // '' );
         push @out,
             sprintf(
-            '  those %d arming calls used %d distinct descriptors, collapsing %d watches into a ' . 'descriptor number claimed more than once: %s',
+            '  those %d arming calls used %d distinct descriptors, collapsing %d watches into a descriptor number claimed more than once: %s',
             $at_sample, $snap->{arm_distinct},
             $at_sample - $snap->{arm_distinct},
             @dupes ? fd_span( \@dupes ) : 'none, so no two registrations shared a descriptor'
@@ -339,11 +339,11 @@ sub layer_census ( $lost, $fd, $snap, $arms_at_end, $awaiting ) {
         'unwatched by both layers, kernel had data' =>
             'the kernel had data and no layer was watching: the watch was never registered for these reads',
         'watched by Parataxis, absent from the reactor' =>
-            'Parataxis armed its own table but the watch never reached the reactor, so the fault is in ' . 'Driver::Mojo::_watch',
+            'Parataxis armed its own table but the watch never reached the reactor, so the fault is in Driver::Mojo::_watch',
         'in the reactor, absent from Parataxis' => 'the reactor held a watch Parataxis had not recorded, so the two tables disagree',
         'watched by both, kernel had nothing'   => 'watched by both layers but the descriptor was not readable, so the batch never wrote to it',
         'watched by both, kernel had data'      =>
-            'the watch was live on both sides and the kernel had data, so the readiness event was lost above the ' . 'kernel, inside the reactor',
+            'the watch was live on both sides and the kernel had data, so the readiness event was lost above the kernel, inside the reactor'
     );
     my ($top) = sort { $how{$b} <=> $how{$a} || $a cmp $b } keys %how;
     push @out, "reading of the loss: $why{$top}" if $top;
@@ -488,7 +488,7 @@ sub armed_snapshot ( $loop, $waiters ) {
         arm_distinct => scalar keys %{ { map { $_ => 1 } grep { $_ ne '?' } split /,/, ( $arm_fds // '' ) } },
         arm_dupes    => join( ',', sort { $a <=> $b } grep { $_ ne '?' } grep { $repeat{$_}++ > 0 } ( split /,/, ( $arm_fds // '' ) ) ),
         watch_ct     => ( $driver ? $driver->watch_count : -1 ),
-        reactor      => ref($reactor) || 'none',
+        reactor      => ref($reactor) || 'none'
     };
 }
 subtest "high-volume: $N concurrent await_read wake on loopback" => sub {
