@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Size the high-volume driver tests against the descriptors they actually allocate, so a platform with more than the assumed 16 pre-existing handles (NetBSD 11, whose `FD_SETSIZE` is 256) no longer parks a read on an unnameable fd and loses a wakeup.
+
 ## [v0.1.6] - 2026-11-20
 
 ### Fixed
