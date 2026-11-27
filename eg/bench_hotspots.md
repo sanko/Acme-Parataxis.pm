@@ -146,6 +146,29 @@ within noise, and the full suite still passed: 74 files, 1055 tests, PASS.
 Direct reruns of `t/450_parallel.t`, `t/500_stress_fuzz.t`,
 `t/501_saturation.t` and `t/502_soak.t` also returned 0 with no failing tests.
 
+### Step 5 — free-slot bitmap
+
+`submit_c_job()` still walked up to 1024 `job_t` structs to find the lowest
+`JOB_FREE` slot. A 16-word bitmap now records free slots, and claiming the
+lowest set bit preserves the exact allocation order `t/501_saturation.t`
+expects. Both reclaim paths (`drain_jobs()` and the public `free_job_slot()`)
+set the bit back under the same lock; init seeds every valid bit.
+
+Interleaved A/B medians against the `a37b08f` DLL (12 pairs at `--count 300 --rounds 1`; `sleep` used 8 pairs at `--count 200`):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| series | 0.00459 | 0.00469 | 1.022x |
+| parallel | 0.00441 | 0.00460 | 1.043x |
+| semaphore | 0.02714 | 0.02760 | 1.017x |
+| channel | 0.01425 | 0.01398 | 0.981x |
+| offload | 0.06787 | 0.06163 | 0.908x |
+| sleep | 3.70962 | 3.74838 | 1.010x |
+
+The offload path improved; the other workloads stayed within noise. Full suite
+after the step: 74 files, 1055 tests, PASS, with the direct stress, saturation
+and soak reruns also clean.
+
 ### Rejected — targeted worker wakeups
 
 Counting workers actually parked in `queue_cond` and signalling only as many as

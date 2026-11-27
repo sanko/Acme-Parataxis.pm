@@ -639,6 +639,40 @@ static int para_fiber_exit_in_flight = 0;
 /** @brief Fixed-size array for background tasks */
 static job_t job_slots[MAX_JOBS];
 
+/** @brief One bit per reclaimable job slot. A set bit means JOB_FREE; bits are kept under queue_lock. Scanning 16 words
+ *  finds the same lowest free slot as the old linear scan without walking 1024 job structs on every submission. */
+#define JOB_BITS_PER_WORD 64
+#define JOB_WORD_COUNT ((MAX_JOBS + JOB_BITS_PER_WORD - 1) / JOB_BITS_PER_WORD)
+static uint64_t free_job_mask[JOB_WORD_COUNT];
+
+/** @brief Count trailing zero bits without a compiler intrinsic, so MSVC and every C99 compiler get the same result. */
+static int para_ctz64(uint64_t x) {
+    int n = 0;
+    if (!(x & 0xffffffffULL)) { n += 32; x >>= 32; }
+    if (!(x & 0xffffULL))     { n += 16; x >>= 16; }
+    if (!(x & 0xffULL))       { n +=  8; x >>=  8; }
+    if (!(x & 0xfULL))        { n +=  4; x >>=  4; }
+    if (!(x & 0x3ULL))        { n +=  2; x >>=  2; }
+    if (!(x & 0x1ULL))        { n +=  1; }
+    return n;
+}
+
+/** @brief Claims the lowest free job slot, or -1 when the table is full. Caller holds queue_lock. */
+static int take_free_job_slot(void) {
+    for (int w = 0; w < JOB_WORD_COUNT; w++) {
+        uint64_t bits = free_job_mask[w];
+        if (!bits)
+            continue;
+        int bit = para_ctz64(bits);
+        int idx = w * JOB_BITS_PER_WORD + bit;
+        if (idx >= MAX_JOBS)    /* unused high bits in a partial last word */
+            return -1;
+        free_job_mask[w] &= ~(1ULL << bit);
+        return idx;
+    }
+    return -1;
+}
+
 /** @brief Jobs submitted but not yet claimed by a worker (JOB_NEW), maintained under queue_lock. */
 static int pending_job_count = 0;
 /** @brief Mutex protecting access to the job queue */
@@ -1145,6 +1179,10 @@ DLLEXPORT void init_threads() {
 #endif
     for (int i = 0; i < MAX_JOBS; i++)
         job_slots[i].status = JOB_FREE;
+    for (int w = 0; w < JOB_WORD_COUNT; w++)
+        free_job_mask[w] = ~0ULL;
+    if (MAX_JOBS % JOB_BITS_PER_WORD)
+        free_job_mask[JOB_WORD_COUNT - 1] = (1ULL << (MAX_JOBS % JOB_BITS_PER_WORD)) - 1;
 
     if (max_thread_pool_size == 0) {
         max_thread_pool_size = get_cpu_count();
@@ -1174,12 +1212,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
     int idx = -1;
     LOCK(queue_lock);
 
-    for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_slots[i].status == JOB_FREE) {
-            idx = i;
-            break;
-        }
-    }
+    idx = take_free_job_slot();
     if (idx != -1) {
         job_slots[idx].fiber_id = current_fiber_id;
         job_slots[idx].type = type;
@@ -1317,6 +1350,7 @@ DLLEXPORT void free_job_slot(int idx) {
     int owner = job_slots[idx].fiber_id;
     LOCK(queue_lock);
     job_slots[idx].status = JOB_FREE;
+    free_job_mask[idx >> 6] |= 1ULL << (idx & 63);
     outstanding_jobs--;
     UNLOCK(queue_lock);
 
@@ -3488,6 +3522,7 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
                             job->type == TASK_READ || job->type == TASK_WRITE);
         values[count] = has_result[count] ? job->output.i : 0;
         job->status = JOB_FREE;
+        free_job_mask[job_idx >> 6] |= 1ULL << (job_idx & 63);
         outstanding_jobs--;
         count++;
     }

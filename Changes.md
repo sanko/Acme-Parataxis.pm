@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Maintain the job pool's pending-job count incrementally instead of re-scanning all 1024 job slots under the queue lock on every submission.
 - Store parked/queued flags and the interrupted-park deregistration callback in flat fiber slots instead of fid-keyed hashes, removing hash lookups from the park, wake and enqueue paths.
 - Drain completed C jobs under one queue lock, copying each result before its slot is reused instead of taking three locks per job.
+- Track reclaimable C job slots in a bitmap so submission finds the lowest free slot without scanning all 1024 job structs, preserving the existing allocation order.
 
 ### Fixed
 
