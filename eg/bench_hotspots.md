@@ -782,6 +782,37 @@ sleep 200 1.000x and virtual 200 0.997x. With no repeatable gain on the park
 paths, the source change was reverted; the suite at `604d24a` remains PASS
 (74 files, 1055 tests).
 
+### Rejected — direct yield deposit in `Fiber::wait()`
+
+`Fiber::wait()` called `yield('WAITING_FOR_CHILD')` on every scheduler turn
+until its child finished, paying `yield()`'s `_arg_offset()` check and fresh
+deposit arrayref each time. The wait ignores the yield result, so it was changed
+to call `coro_yield()` with one shared empty deposit; an empty arrayref does not
+match `run_fiber_checked()`'s `['WAITING']` park marker, so the scheduler keeps
+re-enqueueing the fiber. Wait-reason, backtrace, fiber-local, future,
+future-combined, nursery, cancellation, cancel-scope, timeout, timeout/repark,
+ticker, parallel, thread-pool-growth, stress, saturation, soak and shutdown
+gates all passed.
+
+Interleaved A/B against `8ba6236`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| series (300, forward) | 0.00447 | 0.00445 | 0.996x | 15/30 |
+| series (300, reversed) | 0.00423 | 0.00454 | 1.073x | 12/30 |
+| parallel (300, forward) | 0.00449 | 0.00474 | 1.056x | 12/30 |
+| parallel (300, reversed) | 0.00451 | 0.00428 | 0.949x | 13/30 |
+| channel (300) | 0.01042 | 0.01059 | 1.016x | 7/20 |
+| semaphore (300) | 0.02171 | 0.02190 | 1.009x | 8/20 |
+| offload (300) | 0.00579 | 0.00582 | 1.005x | 11/20 |
+
+Larger counts did not settle it: series 1000 was 1.019x (8/20 faster) and
+parallel 1000 was 1.003x (11/20); the first 2000 run favored the change
+(series 0.851x, parallel 0.975x) but the repeat with the opposite order was
+flat (series 1.016x, parallel 0.994x). A/A controls on series and parallel at
+both 300 and 2000 showed 0.831x–1.054x spread. With no repeatable gain, the
+source change was reverted.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
