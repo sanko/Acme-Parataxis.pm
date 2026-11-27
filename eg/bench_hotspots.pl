@@ -117,6 +117,11 @@ my %workloads = (
     maybe_yield_public => sub {
         maybe_yield() for 1 .. ( $count * 400 );
     },
+    maybe_yield_public_enabled => sub {
+        set_preempt_threshold(1_000_000_000);    # take the enabled wrapper path without actually yielding
+        maybe_yield() for 1 .. ( $count * 400 );
+        set_preempt_threshold(0);
+    },
 );
 
 my @names = @only ? @only : qw[startup series parallel semaphore channel offload sleep cancel_sleep virtual maybe_yield maybe_yield_public];

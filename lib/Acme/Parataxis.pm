@@ -1273,8 +1273,8 @@ package Acme::Parataxis v0.1.7 {
     }
 
     sub maybe_yield {
-        @_ = ();
-        return unless $PREEMPT_THRESHOLD;    # disabled preemption is a no-op; don't cross FFI for it
+        return unless $PREEMPT_THRESHOLD;    # disabled preemption is a no-op; don't clear @_ or cross FFI for it
+        @_ = ();                             # drop caller args before the C call can yield
         my $result = Acme::Parataxis::_maybe_yield();
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];

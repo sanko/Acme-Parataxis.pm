@@ -458,6 +458,32 @@ rate limiter, mock time, diagnostics, channel-select deadlock, parallel, stress,
 saturation, soak and shutdown reruns were clean. Full suite after the step:
 74 files, 1055 tests, PASS.
 
+### Step 16 — lazy `maybe_yield()` argument-pad clear
+
+The Perl `maybe_yield()` wrapper cleared `@_` before checking the mirrored
+preemption threshold. Since a disabled threshold returns without crossing FFI
+and without parking a fiber, clearing the pad was unnecessary on that path.
+The check now runs first and `@_` is cleared only when a real C call can yield.
+A `maybe_yield_public_enabled` harness workload was added to verify that the
+enabled path stays neutral (a very high threshold forces the FFI call without
+actually yielding).
+
+Interleaved A/B against `b44cf3b`, `--count 300/500 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| maybe_yield_public (300) | 0.00770 | 0.00514 | 0.668x |
+| maybe_yield_public (300) repeat | 0.00782 | 0.00520 | 0.665x |
+| maybe_yield_public (500) | 0.01294 | 0.00876 | 0.677x |
+| maybe_yield_public_enabled (300) | 0.01583 | 0.01580 | 0.998x |
+| maybe_yield_public_enabled (500) | 0.02648 | 0.02637 | 0.996x |
+
+The disabled wrapper was faster in 30/30, 30/30 and 19/20 pairs; A/A controls
+were flat (old 1.008x median / 1.004x mean, new 0.998x / 0.951x and 1.001x /
+0.990x). The enabled wrapper and direct-C workloads were neutral. Preemption,
+priority, scheduler-scope, parallel, stress and saturation reruns were clean.
+Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — lock-free flag reads in the sub-tick spin
 
 The Windows sub-tick spin took `queue_lock` at entry and exit (and every 32
