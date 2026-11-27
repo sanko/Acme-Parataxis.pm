@@ -272,6 +272,17 @@ median ratio for `parallel` and a 1.182x median ratio for `offload`, so the
 the step: 74 files, 1055 tests, PASS. Direct cancellation, timeout, HTTP,
 parallel, stress, saturation and soak reruns were clean.
 
+### Rejected — reuse the scheduler's completed-job AV
+
+Hoisting `@ready` above `run()`'s loop and clearing it each tick would keep the
+flat drain buffer's AV allocation instead of freeing it between scheduler
+passes. Correctness gates passed, but interleaved A/B against `9d00751` did not
+hold up: offload was 0.900x median / 0.812x mean in one 30-pair run, then 1.060x
+median / 1.179x mean on a repeat, and 1.479x median / 1.241x mean at
+`--count 500`. The unchanged A/A control at 500 was only 1.084x median /
+1.025x mean, so the repeat was a real regression. Fiber-only workloads were
+neutral. Reverted; full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — splice the scheduler queue
 
 Replacing `my @work = @SCHEDULER_QUEUE; @SCHEDULER_QUEUE = ()` with
