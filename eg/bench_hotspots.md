@@ -237,6 +237,28 @@ this machine's noise. Full suite after the step: 74 files, 1055 tests, PASS.
 Direct cancellation/timeout tests (`t/154`–`t/158`), stress, saturation and
 soak all returned 0 with no failing tests.
 
+### Rejected — broadcast gate
+
+`submit_c_job()` broadcasts `queue_cond` on every job submission. A waiter count
+looked like a way to skip `WakeAllConditionVariable()` when every worker was
+already busy. Two variants were tried against `cac0b1f`: one counted all
+condition-wait parkers (main loop and timed sleeps), and a cheaper one counted
+only timed sleepers while deriving main-loop waiters from `idle_count`. Both
+passed the cancellation/timeout, HTTP, ticker, transparent, parallel, stress,
+saturation and soak gates, but interleaved A/B results were unstable or worse:
+
+| variant | workload | old_s | new_s | ratio |
+| --- | --- | ---: | ---: | ---: |
+| all waiters | offload (300) | 0.05761 | 0.06986 | 1.213x |
+| all waiters | offload (500) | 0.10773 | 0.09012 | 0.837x |
+| timed sleepers + idle | offload (300) | 0.06435 | 0.07034 | 1.093x |
+| timed sleepers + idle | offload (500) | 0.08165 | 0.11021 | 1.350x |
+| timed sleepers + idle | cancel_sleep (300) | 0.03104 | 0.03098 | 0.998x |
+| timed sleepers + idle | sleep (200) | 3.44121 | 3.41125 | 0.991x |
+
+With 30 pairs per offload point, the cheaper variant was faster in only 15/30
+and 14/30 pairs. The gate was reverted; unconditional broadcast stays.
+
 ### Rejected — canonical waiting marker
 
 Registering the literal `"WAITING"` as one canonical SV let `run_fiber_checked()`
