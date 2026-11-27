@@ -105,6 +105,12 @@ my %workloads = (
     virtual => sub {
         run( virtual => 1, code => sub { await_sleep(1) for 1 .. $count } );
     },
+    virtual_burst => sub {
+        run( virtual => 1, code => sub {
+            my @fibers = map { fiber { await_sleep(1) } } 1 .. $count;
+            $_->await for @fibers;
+        } );
+    },
     maybe_yield => sub {
         Acme::Parataxis::_maybe_yield() for 1 .. ( $count * 400 );
     },

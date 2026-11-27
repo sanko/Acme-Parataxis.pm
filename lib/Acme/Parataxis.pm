@@ -41,6 +41,7 @@ package Acme::Parataxis v0.1.7 {
     my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms
     my %VIRTUAL_DEADLINES;      # fid => absolute virtual-ms deadline of that fiber's one armed virtual timer
     my @VIRTUAL_TIMERS;         # [deadline_ms, fid] ascending; lazy deletion via %VIRTUAL_DEADLINES
+    my $VIRTUAL_TIMER_HEAD = 0; # fired prefix of @VIRTUAL_TIMERS, compacted lazily
 
     # Fiber object layout: a flat arrayref of slots rather than perlclass objects (array access is much cheaper than
     # classes and even hash lookup on the hot spawn/await path).
@@ -559,8 +560,16 @@ package Acme::Parataxis v0.1.7 {
         return if $fid < 0;
         my $dl = $VIRTUAL_CLOCK + $ms;
         $VIRTUAL_DEADLINES{$fid} = $dl;
-        push @VIRTUAL_TIMERS, [ $dl, $fid ];
-        @VIRTUAL_TIMERS = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @VIRTUAL_TIMERS;
+        my $lo = $VIRTUAL_TIMER_HEAD;
+        my $hi = @VIRTUAL_TIMERS;
+        while ( $lo < $hi ) {
+            my $mid = ( $lo + $hi ) >> 1;
+            my $at  = $VIRTUAL_TIMERS[$mid];
+            my $cmp = $at->[0] <=> $dl || $at->[1] <=> $fid;
+            if ( $cmp < 0 ) { $lo = $mid + 1 }
+            else            { $hi = $mid }
+        }
+        splice @VIRTUAL_TIMERS, $lo, 0, [ $dl, $fid ];
         return $dl;
     }
 
@@ -572,12 +581,21 @@ package Acme::Parataxis v0.1.7 {
     # timers are popped and skipped, never woken).
     sub _fire_virtual ($now) {
         my $fired = 0;
-        while ( @VIRTUAL_TIMERS && $VIRTUAL_TIMERS[0][0] <= $now ) {
-            my ( $dl, $fid ) = @{ shift @VIRTUAL_TIMERS };
+        while ( $VIRTUAL_TIMER_HEAD < @VIRTUAL_TIMERS && $VIRTUAL_TIMERS[$VIRTUAL_TIMER_HEAD][0] <= $now ) {
+            my ( $dl, $fid ) = @{ $VIRTUAL_TIMERS[$VIRTUAL_TIMER_HEAD] };
+            $VIRTUAL_TIMER_HEAD++;
             next unless exists $VIRTUAL_DEADLINES{$fid} && $VIRTUAL_DEADLINES{$fid} == $dl;
             delete $VIRTUAL_DEADLINES{$fid};
             Acme::Parataxis::_scheduler_enqueue_by_id($fid);
             $fired++;
+        }
+        if ( $VIRTUAL_TIMER_HEAD == @VIRTUAL_TIMERS ) {
+            @VIRTUAL_TIMERS    = ();
+            $VIRTUAL_TIMER_HEAD = 0;
+        }
+        elsif ( $VIRTUAL_TIMER_HEAD > 64 && $VIRTUAL_TIMER_HEAD * 2 >= @VIRTUAL_TIMERS ) {
+            splice @VIRTUAL_TIMERS, 0, $VIRTUAL_TIMER_HEAD;
+            $VIRTUAL_TIMER_HEAD = 0;
         }
         return $fired;
     }
@@ -1371,6 +1389,7 @@ package Acme::Parataxis v0.1.7 {
             $VIRTUAL_CLOCK     = 0;
             %VIRTUAL_DEADLINES = ();
             @VIRTUAL_TIMERS    = ();
+            $VIRTUAL_TIMER_HEAD = 0;
         }
 
         # Snapshot the fibers that were already alive before this run. A fiber parked by a *previous* deadlocked run
@@ -1521,8 +1540,8 @@ package Acme::Parataxis v0.1.7 {
                         # (or declaring a deadlock), wind the virtual clock up to the earliest outstanding deadline and
                         # fire anything due, then re-loop to run the woken fibers. The clock never moves while any fiber
                         # is runnable or any real job is in flight, so only real waiting is accelerated.
-                        if ( defined $VIRTUAL_CLOCK && @VIRTUAL_TIMERS ) {
-                            my $earliest = $VIRTUAL_TIMERS[0][0];
+                        if ( defined $VIRTUAL_CLOCK && $VIRTUAL_TIMER_HEAD < @VIRTUAL_TIMERS ) {
+                            my $earliest = $VIRTUAL_TIMERS[$VIRTUAL_TIMER_HEAD][0];
                             $VIRTUAL_CLOCK = $earliest if $VIRTUAL_CLOCK < $earliest;
                             if ( _fire_virtual($VIRTUAL_CLOCK) ) {next}
                         }
@@ -1597,8 +1616,9 @@ package Acme::Parataxis v0.1.7 {
             $SIG{INT}  = $old_int;
             $SIG{TERM} = $old_term;
         }
-        %VIRTUAL_DEADLINES = ();
-        @VIRTUAL_TIMERS    = ();              # a virtual run's timers die with the run
+        %VIRTUAL_DEADLINES  = ();
+        @VIRTUAL_TIMERS     = ();              # a virtual run's timers die with the run
+        $VIRTUAL_TIMER_HEAD = 0;
         $VIRTUAL_CLOCK     = $saved_clock;    # whatever the next run does, the wall clock is the default
         if ( $on_shutdown && $shutdown_fired ) {
             $shutdown_cb->($shutdown_token) if $shutdown_cb;

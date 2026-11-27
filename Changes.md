@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Poll the scheduler briefly at sub-millisecond granularity after job activity, then fall back to the normal idle sleep so long waits do not become a busy loop.
 - Use a bounded high-resolution yield-spin for Windows sleeps of 8 ms or less, avoiding the platform timer tick while still checking cancellation and shutdown.
 - Snapshot live fiber objects in one C call for `run()` startup and deadlock cleanup instead of one FFI lookup per fiber-table slot.
+- Insert virtual timers in deadline order with a compacting fired prefix instead of resorting the whole timer array on every arm.
 
 ### Fixed
 

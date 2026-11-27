@@ -433,6 +433,31 @@ Neither variant helped. The array version was neutral on fiber paths (series
 1.235x); sleep and cancel_sleep were unchanged. Reverted; full suite remains
 PASS (74 files, 1055 tests).
 
+### Step 15 — ordered virtual timers with a fired prefix
+
+Virtual timers used to be appended and the whole array resorted on every arm,
+then shifted from the front when they fired. `_arm_virtual_timer()` now does a
+binary insertion, and `_fire_virtual()` advances a head index and compacts only
+when the consumed prefix is large. The `virtual_burst` workload was added to
+the harness to arm many timers before firing any of them.
+
+Interleaved A/B against `e82a6e1`, `--count 300/500 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| virtual_burst (300) | 0.02625 | 0.02102 | 0.801x |
+| virtual_burst (300) repeat | 0.02459 | 0.02093 | 0.851x |
+| virtual_burst (500) | 0.04993 | 0.03677 | 0.736x |
+| virtual_burst (500) repeat | 0.04906 | 0.04020 | 0.819x |
+
+The 500-timer case was faster in 20/20 and 19/20 pairs; A/A controls were flat
+(old 0.953x median / 0.955x mean, new 1.006x / 0.993x and 1.014x / 0.997x).
+The existing sequential `virtual` workload was unchanged (0.998x / 0.999x),
+as expected for one timer at a time. Timeout, repark, cancel scope, ticker,
+rate limiter, mock time, diagnostics, channel-select deadlock, parallel, stress,
+saturation, soak and shutdown reruns were clean. Full suite after the step:
+74 files, 1055 tests, PASS.
+
 ### Rejected — live queued-priority count
 
 `$HAS_PRIORITIES` is sticky: once any fiber ever gets a non-default priority,
