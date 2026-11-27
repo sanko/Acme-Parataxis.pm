@@ -1518,7 +1518,7 @@ package Acme::Parataxis v0.1.7 {
                         # Poll briefly at sub-millisecond granularity after completions arrive: C jobs often finish
                         # well inside one scheduler tick, and a 1 ms usleep is a full 15 ms timer tick on Windows.
                         # Cap the fast polls so a genuinely long job does not turn the scheduler into a busy loop.
-                        if ( $idle_polls < 4 ) {
+                        if ( $idle_polls < 64 ) {
                             usleep(200);
                             $idle_polls++;
                         }

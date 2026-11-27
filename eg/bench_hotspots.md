@@ -511,6 +511,40 @@ slightly worse: semaphore 1.036x median / 1.035x mean, channel 1.001x / 1.005x,
 cancel_sleep 0.985x / 0.998x, series 1.041x / 1.013x, parallel 1.040x / 1.029x.
 Reverted; full suite remains PASS (74 files, 1055 tests).
 
+### Step 17 — longer bounded scheduler fast polling
+
+Step 12 capped the post-activity fast-poll budget at four `usleep(200)` calls
+before falling back to `usleep(1000)`. On this Windows Perl the former is
+`Sleep(0)` and the latter costs a full timer tick, so short jobs were often
+finished well before the scheduler looked again. The budget is now 64 polls.
+The cap still bounds CPU use on long jobs; it is only reset by new job activity
+or a completion.
+
+Interleaved A/B against `b2a6de4`, `--count 300/500 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| offload (300) | 0.01544 | 0.00696 | 0.451x |
+| offload (300) repeat | 0.02225 | 0.00724 | 0.325x |
+| offload (500) | 0.02414 | 0.01214 | 0.503x |
+| offload (500) repeat | 0.02311 | 0.01277 | 0.553x |
+| sleep (200) | 2.27558 | 2.31795 | 1.019x |
+| cancel_sleep (300) | 0.03115 | 0.03191 | 1.024x |
+
+Offload was faster in 25/30, 19/20, 20/30 and 17/20 pairs. Offload A/A controls
+were noisy (0.953x–1.702x median), but the interleaved gain repeated at both
+counts. Sleep and cancel_sleep stayed inside their A/A noise; a five-second
+long-sleep probe used 0.031 s CPU with 64 polls versus 0.000 s at the resolution
+of `times` with the old cap, so long waits still stop spinning. Raising the cap
+to 128 gave no further gain (offload 300 1.018x median / 0.927x mean, offload
+500 0.961x / 0.887x), so 64 was kept.
+
+One full-suite run hit the known host-sensitive `t/300_ticker.t` fired/dropped
+timing margins; both old and new builds then passed 10/10 targeted reruns and
+an immediate full rerun was PASS. Cancellation, timeout/repark, ticker, rate
+limiter, mock time, diagnostics, parallel, stress, saturation, soak and shutdown
+reruns were clean. Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — deferring the live-fiber count read
 
 `get_live_fiber_count()` was sampled on every scheduler pass even though the
