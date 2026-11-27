@@ -887,6 +887,34 @@ Interleaved A/B against `4526d87`, `--count 300 --rounds 1` unless noted:
 The series path was consistently neutral-to-worse and parallel flipped with
 order; A/A controls drifted by up to 1.176x. The change was reverted.
 
+### Rejected — inlined `_handle_run()` on the queue drain
+
+`_handle_run()` was called for every fiber resumed from `@SCHEDULER_QUEUE`, so
+its two branches were inlined at that call site to remove one Perl sub call per
+scheduled resume. Wait-reason, backtrace, fiber-local, future, nursery,
+cancellation, cancel-scope, timeout, timeout/repark, ticker, parallel,
+thread-pool-growth, stress, saturation, soak and shutdown gates all passed.
+
+Interleaved A/B against `b883695`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| series (300, forward) | 0.00452 | 0.00436 | 0.965x | 16/30 |
+| series (300, reversed) | 0.00423 | 0.00417 | 0.986x | 16/30 |
+| parallel (300, forward) | 0.00446 | 0.00447 | 1.002x | 13/30 |
+| parallel (300, reversed) | 0.00424 | 0.00418 | 0.986x | 15/30 |
+| channel (300) | 0.01084 | 0.01093 | 1.008x | 10/20 |
+| semaphore (300) | 0.02326 | 0.02404 | 1.034x | 5/20 |
+| offload (300) | 0.00578 | 0.00574 | 0.993x | 10/20 |
+| series (1000) | 0.01331 | 0.01342 | 1.008x | 8/20 |
+| series (2000) | 0.02683 | 0.02656 | 0.990x | 6/12 |
+| channel (1000) | 0.03385 | 0.03373 | 0.996x | 11/20 |
+| semaphore (1000) | 0.07335 | 0.07289 | 0.994x | 8/20 |
+
+The 300-count series medians were mildly faster in both orders, but the gain
+disappeared at 1000/2000 and semaphore got worse at 300; semaphore A/A controls
+moved by ~1.03x. With no repeatable gain, the change was reverted.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
