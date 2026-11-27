@@ -371,9 +371,9 @@ package Acme::Parataxis v0.1.7 {
     }
 
     sub _park ( $reason, $level = 1, $dereg = undef, $nodl = 0 ) {
-        my $fid = Acme::Parataxis->current_fid;
+        my $fid = get_current_parataxis_id();
         croak '_park() must be called from inside a scheduled fiber' if $fid < 0;
-        my $fiber = Acme::Parataxis->by_id($fid);
+        my $fiber = get_fiber_by_id($fid);
         return unless $fiber;    # already finished; nothing to park
 
         # Fail fast: a fiber that was interrupted while it was running (not parked), then reached a wait point, throws
@@ -1503,7 +1503,7 @@ package Acme::Parataxis v0.1.7 {
                 for ( my $i = 0; $i < @ready; $i += 2 ) {
                     my $fid = $ready[$i];
                     my $res = $ready[ $i + 1 ];
-                    my $fiber = __PACKAGE__->by_id($fid);
+                    my $fiber = get_fiber_by_id($fid);
                     next unless $fiber;
                     _resume_hooks($fiber);
                     my $yield_val = $fiber->call($res);
@@ -1525,7 +1525,7 @@ package Acme::Parataxis v0.1.7 {
                         next unless $current;
                         $current->[F_QUEUED] = 0;
                         _resume_hooks($current);
-                        _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
+                        _handle_run( $current, run_fiber_checked( $current->[F_FID], undef ) );
                     }
                 }
                 my $active_count = get_live_fiber_count();

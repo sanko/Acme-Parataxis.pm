@@ -693,6 +693,35 @@ A separate `await()` receiver-dispatch fast path (`ref()` before `blessed()`/`ca
 was tried and reverted: its parallel gain fell to 0.959x on repeat and series
 was unchanged, inside A/A noise.
 
+### Step 23 — direct current-fid and fiber-lookup calls
+
+`_park()` went through the Perl `current_fid()` and `by_id()` wrappers on every
+park, and the scheduler did the same for completed-job resumes plus a `fid()`
+method call for each queued fiber. All three wrappers are pass-throughs, so the
+hot paths now call `get_current_parataxis_id()` / `get_fiber_by_id()` directly
+and read `F_FID` from the fiber object directly.
+
+Interleaved A/B against `bd49004`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300) | 0.01162 | 0.01113 | 0.958x | 25/30 |
+| channel (300, reversed order) | ratio 0.970x | | 23/30 |
+| channel (500) | 0.01910 | 0.01844 | 0.965x | 19/20 |
+| semaphore (300) | 0.02479 | 0.02644 | 1.067x | 10/30 |
+| semaphore (300, reversed order) | ratio 0.983x | | 17/30 |
+| semaphore (300, repeat) | 0.02657 | 0.02626 | 0.988x | 13/20 |
+
+The channel gain repeated in both pair orders and at a larger count; channel
+A/A controls were flat (old 0.997x / 1.007x, new 1.003x / 0.995x). Semaphore
+was neutral once pair-order drift was accounted for. Series and parallel were
+mixed between pair orders (series 0.935x forward, 1.025x reversed; parallel
+1.075x forward, 1.018x reversed) and their A/A controls drifted substantially,
+so no gain is claimed there. Offload stayed inside noise. Wait-reason,
+backtrace, fiber-local, future, timeout/repark, ticker, parallel,
+thread-pool-growth, stress, saturation, soak and shutdown gates passed. Full
+suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — sharing an empty backtrace arrayref
 
 After the Step 22 early stop, parks reached directly from a fiber body still

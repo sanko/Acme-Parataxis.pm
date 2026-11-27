@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Inline `Channel::get`/`put`'s common case so a channel without a timeout (or a ready channel) skips the deadline wrapper entirely; blocking calls under a real channel timeout still get the deadline.
 - Skip fiber-local stash deletion on completion, `is_done()` and destruction when no fiber locals have ever been stored, removing a `refaddr()` call and hash delete from the common finish path.
 - Stop backtrace capture at the first library frame instead of walking all six configured caller slots; the fiber body is the last user frame, so the remaining `caller()` calls could only ever be skipped.
+- Call the raw current-fid and fiber-lookup FFI functions directly from the park and scheduler paths, avoiding the Perl wrapper dispatches on every park and scheduled resume.
 
 ### Fixed
 
