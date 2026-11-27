@@ -545,6 +545,19 @@ an immediate full rerun was PASS. Cancellation, timeout/repark, ticker, rate
 limiter, mock time, diagnostics, parallel, stress, saturation, soak and shutdown
 reruns were clean. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — reusing the interrupted fiber object for enqueue
+
+`_interrupt()` resolved a fiber with `by_id()` and then called
+`_scheduler_enqueue_by_id($fid)`, which resolved the same object again. Passing
+the already-resolved object directly to `_enqueue()` is equivalent because the
+enqueue path repeats the `F_QUEUED` guard. All cancellation, timeout, repark,
+virtual-timer, waiter-removal, destroyed-parked-fiber, semaphore, channel,
+parallel, stress, saturation, soak and shutdown gates passed.
+
+The gain was not measurable: cancel_sleep 0.990x median / 0.987x mean,
+virtual_burst 0.991x / 0.972x, semaphore 1.016x / 1.000x, channel 1.028x /
+1.030x. Reverted; full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — deferring the live-fiber count read
 
 `get_live_fiber_count()` was sampled on every scheduler pass even though the
