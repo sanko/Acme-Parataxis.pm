@@ -915,6 +915,35 @@ The 300-count series medians were mildly faster in both orders, but the gain
 disappeared at 1000/2000 and semaphore got worse at 300; semaphore A/A controls
 moved by ~1.03x. With no repeatable gain, the change was reverted.
 
+### Rejected — lazy wait-reason site expansion
+
+Park sites were stored as `[reason, file, line, backtrace]`, allocating the
+backtrace arrayref and one arrayref per captured frame even when nothing ever
+read `wait_reason()`. The park path was changed to keep the caller frames in one
+flat arrayref (`[reason, file, line, flat_frames, 'raw']`) and expand them only
+when a diagnostic reads the record. An early version expanded from the fiber
+slot after resume and lost interrupted waits, because `_resume_hooks()` clears
+that slot before the fiber observes its interrupt; expanding the lexical site
+captured at park time fixed cancellation/timeout and diagnostics tests.
+
+Interleaved A/B against `8f79220`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300, forward) | 0.01134 | 0.01103 | 0.973x | 18/30 |
+| channel (300, reversed) | 0.01112 | 0.01113 | 1.001x | 18/30 |
+| channel (500) | 0.01857 | 0.01916 | 1.032x | 10/20 |
+| semaphore (300, forward) | 0.02576 | 0.02560 | 0.994x | 14/30 |
+| semaphore (300, reversed) | 0.02396 | 0.02462 | 1.028x | 14/30 |
+| offload (300) | 0.00635 | 0.00631 | 0.994x | 11/20 |
+| sleep (200) | 0.20589 | 0.20567 | 0.999x | 4/10 |
+
+The 300-count channel gain did not repeat in reversed order or at 500, and
+semaphore flipped with order. A/A channel controls were flat (old 1.014x / new
+0.973x). The change was reverted; diagnostics, wait-reason, backtrace,
+cancellation, timeout, fiber-local, future, nursery, trace, parallel, stress,
+saturation, soak and shutdown gates passed on the corrected version.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
