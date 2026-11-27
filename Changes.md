@@ -9,34 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step, including startup, real one-millisecond `await_sleep()`, and cancelled-sleep workloads.
+- Add `eg/bench_hotspots.pl` and a recording template for interleaved scheduler/offload benchmarks, including startup, real 1 ms `await_sleep()` and cancelled-sleep workloads.
 
 ### Changed
 
-- Skip the scheduler's priority scan when no fiber has a non-default priority, skip the FFI call for disabled `maybe_yield()`, maintain the live-fiber count incrementally, and increment the diagnostic swap counter only when `PARA_DIAG` is enabled. These remove always-on work from the common spawn/idle paths without changing feature behavior.
-- Maintain the job pool's pending-job count incrementally instead of re-scanning all 1024 job slots under the queue lock on every submission.
-- Store parked/queued flags and the interrupted-park deregistration callback in flat fiber slots instead of fid-keyed hashes, removing hash lookups from the park, wake and enqueue paths.
-- Drain completed C jobs under one queue lock, copying each result before its slot is reused instead of taking three locks per job.
-- Track reclaimable C job slots in a bitmap so submission finds the lowest free slot without scanning all 1024 job structs, preserving the existing allocation order.
-- Track pending C jobs in a bitmap so workers claim the lowest submitted slot without scanning all 1024 job structs, preserving the existing claim order.
-- Pre-size fiber objects through the newest scheduler flag slot so park and queue bookkeeping no longer grows the fiber array on first use.
-- Track armed C sleep jobs in a bitmap so cancellation recalls only scheduled sleeps instead of scanning all 1024 job slots.
-- Flatten the completed-job drain buffer so finished jobs are delivered as alternating fiber ids and results without allocating one arrayref pair per job.
-- Merge `run()`'s queued-flag clear and live-fiber snapshot into one fiber-table scan.
-- Claim the next C job while publishing the previous completion under the same queue lock, avoiding one lock/unlock pair per job without changing worker wakeups or claim order.
-- Poll the scheduler briefly at sub-millisecond granularity after job activity, then fall back to the normal idle sleep so long waits do not become a busy loop.
-- Use a bounded high-resolution yield-spin for Windows sleeps of 8 ms or less, avoiding the platform timer tick while still checking cancellation and shutdown.
-- Snapshot live fiber objects in one C call for `run()` startup and deadlock cleanup instead of one FFI lookup per fiber-table slot.
-- Insert virtual timers in deadline order with a compacting fired prefix instead of resorting the whole timer array on every arm.
-- Clear `maybe_yield()`'s argument pad only when preemption is enabled, so the common disabled-preemption call returns without touching the pad.
-- Extend the bounded scheduler fast-poll budget after new job activity from 4 to 64 yields, so short C jobs are observed without immediately falling back to the tick-quantized idle sleep; long waits still fall back after the budget.
-- Track armed sub-tick C sleeps in a counter and extend the scheduler's sub-millisecond poll window by wall-clock time only while such a sleep is in flight, avoiding a full timer tick per short sleep without spinning on CPU jobs or long waits.
-- Store virtual timers in parallel deadline/fiber arrays instead of one two-element arrayref per armed timer, reducing allocation on bursty virtual-clock workloads.
-- Inline `Channel::get`/`put`'s common case so a channel without a timeout (or a ready channel) skips the deadline wrapper entirely; blocking calls under a real channel timeout still get the deadline.
-- Skip fiber-local stash deletion on completion, `is_done()` and destruction when no fiber locals have ever been stored, removing a `refaddr()` call and hash delete from the common finish path.
-- Stop backtrace capture at the first library frame instead of walking all six configured caller slots; the fiber body is the last user frame, so the remaining `caller()` calls could only ever be skipped.
-- Call the raw current-fid and fiber-lookup FFI functions directly from the park and scheduler paths, avoiding the Perl wrapper dispatches on every park and scheduled resume.
-- Deposit one shared `['WAITING']` marker directly from `_park()` instead of routing it through `yield()`'s general argument marshalling, removing an arrayref allocation and pad clear from every blocking wait while preserving scalar-context result unwrapping.
+- Remove always-on scheduler bookkeeping: skip priority scans and disabled `maybe_yield()` calls, track live fibers incrementally, gate diagnostic counters, keep park/queue state in pre-sized fiber slots, and use raw fiber lookups plus a shared `['WAITING']` marker on the park/resume path.
+- Eliminate repeated C job-pool scans and lock churn: maintain pending counts and free/pending/sleep bitmaps, drain completions under one lock, merge completion publication with the next claim, and deliver results in a flat buffer.
+- Make short waits cheaper without turning long idle periods into busy loops: bounded sub-millisecond polling after job activity, a longer fast-poll budget, wall-clock spin windows for sub-tick sleeps, and a high-resolution yield-spin for Windows sleeps up to 8 ms.
+- Reduce startup and virtual-timer work with a single fiber-table scan/call and ordered timers using a compacted fired prefix and parallel deadline/fiber arrays instead of per-timer arrayrefs.
+- Trim common wait/cleanup paths by inlining the usual `Channel::get()`/`put()` case, skipping fiber-local cleanup when no locals exist, and stopping backtrace capture at the first library frame.
 
 ### Fixed
 
