@@ -37,6 +37,7 @@ package Acme::Parataxis v0.1.7 {
     our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
+    my @WAITING_DEPOSIT = ('WAITING');    # shared one-element marker handed to the scheduler by every parked fiber
     my $PREEMPT_THRESHOLD = 0;  # mirror of the C threshold, so disabled preemption needs no FFI call
     my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms
     my %VIRTUAL_DEADLINES;      # fid => absolute virtual-ms deadline of that fiber's one armed virtual timer
@@ -489,7 +490,12 @@ package Acme::Parataxis v0.1.7 {
         $fiber->[F_WAIT_REASON] = $site;
         $fiber->[F_PARKED]      = 1;
         $fiber->[F_PARK_DEREG]  = $dereg if defined $dereg;
-        my $res = yield('WAITING');
+        # Bypass yield()'s general argument marshalling here: every park deposits the same immutable ['WAITING']
+        # marker, and the scheduler reads it directly from run_fiber_checked(). Keep yield()'s scalar-context
+        # unwrapping: job completions resume the fiber with an argument arrayref, while callers of the waits in this
+        # module expect the last element (the job result), not the transport arrayref.
+        my $res = coro_yield( \@WAITING_DEPOSIT );
+        $res = $res->[-1] if ref $res eq 'ARRAY';
         if ( defined( my $kind = $fiber->[F_INTERRUPT] ) ) {
             if ( $kind eq 'timeout' ) {
 

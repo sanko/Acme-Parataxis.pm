@@ -722,6 +722,37 @@ backtrace, fiber-local, future, timeout/repark, ticker, parallel,
 thread-pool-growth, stress, saturation, soak and shutdown gates passed. Full
 suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 24 — direct park marker deposit
+
+`_park()` called `yield('WAITING')`, which built a fresh one-element deposit
+arrayref, walked the argument pad and cleared it before crossing into C. Every
+park deposits the same marker, and `run_fiber_checked()` already reads that
+marker from the returned arrayref, so `_park()` now calls `coro_yield()` with
+one shared `['WAITING']` arrayref. The scalar-context unwrapping that `yield()`
+used to perform is kept inline: a job completion resumes the fiber with an
+argument arrayref, and the waits built on `_park()` must see its last element.
+
+An intermediate version omitted that unwrapping and failed `t/155_cancel_scope.t`
+and the driver-pool tests with an `ARRAY(...)` where the job result was expected;
+the accepted version restores it and passes the full suite.
+
+Interleaved A/B against `0c01e4d`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300) | 0.01105 | 0.01032 | 0.934x | 29/30 |
+| channel (500) | 0.01823 | 0.01717 | 0.942x | 18/20 |
+| semaphore (300) | 0.02408 | 0.02272 | 0.944x | 22/30 |
+| series (300) | 0.00454 | 0.00433 | 0.954x | 13/20 |
+| parallel (300) | 0.00461 | 0.00435 | 0.944x | 14/20 |
+
+A reversed-order run of the same change measured channel 0.945x/0.933x and
+semaphore 0.949x, and corrected-build A/A controls were flat (channel old
+0.984x / new 1.002x, semaphore old 0.974x / new 0.955x). Wait-reason,
+backtrace, fiber-local, cancel-scope, future, nursery, timeout/repark, ticker,
+parallel, thread-pool-growth, driver-pool, stress, saturation, soak and shutdown
+gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
