@@ -558,6 +558,32 @@ The gain was not measurable: cancel_sleep 0.990x median / 0.987x mean,
 virtual_burst 0.991x / 0.972x, semaphore 1.016x / 1.000x, channel 1.028x /
 1.030x. Reverted; full suite remains PASS (74 files, 1055 tests).
 
+### Rejected — spawning workers outside `queue_lock`
+
+`submit_c_job()` grows the worker pool while holding `queue_lock`, so every new
+`CreateThread`/`pthread_create` blocks workers from claiming and publishing jobs.
+Reserving thread-table slots under the lock and starting the OS threads after
+unlocking passed the parallel, thread-pool-growth, saturation, cancellation,
+timeout/repark, ticker, stress, soak and shutdown gates.
+
+A new `offload_burst` workload (one C job per fiber, all fibers awaiting) was
+added to the harness for this candidate and kept as a regression workload. It
+did not show a gain. Interleaved A/B against `9304bc9`:
+
+| workload | median ratio | mean ratio | new faster |
+| --- | ---: | ---: | ---: |
+| offload_burst (20) | 0.941x | 0.805x | 17/30 |
+| offload_burst (100) | 0.967x | 0.996x | 12/20 |
+| offload_burst (300) | 1.006x | 1.003x | 5/10 |
+| offload (300) | 1.051x | 1.176x | 7/20 |
+| parallel (300) | 1.009x | 1.024x | 8/20 |
+
+A/A controls covered the only apparent win: offload_burst 20 was 0.964x /
+0.994x on the old build and 0.991x / 1.022x on the new one; at 100 it was
+1.041x / 1.211x old and 1.016x / 1.024x new. Old-build offload 300 also ranged
+to 0.876x / 0.947x. Reverted the C change; full suite remains PASS (74 files,
+1055 tests).
+
 ### Rejected — deferring the live-fiber count read
 
 `get_live_fiber_count()` was sampled on every scheduler pass even though the

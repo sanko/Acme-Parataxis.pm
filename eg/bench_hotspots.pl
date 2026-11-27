@@ -83,6 +83,12 @@ my %workloads = (
     offload => sub {
         run( sub { await_core_id() for 1 .. $count } );
     },
+    offload_burst => sub {
+        run( sub {
+            my @fibers = map { fiber { await_core_id() } } 1 .. $count;
+            $_->await for @fibers;
+        } );
+    },
     sleep => sub {
         run( sub { await_sleep(1) for 1 .. $count } );
     },
