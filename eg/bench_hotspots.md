@@ -295,6 +295,25 @@ after the step: 74 files, 1055 tests, PASS. Scheduler-scope, fiber-table-growth,
 job-id-reuse, destroyed-fiber, parallel, stress, saturation and soak reruns
 were clean.
 
+### Step 11 — merge job publication and next claim
+
+A worker used to publish `JOB_DONE`, release `queue_lock`, then immediately
+reacquire it to claim the next job. It now claims the next pending slot before
+releasing the lock that published the completion, saving one lock/unlock pair
+per job. The wake policy is unchanged (submitters still broadcast, and an empty
+worker still waits on `queue_cond`), and `take_pending_job_slot()` still chooses
+the lowest free slot.
+
+Interleaved A/B against `8ae6709` at `--count 300 --rounds 1` was noisy but not
+a regression: 30-pair offload samples were 1.016x median / 1.003x mean and then
+0.690x / 0.774x (22/30 faster); 30-pair `--count 500` samples were 0.812x and
+0.980x median. A fresh unchanged A/A control on the new pair was 1.047x median
+and 0.963x median for offload at 300 and 500. Sleep improved to 0.945x median
+and cancel-sleep to 0.983x; fiber-only paths stayed inside the recorded noise.
+Preemption, cancellation/timeout, HTTP, ticker, transparent-unblock, parallel,
+stress, saturation, soak and shutdown reruns were clean. Full suite after the
+step: 74 files, 1055 tests, PASS.
+
 ### Rejected — deliver fiber objects from `drain_jobs()`
 
 `drain_jobs()` could append a strong reference to each owner fiber instead of

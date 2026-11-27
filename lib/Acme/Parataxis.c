@@ -1037,23 +1037,24 @@ void * worker_thread(void * arg) {
     pthread_sigmask(SIG_BLOCK, &block_set, NULL);
 #endif
 
+    int found_idx = -1;    /* carried from one job to the next so completion publication and the next claim share a lock window */
     while (threads_keep_running) {
-        int found_idx = -1;
-
-        LOCK(queue_lock);
-        while (threads_keep_running) {
-            found_idx = take_pending_job_slot();
-            if (found_idx != -1) {
-                job_slots[found_idx].status = JOB_BUSY;
-                pending_job_count--;
+        if (found_idx == -1) {
+            LOCK(queue_lock);
+            while (threads_keep_running) {
+                found_idx = take_pending_job_slot();
+                if (found_idx != -1) {
+                    job_slots[found_idx].status = JOB_BUSY;
+                    pending_job_count--;
+                }
+                if (found_idx != -1 || !threads_keep_running)
+                    break;
+                PARA_COND_WAIT(queue_cond, queue_lock);
             }
-            if (found_idx != -1 || !threads_keep_running)
-                break;
-            PARA_COND_WAIT(queue_cond, queue_lock);
+            if (found_idx != -1)
+                busy_thread_count++;    /* busy from claim until the job is marked done, all under queue_lock */
+            UNLOCK(queue_lock);
         }
-        if (found_idx != -1)
-            busy_thread_count++;    /* busy from claim until the job is marked done, all under queue_lock */
-        UNLOCK(queue_lock);
 
         if (found_idx != -1 && threads_keep_running) {
             job_t * job = &job_slots[found_idx];
@@ -1163,13 +1164,31 @@ void * worker_thread(void * arg) {
             busy_thread_count--;
             done_queue[done_tail] = found_idx;
             done_tail = (done_tail + 1) % (MAX_JOBS + 1);
+
+            /* Claim the next job before releasing the lock used to publish this one. The wake policy is unchanged:
+             * submitters still broadcast, and a worker with no next job waits on queue_cond exactly as before. */
+            int next_idx = -1;
+            while (threads_keep_running) {
+                next_idx = take_pending_job_slot();
+                if (next_idx != -1) {
+                    job_slots[next_idx].status = JOB_BUSY;
+                    pending_job_count--;
+                    busy_thread_count++;
+                    break;
+                }
+                if (!threads_keep_running)
+                    break;
+                PARA_COND_WAIT(queue_cond, queue_lock);
+            }
             UNLOCK(queue_lock);
+            found_idx = next_idx;
         }
         else {
             if (found_idx != -1) { /* claimed, but shutting down before it ran: keep the busy count honest */
                 LOCK(queue_lock);
                 busy_thread_count--;
                 UNLOCK(queue_lock);
+                found_idx = -1;
             }
 #ifdef _WIN32
             Sleep(1);
@@ -1177,6 +1196,11 @@ void * worker_thread(void * arg) {
             usleep(1000);
 #endif
         }
+    }
+    if (found_idx != -1) {    /* shutdown between carrying a claimed job and running it */
+        LOCK(queue_lock);
+        busy_thread_count--;
+        UNLOCK(queue_lock);
     }
     return 0;
 }
