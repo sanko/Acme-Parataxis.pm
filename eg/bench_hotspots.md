@@ -813,6 +813,33 @@ flat (series 1.016x, parallel 0.994x). A/A controls on series and parallel at
 both 300 and 2000 showed 0.831x–1.054x spread. With no repeatable gain, the
 source change was reverted.
 
+### Rejected — guarded `_resume_hooks()` calls
+
+`_resume_hooks()` starts with `return unless $fiber->[F_PARKED]`, so it was
+called on every scheduler resume even when the fiber had only yielded. Guarding
+both call sites with the same `F_PARKED` check removed the sub call for ordinary
+yields. Wait-reason, backtrace, fiber-local, future, cancellation,
+cancel-scope, timeout, timeout/repark, ticker, parallel, thread-pool-growth,
+stress, saturation, soak and shutdown gates all passed.
+
+Interleaved A/B against `658f590`, `--count 300 --rounds 1`:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| series (forward) | 0.00433 | 0.00429 | 0.991x | 18/30 |
+| series (reversed) | 0.00422 | 0.00466 | 1.104x | 13/30 |
+| parallel (forward) | 0.00433 | 0.00549 | 1.268x | 12/30 |
+| parallel (reversed) | 0.00488 | 0.00423 | 0.867x | 19/30 |
+| channel (forward) | 0.01034 | 0.01028 | 0.994x | 18/30 |
+| channel (reversed) | 0.01036 | 0.01034 | 0.998x | 14/30 |
+| semaphore | 0.02246 | 0.02264 | 1.008x | 13/30 |
+| offload | 0.00563 | 0.00558 | 0.991x | 12/20 |
+
+The fiber-only workloads flipped with run order and their A/A controls showed
+the same spread (series 0.972x–1.044x, parallel 0.887x–0.937x), while the
+park-heavy channel and semaphore paths were flat or slightly worse. The change
+was reverted.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
