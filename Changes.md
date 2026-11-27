@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step.
+
 ### Fixed
 
 - Size the high-volume driver tests against the descriptors they actually allocate, so a platform with more than the assumed 16 pre-existing handles (NetBSD 11, whose `FD_SETSIZE` is 256) no longer parks a read on an unnameable fd and loses a wakeup. (https://matrix.perl-magpie.org/results/e76ea43a-e600-11f1-83c9-deb385cf8ea6)
