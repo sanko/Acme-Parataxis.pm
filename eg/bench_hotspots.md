@@ -433,6 +433,22 @@ Neither variant helped. The array version was neutral on fiber paths (series
 1.235x); sleep and cancel_sleep were unchanged. Reverted; full suite remains
 PASS (74 files, 1055 tests).
 
+### Rejected — live queued-priority count
+
+`$HAS_PRIORITIES` is sticky: once any fiber ever gets a non-default priority,
+every later enqueue scans the run queue. The alternative counted only fibers
+*currently queued* with a non-default priority, falling back to the FIFO push
+when that count reached zero. The counter was updated on enqueue, queue drain,
+`_clear_queued_flags()` and priority changes. `priority_series` and
+`priority_parallel` workloads were added to the harness to gate this case.
+
+Against `9858d57`, `priority_parallel` at count 500 looked better once (0.932x
+median / 0.939x mean), but A/A controls on the same build showed the same noise
+(0.934x / 0.966x), and count 300 was neutral (1.013x / 0.979x). Series and
+parallel controls were also inside noise. `t/010_priority.t` and all targeted
+gates passed; the harness workloads were kept, the runtime change reverted, and
+the full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — pass known fiber objects into wakeups
 
 `Semaphore` and `Channel` already resolved a waiter with `by_id()` to check for

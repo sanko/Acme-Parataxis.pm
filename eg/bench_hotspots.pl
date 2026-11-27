@@ -33,6 +33,26 @@ my %workloads = (
             }
         } );
     },
+    priority_series => sub {
+        run( sub {
+            my $first = fiber { yield };
+            $first->priority(1);
+            await($first);
+            for ( 1 .. $count ) {
+                my $fiber = fiber {};
+                await($fiber);
+            }
+        } );
+    },
+    priority_parallel => sub {
+        run( sub {
+            my $first = fiber { yield };
+            $first->priority(1);
+            await($first);
+            my @fibers = map { fiber {} } 1 .. $count;
+            await($_) for @fibers;
+        } );
+    },
     parallel => sub {
         run( sub {
             my @fibers = map { fiber {} } 1 .. $count;
