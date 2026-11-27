@@ -295,6 +295,18 @@ after the step: 74 files, 1055 tests, PASS. Scheduler-scope, fiber-table-growth,
 job-id-reuse, destroyed-fiber, parallel, stress, saturation and soak reruns
 were clean.
 
+### Rejected — deliver fiber objects from `drain_jobs()`
+
+`drain_jobs()` could append a strong reference to each owner fiber instead of
+its fid, letting `run()` skip the per-completion `by_id()` FFI call. The stale-id
+fallback and deferred slot release were kept. Correctness gates passed, but the
+extra refcount traffic and retained wrapper objects made offload slower: 30
+interleaved pairs against `e7016b4` at `--count 300` were 1.696x median /
+1.439x mean (9/30 faster), 1.404x median / 1.116x mean on a repeat, and 1.126x
+median at `--count 500`. Sleep and cancel-sleep were neutral, and the fiber-only
+paths stayed inside noise. Reverted; full suite remains PASS (74 files, 1055
+tests).
+
 ### Rejected — reuse the scheduler's completed-job AV
 
 Hoisting `@ready` above `run()`'s loop and clearing it each tick would keep the
