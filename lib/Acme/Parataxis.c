@@ -3712,6 +3712,27 @@ DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
     return sv_2mortal(self_ref);
 }
 
+/**
+ * @brief Returns flat (fiber object, fid) pairs for all live fibers in one call.
+ *
+ * Used by the scheduler's startup/teardown snapshot, which used to call get_fiber_by_id() once per slot in the
+ * whole fiber table. The returned array owns one strong reference to each live wrapper; the caller releases it by
+ * dropping the array.
+ */
+DLLEXPORT SV * snapshot_live_fibers(void) {
+    dTHX;
+    AV * out = newAV();
+    for (int fid = 0; fid < fiber_capacity; fid++) {
+        para_fiber_t * c = fibers[fid];
+        if (!c || !c->self_ref || c->self_ref == &PL_sv_undef)
+            continue;
+        SvREFCNT_inc(c->self_ref);
+        av_push(out, c->self_ref);
+        av_push(out, newSViv(fid));
+    }
+    return sv_2mortal(newRV_noinc((SV *)out));
+}
+
 /** @brief Returns the number of currently live (non-destroyed) fibers. */
 DLLEXPORT int get_live_fiber_count(void) {
     return live_fiber_count;

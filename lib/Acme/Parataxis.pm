@@ -79,11 +79,12 @@ package Acme::Parataxis v0.1.7 {
     # Clears stale queue flags and returns the same live-id snapshot run() needs for %PRESET_FIBERS. This used to
     # enumerate ids and then fetch every object a second time; one pass is enough on both startup and teardown paths.
     sub _clear_queued_flags () {
+        my $snapshot = Acme::Parataxis::snapshot_live_fibers();
+        return () unless ref $snapshot eq 'ARRAY';
         my @ids;
-        my $cap = Acme::Parataxis::get_fiber_capacity();
-        for ( my $fid = 0; $fid < $cap; $fid++ ) {
-            my $fiber = Acme::Parataxis::get_fiber_by_id($fid);
-            next unless defined $fiber && ref $fiber;
+        for ( my $i = 0; $i < @$snapshot; $i += 2 ) {
+            my $fiber = $snapshot->[$i];
+            my $fid   = $snapshot->[ $i + 1 ];
             $fiber->[F_QUEUED] = 0;
             push @ids, $fid;
         }
@@ -180,6 +181,7 @@ package Acme::Parataxis v0.1.7 {
         affix $l, 'coro_yield',                                            [ Pointer [SV] ],               Pointer [SV];
         affix $l, 'is_finished',                                           [Int],                          Int;
         affix $l, 'get_fiber_by_id',                                       [Int],                          Pointer [SV];
+        affix $l, 'snapshot_live_fibers',                                  [],                             Pointer [SV];
         affix $l, 'get_live_fiber_count',                                  [],                             Int;
         affix $l, 'get_fiber_capacity',                                    [],                             Int;
         affix $l, 'destroy_coro',                                          [Int],                          Void;

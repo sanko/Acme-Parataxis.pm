@@ -365,6 +365,33 @@ path and noisy (1.036x then 1.735x median, with an unchanged A/A median of
 0.809x on the same machine). Full suite after the step: 74 files, 1055 tests,
 PASS.
 
+### Step 14 — one-call live-fiber snapshot
+
+`_clear_queued_flags()` used to scan the whole fiber table and call
+`get_fiber_by_id()` once per slot, both when `run()` starts and on the deadlock
+cleanup path. A new C helper now returns the live wrapper objects and their fids
+as one flat array, so the Perl side makes a single FFI call and walks only live
+fibers.
+
+Interleaved A/B against `c5a9e14`, `--count 400 --rounds 1` for startup and
+`--count 300 --rounds 1` for the others:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| startup | 0.05582 | 0.00904 | 0.162x |
+| series | 0.00491 | 0.00449 | 0.914x |
+| parallel | 0.00511 | 0.00435 | 0.851x |
+| offload | 0.01893 | 0.02155 | 1.138x |
+
+Startup was faster in 30/30 pairs; A/A controls were flat (old 1.005x median /
+1.000x mean, new 1.007x / 1.022x). Series and parallel improved as expected
+from the same per-run scan. Offload, which only performs this scan once, stayed
+inside its recorded noise (10/20 pairs, 1.138x median / 1.199x mean against an
+unchanged code path). Nested-run, scheduler-scope, diagnostics, wait-reason,
+fiber-table-growth, backtrace, generator, channel deadlock, parallel, stress,
+saturation, soak and shutdown reruns were clean. Full suite after the step:
+74 files, 1055 tests, PASS.
+
 ### Rejected — unconditional 200 µs idle polling
 
 Replacing the scheduler's `usleep(1000)` with `usleep(200)` made offload appear
