@@ -484,6 +484,19 @@ were flat (old 1.008x median / 1.004x mean, new 0.998x / 0.951x and 1.001x /
 priority, scheduler-scope, parallel, stress and saturation reruns were clean.
 Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — deduplicating `current_fid()` in await/wait
+
+`await()` and `wait()` each read `current_fid()` twice: once for the croak test
+and once for the park bookkeeping. Caching the first read is behaviorally safe
+because no yield occurs between the two reads, and the targeted Future,
+WaitGroup, semaphore, channel, cancellation, waiter-removal and parallel gates
+passed.
+
+There was no measurable gain. Interleaved A/B against `ad521f3` was neutral or
+slightly worse: semaphore 1.036x median / 1.035x mean, channel 1.001x / 1.005x,
+cancel_sleep 0.985x / 0.998x, series 1.041x / 1.013x, parallel 1.040x / 1.029x.
+Reverted; full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — deferring the live-fiber count read
 
 `get_live_fiber_count()` was sampled on every scheduler pass even though the
