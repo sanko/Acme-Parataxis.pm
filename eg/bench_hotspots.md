@@ -418,6 +418,21 @@ looked promising once (semaphore 0.957x / 0.947x) but its repeat was 1.019x /
 also neutral on repeat. Reverted; full suite remains PASS (74 files, 1055
 tests).
 
+### Rejected — fuse the idle scheduler counters
+
+The idle checkpoint read `get_live_fiber_count()` and `get_outstanding_jobs()`
+back-to-back. Two one-call variants were tried against `31f6494`: a small array
+of the two ints and a packed 64-bit value (`live << 32 | outstanding`). Both
+kept the sampling point unchanged and passed targeted scheduler, cancellation,
+parallel, stress, saturation, soak and shutdown gates.
+
+Neither variant helped. The array version was neutral on fiber paths (series
+0.943x median / 0.964x mean, parallel 0.993x / 1.031x) and worse on offload
+(1.774x / 1.288x). The packed version was similarly neutral at best (series
+0.983x / 0.986x, parallel 0.983x / 0.951x) and worse on offload (1.397x /
+1.235x); sleep and cancel_sleep were unchanged. Reverted; full suite remains
+PASS (74 files, 1055 tests).
+
 ### Rejected — pass known fiber objects into wakeups
 
 `Semaphore` and `Channel` already resolved a waiter with `by_id()` to check for
