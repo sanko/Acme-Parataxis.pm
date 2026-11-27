@@ -865,6 +865,28 @@ Channel was flat in both orders, semaphore was worse, and the fiber-only gains
 were not repeatable (their A/A controls were equally wide). The change was
 reverted.
 
+### Rejected — raw lookups in `Fiber::wait()`
+
+`Fiber::wait()` took the first `current_fid`/`by_id` pair on every `await()`,
+so both method dispatches were replaced with the raw FFI helpers used by
+`_park()` and the scheduler. Wait-reason, backtrace, fiber-local, future,
+nursery, cancellation, cancel-scope, timeout, timeout/repark, ticker, parallel,
+thread-pool-growth, stress, saturation, soak and shutdown gates all passed.
+
+Interleaved A/B against `4526d87`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| series (300, forward) | 0.00456 | 0.00467 | 1.024x | 15/30 |
+| series (300, reversed) | 0.00493 | 0.00518 | 1.051x | 13/30 |
+| series (1000) | 0.01427 | 0.01475 | 1.034x | 11/20 |
+| parallel (300, forward) | 0.00439 | 0.00443 | 1.009x | 14/30 |
+| parallel (300, reversed) | 0.00493 | 0.00449 | 0.911x | 16/30 |
+| parallel (1000) | 0.01488 | 0.01519 | 1.021x | 10/20 |
+
+The series path was consistently neutral-to-worse and parallel flipped with
+order; A/A controls drifted by up to 1.176x. The change was reverted.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
