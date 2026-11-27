@@ -192,6 +192,28 @@ Offload improved substantially; the remaining workloads stayed within noise.
 Full suite after the step: 74 files, 1055 tests, PASS, with direct stress,
 saturation and soak reruns clean.
 
+### Step 7 — pre-size fiber objects through the new flag slots
+
+The fiber-slot change added `F_PARKED`, `F_PARK_DEREG` and `F_QUEUED` (up to
+slot 18), but `spawn_fiber()` still pre-sized the object to slot 8 and the Perl
+constructor still built a 14-element array. The first park/queue write therefore
+grew the AV. Both construction paths now allocate through slot 18.
+
+Interleaved A/B medians against the `b7ef1df` pair (12 pairs at `--count 300 --rounds 1`; `sleep` used 8 pairs at `--count 200`):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| series | 0.00565 | 0.00491 | 0.869x |
+| parallel | 0.00510 | 0.00488 | 0.957x |
+| semaphore | 0.03190 | 0.03372 | 1.057x |
+| channel | 0.01511 | 0.01489 | 0.985x |
+| offload | 0.05555 | 0.05067 | 0.912x |
+| sleep | 3.38159 | 3.37038 | 0.997x |
+
+The semaphore result was noise: a 20-pair rerun measured 0.02999s old versus
+0.02970s new (0.990x). Full suite after the step: 74 files, 1055 tests, PASS,
+with direct parallel, stress, saturation and soak reruns clean.
+
 ### Rejected — canonical waiting marker
 
 Registering the literal `"WAITING"` as one canonical SV let `run_fiber_checked()`

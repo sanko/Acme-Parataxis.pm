@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drain completed C jobs under one queue lock, copying each result before its slot is reused instead of taking three locks per job.
 - Track reclaimable C job slots in a bitmap so submission finds the lowest free slot without scanning all 1024 job structs, preserving the existing allocation order.
 - Track pending C jobs in a bitmap so workers claim the lowest submitted slot without scanning all 1024 job structs, preserving the existing claim order.
+- Pre-size fiber objects through the newest scheduler flag slot so park and queue bookkeeping no longer grows the fiber array on first use.
 
 ### Fixed
 

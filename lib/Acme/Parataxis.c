@@ -3488,7 +3488,7 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
         own_stash = gv_stashpv("Acme::Parataxis", GV_ADD);
     HV * stash = strEQ(cls, "Acme::Parataxis") ? own_stash : gv_stashpv(cls, GV_ADD);
     AV * obj = newAV();
-    av_extend(obj, 8); /* pre-size to fit every F_* slot in one allocation */
+    av_extend(obj, 18); /* pre-size through F_QUEUED so park/queue flags never grow the fiber array */
     SV * objrv = newRV_noinc((SV *)obj);
     sv_bless(objrv, stash);
     av_store(obj, 0, SvREFCNT_inc(user_code)); /* F_CODE */

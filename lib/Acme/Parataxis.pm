@@ -1591,7 +1591,7 @@ package Acme::Parataxis v0.1.7 {
     sub stop () { $IS_RUNNING = 0 }
 
     sub new ( $class, %args ) {
-        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef, [] ], $class;
+        my $self = bless [ $args{code}, 0, undef, undef, undef, 0, [], undef, undef, 0, undef, undef, undef, [], (undef) x 5 ], $class;
         my $fid  = Acme::Parataxis::create_fiber( $args{code}, $self );
         croak 'could not allocate a fiber: ' .
             ( $fid == -3 ?
