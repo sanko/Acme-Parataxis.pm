@@ -660,6 +660,39 @@ backtrace, future, nursery, cancellation, timeout, parallel, stress,
 saturation, soak and shutdown gates passed. Full suite after the step: 74
 files, 1055 tests, PASS.
 
+### Step 22 — stop backtrace capture at the library boundary
+
+A probe with `backtrace_depth(20)` showed that direct parks from a fiber body
+produce an empty chain: the first inspected frame is the library's fiber
+wrapper (`Acme::Parataxis`) and everything above it is library or absent. The
+old loop still called `caller()` six times per park just to skip all of them.
+Disabling capture entirely (`backtrace_depth(0)`) made the channel workload
+about 25% faster, so the waste was large. Stopping at the first
+`Acme::Parataxis` frame keeps every user frame the old loop could collect (the
+fiber body is the outermost user frame) while reducing the common case to one
+`caller()` call.
+
+Interleaved A/B against `3b1c8ac`, `--rounds 1`:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300) | 0.01342 | 0.01173 | 0.874x | 30/30 |
+| semaphore (300) | 0.02951 | 0.02808 | 0.952x | 23/30 |
+| offload (300) | 0.00693 | 0.00609 | 0.879x | 10/10 |
+| sleep (200) | 0.20516 | 0.20456 | 0.997x | 10/20 |
+
+A/A controls were flat at the median (channel old 0.979x / new 1.003x, offload
+old 0.967x / new 1.011x). Series and virtual_burst also moved in the new build,
+but those pairs were noisy; the park-heavy workloads above are the reliable
+figures. Backtrace, wait-reason, fiber-local, future, nursery, cancellation,
+timeout/repark, ticker, parallel, stress, saturation, soak and shutdown gates
+passed, including nested-user-sub, depth-cap, snapshot, report and deadlock
+backtrace cases. Full suite after the step: 74 files, 1055 tests, PASS.
+
+A separate `await()` receiver-dispatch fast path (`ref()` before `blessed()`/`can()`/`isa()`)
+was tried and reverted: its parallel gain fell to 0.959x on repeat and series
+was unchanged, inside A/A noise.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called

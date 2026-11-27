@@ -478,7 +478,10 @@ package Acme::Parataxis v0.1.7 {
             for ( my $i = 1; $i <= $BACKTRACE_DEPTH; $i++ ) {
                 my @c = caller( $level + $i );
                 last unless defined $c[0];
-                next if index( $c[0], 'Acme::Parataxis' ) == 0;    # user-side frames only
+                # The fiber body is the last user frame; above it sits the library's spawn wrapper. Once we reach
+                # library code there are no more user frames to collect, and caller() is expensive enough that
+                # walking the remaining slots (all skipped before) was a measurable cost on every park.
+                last if index( $c[0], 'Acme::Parataxis' ) == 0;
                 push @$bt, [ $c[0], $c[1], $c[2], $c[3] ];
             }
         }
