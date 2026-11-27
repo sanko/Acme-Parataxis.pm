@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Track pending C jobs in a bitmap so workers claim the lowest submitted slot without scanning all 1024 job structs, preserving the existing claim order.
 - Pre-size fiber objects through the newest scheduler flag slot so park and queue bookkeeping no longer grows the fiber array on first use.
 - Track armed C sleep jobs in a bitmap so cancellation recalls only scheduled sleeps instead of scanning all 1024 job slots.
+- Flatten the completed-job drain buffer so finished jobs are delivered as alternating fiber ids and results without allocating one arrayref pair per job.
 
 ### Fixed
 

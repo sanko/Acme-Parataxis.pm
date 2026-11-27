@@ -1448,14 +1448,13 @@ package Acme::Parataxis v0.1.7 {
                     $shutdown_fired = 1;
                     $interrupt_run_fibers->();
                 }
-                my @ready;
+                my @ready;    # flat fiber_id/result pairs written by drain_jobs()
                 if ( get_outstanding_jobs() ) {
-                    my $out = [];
-                    drain_jobs($out);
-                    @ready = @$out;
+                    drain_jobs( \@ready );
                 }
-                for my $ready (@ready) {
-                    my ( $fid, $res ) = @$ready;
+                for ( my $i = 0; $i < @ready; $i += 2 ) {
+                    my $fid = $ready[$i];
+                    my $res = $ready[ $i + 1 ];
                     my $fiber = __PACKAGE__->by_id($fid);
                     next unless $fiber;
                     _resume_hooks($fiber);

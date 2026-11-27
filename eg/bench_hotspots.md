@@ -237,6 +237,32 @@ this machine's noise. Full suite after the step: 74 files, 1055 tests, PASS.
 Direct cancellation/timeout tests (`t/154`–`t/158`), stress, saturation and
 soak all returned 0 with no failing tests.
 
+### Step 9 — flat completed-job drain
+
+`drain_jobs()` built a fresh `[fiber_id, result]` AV, RV and two result SVs for
+every finished job, only for `run()` to unpack them immediately. It now appends
+alternating fiber ids and results to one flat AV, and the scheduler consumes
+that buffer with scalar indexing. No per-job array objects remain on the drain
+path.
+
+Interleaved A/B medians against the `99222b8` pair (30 pairs at `--count 300 --
+rounds 1` unless noted):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| offload (300) | 0.04501 | 0.03585 | 0.796x |
+| offload (500, 20 pairs) | 0.05991 | 0.03808 | 0.636x |
+| sleep (200, 8 pairs) | 3.36892 | 3.37097 | 1.001x |
+| cancel_sleep (300, 12 pairs) | 0.02984 | 0.02965 | 0.994x |
+
+Offload improved consistently (mean ratios 0.831x and 0.800x; new version
+faster in 18/30 and 16/20 pairs). The jobless paths moved within testbed noise:
+an unchanged-versus-unchanged control run over the same pair produced a 0.949x
+median ratio for `parallel` and a 1.182x median ratio for `offload`, so the
+1.143x `parallel` sample was not attributed to this change. Full suite after
+the step: 74 files, 1055 tests, PASS. Direct cancellation, timeout, HTTP,
+parallel, stress, saturation and soak reruns were clean.
+
 ### Rejected — broadcast gate
 
 `submit_c_job()` broadcasts `queue_cond` on every job submission. A waiter count

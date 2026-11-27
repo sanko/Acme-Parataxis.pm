@@ -3523,9 +3523,8 @@ DLLEXPORT SV * spawn_fiber(SV * user_code, SV * class) {
 /**
  * @brief Reclaims all completed background jobs in a single call.
  *
- * Returns an arrayref of [fiber_id, result] pairs for every finished job, freeing the job slots as it goes.
- *
- * @return SV* Arrayref of completed jobs (may be empty).
+ * Appends fiber_id, result pairs to the supplied array, freeing the job slots as it goes. A flat array avoids one AV,
+ * reference and two SV allocations per finished job; only the scheduler consumes this internal buffer.
  */
 DLLEXPORT void drain_jobs(SV * out_ref) {
     dTHX;
@@ -3565,10 +3564,8 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
     UNLOCK(queue_lock);
 
     for (int i = 0; i < count; i++) {
-        AV * pair = newAV();
-        av_push(pair, newSViv(owners[i]));
-        av_push(pair, has_result[i] ? newSViv(values[i]) : &PL_sv_undef);
-        av_push(out, newRV_noinc((SV *)pair));
+        av_push(out, newSViv(owners[i]));
+        av_push(out, has_result[i] ? newSViv(values[i]) : &PL_sv_undef);
 
         /* Same deferred slot release as free_job_slot(): a destroyed fiber's id cannot be reused until every job
          * it submitted has been reclaimed here. job_refcount/_release_slot are main-thread only. */
