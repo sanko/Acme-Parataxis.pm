@@ -7,17 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Add `eg/bench_hotspots.pl` and a recording template for interleaved scheduler/offload benchmarks, including startup, real 1 ms `await_sleep()` and cancelled-sleep workloads.
+All about the benchmarks this time.
 
 ### Changed
 
-- Remove always-on scheduler bookkeeping: skip priority scans and disabled `maybe_yield()` calls, track live fibers incrementally, gate diagnostic counters, keep park/queue state in pre-sized fiber slots, and use raw fiber lookups plus a shared `['WAITING']` marker on the park/resume path.
-- Eliminate repeated C job-pool scans and lock churn: maintain pending counts and free/pending/sleep bitmaps, drain completions under one lock, merge completion publication with the next claim, and deliver results in a flat buffer.
-- Make short waits cheaper without turning long idle periods into busy loops: bounded sub-millisecond polling after job activity, a longer fast-poll budget, wall-clock spin windows for sub-tick sleeps, and a high-resolution yield-spin for Windows sleeps up to 8 ms.
+- Remove always-on scheduler bookkeeping to tidy up our hot path:
+  - Skip priority scans and disabled `maybe_yield()` calls
+  - Track live fibers incrementally
+  - Gate diagnostic counters
+  - Keep park/queue state in pre-sized fiber slots
+  - Use raw fiber lookups plus a shared `['WAITING']` marker on the park/resume path.
+- Eliminate repeated C job-pool scans and lock churn:
+  - Maintain pending counts and free/pending/sleep bitmaps
+  - Drain completions under one lock
+  - Merge completion publication with the next claim
+  - Deliver results in a flat buffer
+- Make short waits cheaper without turning long idle periods into busy loops:
+  - Bounded sub-millisecond polling after job activity
+  - Longer fast-poll budget
+  - Wall clock spin windows for sub-tick sleeps
+  - High res `yield` spin for Windows sleeps up to 8 ms
 - Reduce startup and virtual-timer work with a single fiber-table scan/call and ordered timers using a compacted fired prefix and parallel deadline/fiber arrays instead of per-timer arrayrefs.
-- Trim common wait/cleanup paths by inlining the usual `Channel::get()`/`put()` case, skipping fiber-local cleanup when no locals exist, and stopping backtrace capture at the first library frame.
+- Trim common wait/cleanup paths by inlining the usual `Channel::get()`/`put()` case, skipping fiber-local cleanup when no locals exist and stopping backtrace capture at the first library frame.
 
 ### Fixed
 
