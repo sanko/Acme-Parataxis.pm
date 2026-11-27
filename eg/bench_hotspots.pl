@@ -22,6 +22,9 @@ die "--rounds must be positive\n" if $rounds < 1;
 die "--count must be positive\n"  if $count < 1;
 
 my %workloads = (
+    startup => sub {
+        run(sub {}) for 1 .. $count;
+    },
     series => sub {
         run( sub {
             for ( 1 .. $count ) {
@@ -90,7 +93,7 @@ my %workloads = (
     },
 );
 
-my @names = @only ? @only : qw[series parallel semaphore channel offload sleep cancel_sleep virtual maybe_yield maybe_yield_public];
+my @names = @only ? @only : qw[startup series parallel semaphore channel offload sleep cancel_sleep virtual maybe_yield maybe_yield_public];
 die "unknown workload: $_\n" for grep { !exists $workloads{$_} } @names;
 
 my %baseline;

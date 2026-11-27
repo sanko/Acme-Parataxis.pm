@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step, including real one-millisecond `await_sleep()` and cancelled-sleep workloads.
+- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step, including startup, real one-millisecond `await_sleep()`, and cancelled-sleep workloads.
 
 ### Changed
 
@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-size fiber objects through the newest scheduler flag slot so park and queue bookkeeping no longer grows the fiber array on first use.
 - Track armed C sleep jobs in a bitmap so cancellation recalls only scheduled sleeps instead of scanning all 1024 job slots.
 - Flatten the completed-job drain buffer so finished jobs are delivered as alternating fiber ids and results without allocating one arrayref pair per job.
+- Merge `run()`'s queued-flag clear and live-fiber snapshot into one fiber-table scan.
 
 ### Fixed
 

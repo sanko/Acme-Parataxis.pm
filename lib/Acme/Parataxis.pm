@@ -76,11 +76,18 @@ package Acme::Parataxis v0.1.7 {
         return $dereg;
     }
 
+    # Clears stale queue flags and returns the same live-id snapshot run() needs for %PRESET_FIBERS. This used to
+    # enumerate ids and then fetch every object a second time; one pass is enough on both startup and teardown paths.
     sub _clear_queued_flags () {
-        for my $fid ( _live_fiber_ids() ) {
+        my @ids;
+        my $cap = Acme::Parataxis::get_fiber_capacity();
+        for ( my $fid = 0; $fid < $cap; $fid++ ) {
             my $fiber = Acme::Parataxis::get_fiber_by_id($fid);
-            $fiber->[F_QUEUED] = 0 if ref $fiber;
+            next unless defined $fiber && ref $fiber;
+            $fiber->[F_QUEUED] = 0;
+            push @ids, $fid;
         }
+        return @ids;
     }
 
     # Scheduler run queue. Kept sorted by descending priority (stable for equal priorities, so a group of same-priority fibers stays FIFO).
@@ -1350,7 +1357,7 @@ package Acme::Parataxis v0.1.7 {
             return $fiber->await;
         }
         @SCHEDULER_QUEUE  = ();
-        _clear_queued_flags();
+        my @preset_ids = _clear_queued_flags();
         $IS_RUNNING       = 1;
 
         # run( virtual => 1 ) turns on the virtual clock for the whole run. Everything the scheduler waits
@@ -1368,7 +1375,7 @@ package Acme::Parataxis v0.1.7 {
         # can never be woken again, but the C table still counts it as live; the deadlock detector below must only
         # consider fibers that actually belong to this run, otherwise any run after a deadlock would be misread as
         # another deadlock. (Leaked fibers keep their C slot occupied, so their fids cannot be reused in between.)
-        my %PRESET_FIBERS = map { $_ => 1 } _live_fiber_ids();
+        my %PRESET_FIBERS = map { $_ => 1 } @preset_ids;
         my $main_fiber    = __PACKAGE__->new( code => $code );
 
         # on_shutdown => opts the OUTERMOST run into installing SIGINT/SIGTERM handlers for the run's lifetime

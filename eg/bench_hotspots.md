@@ -13,6 +13,7 @@ perl -Mblib eg/bench_hotspots.pl --count 300 --rounds 5 \
 so every step is measured against the same baseline. `--only NAME` restricts the
 run to one or more workloads. Workloads:
 
+- `startup`: `--count` empty `run(sub {})` calls, isolating scheduler startup bookkeeping.
 - `series`: `--count` sequential spawn/await cycles.
 - `parallel`: `--count` fibers spawned, then awaited.
 - `semaphore`: `--count` real parks/wakes through a zero-count gate.
@@ -271,6 +272,28 @@ median ratio for `parallel` and a 1.182x median ratio for `offload`, so the
 1.143x `parallel` sample was not attributed to this change. Full suite after
 the step: 74 files, 1055 tests, PASS. Direct cancellation, timeout, HTTP,
 parallel, stress, saturation and soak reruns were clean.
+
+### Step 10 — one startup fiber-table scan
+
+`run()` cleared stale `F_QUEUED` flags with one full fiber-table scan, then
+immediately built `%PRESET_FIBERS` with a second one, re-fetching every object
+both times. `_clear_queued_flags()` now does one pass and returns the live-id
+snapshot; `run()` reuses it for the deadlock detector. A new `startup` workload
+calls `run(sub {})` repeatedly so this cost is measured directly.
+
+Interleaved A/B against `0c9e6a2`, 20 pairs at `--count 400 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| startup | 0.10119 | 0.05780 | 0.571x |
+
+The improvement was 20/20 pairs (mean 0.575x). The normal workloads stayed
+inside the recorded noise: series 1.025x, parallel 0.987x, virtual 0.996x,
+semaphore 0.994x, channel 0.996x medians; the offload sample was 0.774x, but
+the change touches no job path, so that was not treated as a gain. Full suite
+after the step: 74 files, 1055 tests, PASS. Scheduler-scope, fiber-table-growth,
+job-id-reuse, destroyed-fiber, parallel, stress, saturation and soak reruns
+were clean.
 
 ### Rejected — reuse the scheduler's completed-job AV
 
