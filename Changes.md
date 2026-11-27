@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extend the bounded scheduler fast-poll budget after new job activity from 4 to 64 yields, so short C jobs are observed without immediately falling back to the tick-quantized idle sleep; long waits still fall back after the budget.
 - Track armed sub-tick C sleeps in a counter and extend the scheduler's sub-millisecond poll window by wall-clock time only while such a sleep is in flight, avoiding a full timer tick per short sleep without spinning on CPU jobs or long waits.
 - Store virtual timers in parallel deadline/fiber arrays instead of one two-element arrayref per armed timer, reducing allocation on bursty virtual-clock workloads.
+- Inline `Channel::get`/`put`'s common case so a channel without a timeout (or a ready channel) skips the deadline wrapper entirely; blocking calls under a real channel timeout still get the deadline.
 
 ### Fixed
 

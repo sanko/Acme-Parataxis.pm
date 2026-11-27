@@ -607,6 +607,34 @@ about 1.20x mean. Ticker, rate limiter, mock time, future, nursery, cancellation
 timeout/repark, diagnostics, parallel, stress, saturation, soak and shutdown
 gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 20 — inline the common Channel get/put path
+
+`Channel::get`/`put` always went through `_with_deadline()`, which built a
+closure and entered `try`/cleanup even when the channel had no timeout (or was
+ready). The inlined path skips that wrapper unless a real channel timeout can
+actually block. Because `_with_deadline` contributed a `caller()` frame used by
+`wait_reason`/backtraces, the inlined `Semaphore::down()` uses a caller level of
+3 instead of 5 so diagnostics still point at user code. The first attempt used
+level 4 and failed `t/401_wait_reason.t` and `t/406_backtrace.t` (reported
+`Parataxis.pm:1032`, the fiber wrapper, instead of the call site); level 3
+restored both.
+
+Interleaved A/B against `5656a8e`, `--rounds 1`:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300) | 0.01454 | 0.01326 | 0.912x | 20/20 |
+| channel (500) | 0.02316 | 0.02107 | 0.910x | 20/20 |
+
+A/A controls for channel were flat (old 0.986x median / 1.011x mean, new
+1.005x / 1.011x). An earlier run produced a larger 0.755x/0.766x ratio because
+the baseline was load-skewed; the corrected run's absolute new times match, so
+the verified gain is about 9%. Semaphore, offload and sleep controls stayed in
+their usual ranges; series moved only with system noise (its A/A old control
+itself varied 1.12x). Channel, select, HTTP pool, wait-reason, backtrace,
+cancellation, timeout/repark, parallel, stress, saturation, soak and shutdown
+gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called
