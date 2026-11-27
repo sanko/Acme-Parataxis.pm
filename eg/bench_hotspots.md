@@ -693,6 +693,18 @@ A separate `await()` receiver-dispatch fast path (`ref()` before `blessed()`/`ca
 was tried and reverted: its parallel gain fell to 0.959x on repeat and series
 was unchanged, inside A/A noise.
 
+### Rejected — sharing an empty backtrace arrayref
+
+After the Step 22 early stop, parks reached directly from a fiber body still
+allocated an empty `$bt` arrayref for the fourth wait-reason element. Reusing
+one shared empty arrayref removed that allocation without changing any reader
+(the array is never mutated when empty). Interleaved A/B against `a582067` was
+flat: channel (300) 1.003x median / 0.999x mean with 15/30 wins, semaphore
+(300) 0.974x median but 1.019x mean, offload (300) 0.986x median. No repeatable
+gain, so the change was reverted. Backtrace, wait-reason, fiber-local, future,
+parallel, stress, saturation, soak and shutdown gates passed while it was in
+place.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called
