@@ -484,6 +484,23 @@ were flat (old 1.008x median / 1.004x mean, new 0.998x / 0.951x and 1.001x /
 priority, scheduler-scope, parallel, stress and saturation reruns were clean.
 Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — unified job-resume status
+
+The completed-job path used `by_id()`, `call()`, and `is_done()` to resume a
+fiber and decide whether to enqueue it. Replacing the last two with one
+`run_fiber_checked($fid, [$res])` and feeding its status through `_handle_run()`
+passed the targeted future, cancellation, timeout/repark, channel-select,
+waiter-removal, priority, parallel, thread-pool-growth, stress, saturation, soak
+and shutdown gates.
+
+It did not help. Interleaved A/B against `72ab02a` was mixed at 300 jobs
+(0.926x median / 1.430x mean, 19/30 faster) and clearly worse at 500 jobs
+(1.276x / 1.802x, 9/20 faster); a longer repeat was 1.214x / 1.155x and
+1.625x / 1.458x. Offload A/A controls were already very noisy (0.784x–1.214x
+median), so the extra work of building the argument arrayref and taking the
+combined C path cannot be justified. Reverted; full suite remains PASS (74
+files, 1055 tests).
+
 ### Rejected — lock-free flag reads in the sub-tick spin
 
 The Windows sub-tick spin took `queue_lock` at entry and exit (and every 32
