@@ -35,6 +35,7 @@ temp/
 t/dev/
 
 eg/*.pl
+!eg/bench_hotspots.pl
 eg/lib/*.pm
 
 *.session
