@@ -484,6 +484,20 @@ were flat (old 1.008x median / 1.004x mean, new 0.998x / 0.951x and 1.001x /
 priority, scheduler-scope, parallel, stress and saturation reruns were clean.
 Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — deferring the live-fiber count read
+
+`get_live_fiber_count()` was sampled on every scheduler pass even though the
+value is only used in the idle/deadlock branch. Moving that FFI read into the
+branch passed the deadlock-report, channel-select, cancellation, timeout/repark,
+parallel, stress, saturation, soak and shutdown gates.
+
+The benchmark did not support it. The first interleaved A/B was mixed (offload
+300: 1.275x median / 1.044x mean; offload 500: 0.693x / 0.817x; series 0.952x /
+0.971x; parallel 0.923x / 0.925x), and A/A controls showed those small gains
+were noise. A repeat was worse across the board (offload 300 1.281x / 1.129x,
+offload 500 1.417x / 1.187x, series 1.062x / 1.055x, parallel 1.043x / 1.026x).
+Reverted; full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — unified job-resume status
 
 The completed-job path used `by_id()`, `call()`, and `is_done()` to resume a
