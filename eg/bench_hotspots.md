@@ -401,6 +401,23 @@ to `Sleep(0)`: 5000 calls took 0.0013 s wall and 0.031 s CPU, while 5000
 whole duration of a long job. Reverted in favor of the bounded fast-poll in
 Step 12.
 
+### Rejected — one-call current-fiber object in `_park()`
+
+`_park()` used to cross FFI twice per wait: once for the current fid and once to
+fetch that fiber's wrapper. Two variants were tried against `17e6c69`: a
+`[fid, object]` snapshot (one call plus a tiny AV allocation) and an object-only
+helper that read `F_FID` from the wrapper and only called `current_fid()` on the
+rare missing-object path. Correctness gates passed for both, including
+cancellation, timeout/repark, waiter removal, destroyed-parked-fiber, deadlock
+diagnostics, parallel, stress, saturation, soak and shutdown.
+
+Neither variant survived interleaved A/B. The tuple was neutral (semaphore
+1.016x median / 1.013x mean, channel 1.001x / 0.995x). The object-only variant
+looked promising once (semaphore 0.957x / 0.947x) but its repeat was 1.019x /
+1.006x, with A/A controls of 1.010x / 1.009x; channel, series and parallel were
+also neutral on repeat. Reverted; full suite remains PASS (74 files, 1055
+tests).
+
 ### Rejected — pass known fiber objects into wakeups
 
 `Semaphore` and `Channel` already resolved a waiter with `by_id()` to check for
