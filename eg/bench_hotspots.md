@@ -753,6 +753,35 @@ backtrace, fiber-local, cancel-scope, future, nursery, timeout/repark, ticker,
 parallel, thread-pool-growth, driver-pool, stress, saturation, soak and shutdown
 gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — scalar `caller()` probes in backtrace capture
+
+`_park()` asked `caller()` for the full eleven-element record on every probe,
+even when the frame was immediately skipped because it belongs to
+`Acme::Parataxis`. Probing only the package name with `my ($pkg) = caller()` and
+re-reading user frames for the full record kept the wait-reason, backtrace,
+fiber-local, future, cancel-scope, timeout/repark, ticker, parallel, stress,
+saturation, soak and shutdown gates passing.
+
+Interleaved A/B against `604d24a`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300) | 0.01011 | 0.01005 | 0.994x | 18/30 |
+| channel (500) | 0.01674 | 0.01685 | 1.007x | 10/20 |
+| semaphore (300) | 0.02291 | 0.02291 | 1.000x | 15/30 |
+| series (300) | 0.00433 | 0.00448 | 1.035x | 10/20 |
+| parallel (300) | 0.00443 | 0.00454 | 1.025x | 9/20 |
+| offload (300) | 0.00556 | 0.00555 | 0.998x | 10/20 |
+
+A reversed-order run was also flat for channel (0.999x) and semaphore (0.971x).
+The parallel median moved by 0.813x in that reversed run but its mean was 0.877x
+and the forward run was 1.025x/0.985x, matching the known noise on that
+workload; A/A controls for channel and semaphore were flat in both directions.
+Longer counts stayed inside noise: channel 1000 0.996x, semaphore 500 0.973x,
+sleep 200 1.000x and virtual 200 0.997x. With no repeatable gain on the park
+paths, the source change was reverted; the suite at `604d24a` remains PASS
+(74 files, 1055 tests).
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
