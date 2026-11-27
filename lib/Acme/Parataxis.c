@@ -611,6 +611,8 @@ static int fiber_capacity = 0;
 /** @brief Slots currently handed out, whether the fiber is live or still waiting for its jobs to drain. Capped by
  *  max_fibers, which is what makes "the table is full" a policy decision rather than a property of the array. */
 static int fiber_used = 0;
+/** @brief Fibers currently started, maintained incrementally so the scheduler never scans the whole table on idle ticks. */
+static int live_fiber_count = 0;
 /** @brief Array of active fiber structures (fiber_capacity entries) */
 static para_fiber_t ** fibers = NULL;
 /** @brief LIFO of free fiber slot indexes (O(1) allocation), fiber_capacity entries */
@@ -2113,7 +2115,8 @@ static void para_diag_pads(pTHX_ const char * tag, PERL_SI * si) {
  * @param to The fiber being resumed.
  */
 static void _activate_current_depths(pTHX_ para_fiber_t * from, para_fiber_t * to) {
-    para_diag_swapno++;
+    if (para_diag_enabled())
+        para_diag_swapno++;
     if (!from || !to || from == to)
         return;
     para_pad_save_context(aTHX_ from);
@@ -2714,7 +2717,10 @@ DLLEXPORT SV * coro_yield(SV * ret_val) {
  */
 PARA_HIDDEN void para_entry_point(para_fiber_t * c) {
     dTHX;
-    c->started = 1;
+    if (!c->started) {
+        c->started = 1;
+        live_fiber_count++;
+    }
     ENTER;
     SAVETMPS;
     dSP;
@@ -3546,11 +3552,7 @@ DLLEXPORT SV * get_fiber_by_id(int fiber_id) {
 
 /** @brief Returns the number of currently live (non-destroyed) fibers. */
 DLLEXPORT int get_live_fiber_count(void) {
-    int count = 0;
-    for (int i = 0; i < fiber_capacity; i++)
-        if (fibers[i] && fibers[i]->started)
-            count++;
-    return count;
+    return live_fiber_count;
 }
 
 /** @brief Returns the number of allocated slots in the fiber table, i.e. the exclusive upper bound on a fiber id.
@@ -3767,6 +3769,11 @@ DLLEXPORT void destroy_coro(int fiber_id) {
         return;
 #endif
 
+    if (c->started) {
+        c->started = 0;
+        if (live_fiber_count > 0)
+            live_fiber_count--;
+    }
     fibers[fiber_id] = NULL;
     if (job_refcount[fiber_id] > 0) {
         /* Keep the id out of the free list until every in-flight job it submitted has been reclaimed, so no newer

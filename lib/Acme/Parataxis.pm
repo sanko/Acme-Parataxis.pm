@@ -31,6 +31,7 @@ package Acme::Parataxis v0.1.7 {
     my $lib;
     my @SCHEDULER_QUEUE;
     my %SCHEDULER_QUEUED;
+    my $HAS_PRIORITIES = 0;     # true once any fiber has been given a non-default priority
     my $IS_RUNNING = 0;
     my $DRIVER;                 # the attached Acme::Parataxis::Driver (undef = the worker-pool fallback path), see attach_loop
     my %PARKED;                 # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
@@ -39,6 +40,7 @@ package Acme::Parataxis v0.1.7 {
     our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
     my $BACKTRACE_DEPTH = 6;    # max user-side caller frames captured at each park (0 disables the capture)
+    my $PREEMPT_THRESHOLD = 0;  # mirror of the C threshold, so disabled preemption needs no FFI call
     my $VIRTUAL_CLOCK;          # undef = wall clock; a running virtual run sets this to the current virtual ms
     my %VIRTUAL_DEADLINES;      # fid => absolute virtual-ms deadline of that fiber's one armed virtual timer
     my @VIRTUAL_TIMERS;         # [deadline_ms, fid] ascending; lazy deletion via %VIRTUAL_DEADLINES
@@ -69,6 +71,10 @@ package Acme::Parataxis v0.1.7 {
         my $fid = $fiber->[F_FID];
         return if $SCHEDULER_QUEUED{$fid};
         $SCHEDULER_QUEUED{$fid} = 1;
+        if ( !$HAS_PRIORITIES ) {
+            push @SCHEDULER_QUEUE, $fiber;
+            return;
+        }
         my $prio = $fiber->[F_PRIORITY] // 0;
         my $i    = 0;
         $i++ while $i < @SCHEDULER_QUEUE && ( $SCHEDULER_QUEUE[$i]->[F_PRIORITY] // 0 ) >= $prio;
@@ -1224,6 +1230,7 @@ package Acme::Parataxis v0.1.7 {
 
     sub maybe_yield {
         @_ = ();
+        return unless $PREEMPT_THRESHOLD;    # disabled preemption is a no-op; don't cross FFI for it
         my $result = Acme::Parataxis::_maybe_yield();
         return unless defined $result;
         return wantarray ? @$result : $result->[-1];
@@ -1232,7 +1239,9 @@ package Acme::Parataxis v0.1.7 {
     sub set_preempt_threshold {
         my $o = _arg_offset( $_[0] );
         croak 'set_preempt_threshold() expects a threshold value' unless @_ > $o;
-        Acme::Parataxis::_set_preempt_threshold( $_[$o] // 0 );
+        my $threshold = $_[$o] // 0;
+        $PREEMPT_THRESHOLD = $threshold;
+        Acme::Parataxis::_set_preempt_threshold($threshold);
     }
     sub tid            { get_os_thread_id_export() }
     sub current_fid    { get_current_parataxis_id() }
@@ -1587,6 +1596,7 @@ package Acme::Parataxis v0.1.7 {
         return $prio unless @_;
         my $n = shift;
         $self->[F_PRIORITY] = $n;
+        $HAS_PRIORITIES = 1 if $n;
         my $fid = $self->[F_FID];
         if ( delete $SCHEDULER_QUEUED{$fid} ) {
             @SCHEDULER_QUEUE = grep { $_->[F_FID] != $fid } @SCHEDULER_QUEUE;

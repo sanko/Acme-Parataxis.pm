@@ -66,9 +66,12 @@ my %workloads = (
     maybe_yield => sub {
         Acme::Parataxis::_maybe_yield() for 1 .. ( $count * 400 );
     },
+    maybe_yield_public => sub {
+        maybe_yield() for 1 .. ( $count * 400 );
+    },
 );
 
-my @names = @only ? @only : qw[series parallel semaphore channel offload virtual maybe_yield];
+my @names = @only ? @only : qw[series parallel semaphore channel offload virtual maybe_yield maybe_yield_public];
 die "unknown workload: $_\n" for grep { !exists $workloads{$_} } @names;
 
 my %baseline;
