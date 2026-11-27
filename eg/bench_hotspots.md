@@ -192,6 +192,15 @@ Offload improved substantially; the remaining workloads stayed within noise.
 Full suite after the step: 74 files, 1055 tests, PASS, with direct stress,
 saturation and soak reruns clean.
 
+### Rejected — canonical waiting marker
+
+Registering the literal `"WAITING"` as one canonical SV let `run_fiber_checked()`
+recognize scheduler parks by pointer identity instead of parsing the string on
+every handoff, with the string check kept as a fallback. The full suite passed,
+but 12 interleaved A/B pairs against `4100be8` showed no gain (series 0.998x,
+parallel 0.994x; semaphore 1.025x, channel 1.038x, offload 1.156x). The extra C
+binding and Perl-side marker were reverted; the string check remains.
+
 ### Rejected — targeted worker wakeups
 
 Counting workers actually parked in `queue_cond` and signalling only as many as
