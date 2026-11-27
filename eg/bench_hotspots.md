@@ -582,6 +582,31 @@ resolution before). Cancellation, timeout/repark, ticker, waitgroup, semaphore,
 channel, diagnostics, parallel, thread-pool-growth, stress, saturation, soak and
 shutdown gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 19 — parallel virtual-timer arrays
+
+`@VIRTUAL_TIMERS` held one two-element arrayref per armed timer. Replacing it
+with paired `@VIRTUAL_DEADLINES` / `@VIRTUAL_TIMER_FIDS` arrays keeps the same
+deadline/fiber ordering and lazy fired-prefix compaction while removing one AV
+allocation per arm.
+
+Interleaved A/B against `6d9a7f3`, `--rounds 1`:
+
+| workload | median ratio | mean ratio | new faster |
+| --- | ---: | ---: | ---: |
+| virtual_burst (300) | 0.983x | 0.991x | 17/30 |
+| virtual_burst (1000) | 0.987x | 0.979x | 15/20 |
+| virtual_burst (1000) repeat | 0.973x | 0.979x | 16/20 |
+| virtual_burst (2000) | 0.991x | 0.988x | 8/10 |
+| virtual (300) | 0.998x | 0.974x | 10/20 |
+
+The gain is small but repeats outside the A/A controls: virtual_burst 1000 A/A
+was 0.998x / 0.995x on the old build and 0.992x / 0.996x on the new one.
+Offload, sleep and series controls were inside their usual noise; an offload
+A/B spike to 1.369x median was matched by old and new A/A runs that both reached
+about 1.20x mean. Ticker, rate limiter, mock time, future, nursery, cancellation,
+timeout/repark, diagnostics, parallel, stress, saturation, soak and shutdown
+gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called
