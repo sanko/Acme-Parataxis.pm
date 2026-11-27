@@ -28,6 +28,15 @@ Only source changes that keep the normal workloads at or below baseline noise
 are accepted. Each step also reruns the full test suite plus the stress/soak
 tests; benchmark gains never justify weakening a correctness test.
 
+### Testbed noise floor
+
+An unchanged-versus-unchanged interleaved control on the current pair (20 pairs
+at `--count 300 --rounds 1`, 12 for `cancel_sleep`, 8 for `sleep`) measured
+median ratios of 1.002x series, 0.961x parallel, 1.002x semaphore, 0.995x
+channel, 1.072x offload (1.132x by mean), 1.021x cancel_sleep and 0.981x sleep.
+Small swings are noise; `offload` has a wider spread than the fiber-only paths,
+so only consistently larger offload improvements are accepted.
+
 ## Recorded results
 
 Baseline (v0.1.7, before hot-path work), `--count 300 --rounds 5`, Windows
