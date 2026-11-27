@@ -18,6 +18,7 @@ run to one or more workloads. Workloads:
 - `semaphore`: `--count` real parks/wakes through a zero-count gate.
 - `channel`: `--count` size-1 channel rendezvous hand-offs.
 - `offload`: `--count` `await_core_id()` C worker-pool submissions.
+- `sleep`: `--count` one-millisecond real `await_sleep()` waits, exercising the worker pool's timed waits.
 - `virtual`: `--count` virtual-clock sleeps, accelerated by the idle scheduler.
 - `maybe_yield`: `400 * --count` direct C calls, measuring the C counter itself.
 - `maybe_yield_public`: `400 * --count` calls through the exported Perl wrapper.
@@ -119,3 +120,16 @@ Interleaved A/B medians against `HEAD` (`4f9aa40`) on the same machine:
 
 The park-heavy workloads (`parallel`, `semaphore`) improved; `series` is within
 noise. Full suite after the step: 74 files, 1055 tests, PASS.
+
+### Rejected — targeted worker wakeups
+
+Counting workers actually parked in `queue_cond` and signalling only as many as
+there are pending jobs passed the suite only after giving `TASK_SLEEP` its own
+condition variable (a plain signal could otherwise be consumed by a timed-sleep
+worker that just re-waits to its deadline). Even then, 20 interleaved A/B pairs
+of the offload workload measured **3.41x slower** (old median 0.050s, new
+median 0.170s): Windows wakes one signaled worker on a timer tick, while a
+broadcast wakes the whole pool immediately. Splitting the condition variables
+but keeping the broadcast was neutral (20 interleaved pairs: 1.02x on offload,
+1.01x on the new `sleep` workload), so it was not kept either. Both C changes
+were reverted; only the new `sleep` benchmark workload remains.

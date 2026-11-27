@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step.
+- Add `eg/bench_hotspots.pl` and a recording template so scheduler/offload optimizations can be compared against the same interleaved baseline at every step, including a real one-millisecond `await_sleep()` workload.
 
 ### Changed
 

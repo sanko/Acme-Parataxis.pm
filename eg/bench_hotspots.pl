@@ -60,6 +60,9 @@ my %workloads = (
     offload => sub {
         run( sub { await_core_id() for 1 .. $count } );
     },
+    sleep => sub {
+        run( sub { await_sleep(1) for 1 .. $count } );
+    },
     virtual => sub {
         run( virtual => 1, code => sub { await_sleep(1) for 1 .. $count } );
     },
@@ -71,7 +74,7 @@ my %workloads = (
     },
 );
 
-my @names = @only ? @only : qw[series parallel semaphore channel offload virtual maybe_yield maybe_yield_public];
+my @names = @only ? @only : qw[series parallel semaphore channel offload sleep virtual maybe_yield maybe_yield_public];
 die "unknown workload: $_\n" for grep { !exists $workloads{$_} } @names;
 
 my %baseline;
