@@ -339,6 +339,32 @@ timeout, repark, ticker, transparent-unblock, parallel, stress, saturation, soak
 and shutdown reruns were clean. Full suite after the step: 74 files, 1055 tests,
 PASS.
 
+### Step 13 — sub-tick Windows sleeps
+
+`SleepConditionVariableCS` rounds short timed waits up to the platform timer
+tick (~15.6 ms on Windows), so `await_sleep(1)` took ~16 ms. For Windows sleeps
+of 8 ms or less, the worker now yield-spins against `QueryPerformanceCounter`
+for at most the requested duration. It briefly takes `queue_lock` every 32
+yields (and once more at the end) to observe recall or shutdown, so cancellation
+stays prompt and no submitter is blocked while it spins. Longer sleeps keep the
+condition-variable wait unchanged.
+
+Interleaved A/B against `73ca64e`, `--count 200 --rounds 1` for sleep:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| sleep | 3.49167 | 2.04146 | 0.585x |
+| sleep repeat | 3.31689 | 2.01093 | 0.606x |
+
+Each sleep sample was faster in 10/10 pairs. A direct process probe for 200
+one-millisecond sleeps went from 3.491 s wall / 0.094 s CPU to 2.110 s /
+0.266 s, so the extra work is bounded by the short sleep duration. Cancellation,
+timeout/repark, defer, monitor, nursery, mock-time, sync, parallel, stress,
+saturation, soak and shutdown reruns were clean. Offload was unchanged in code
+path and noisy (1.036x then 1.735x median, with an unchanged A/A median of
+0.809x on the same machine). Full suite after the step: 74 files, 1055 tests,
+PASS.
+
 ### Rejected — unconditional 200 µs idle polling
 
 Replacing the scheduler's `usleep(1000)` with `usleep(200)` made offload appear

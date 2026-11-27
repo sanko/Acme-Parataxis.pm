@@ -1063,40 +1063,76 @@ void * worker_thread(void * arg) {
             if (job->type == TASK_SLEEP) {
                 int ms = (int)job->input.i;
                 int recalled = 0;
-                LOCK(queue_lock);
-                if (ms > 0 && !job->recall && threads_keep_running) {
-                    /* Timed condition-variable wait instead of quantized polling: the OS sleeps for (almost) the whole
-                     * remainder in one call, so a 1000 ms arm costs ~1000 ms on any platform (the old 4 ms quantum
-                     * inflated Windows sleeps ~4x through the ~15.6 ms system timer tick). The wait releases
-                     * queue_lock, so notifying threads (submit/recall/shutdown) are never blocked by a sleeping worker.
-                     * Recall and shutdown wakes are observed by re-checking the predicate; the deadline is fixed, so
-                     * spurious or broadcast wakeups just re-wait to it. */
 #ifdef _WIN32
-                    /* Absolute deadline as ms since boot; unsigned subtraction is wrap-safe. */
-                    DWORD deadline = GetTickCount() + (DWORD)ms;
-                    while (!job->recall && threads_keep_running) {
-                        DWORD remaining = deadline - GetTickCount();
-                        if ((int)remaining <= 0)
-                            break;
-                        PARA_COND_TIMEDWAIT(queue_cond, queue_lock, remaining);
+                /* Sub-tick sleeps would be rounded up to a ~15.6 ms timer tick by SleepConditionVariableCS. For
+                 * short arms only, yield-spin against a high-resolution counter instead; the spin is bounded by the
+                 * requested duration and briefly takes queue_lock to observe recall/shutdown, so cancellation stays
+                 * prompt and the worker never blocks a submitter while spinning. */
+                if (ms > 0 && ms <= 8) {
+                    LOCK(queue_lock);
+                    recalled = job->recall || !threads_keep_running;
+                    UNLOCK(queue_lock);
+                    if (!recalled) {
+                        LARGE_INTEGER freq, start, now;
+                        QueryPerformanceFrequency(&freq);
+                        QueryPerformanceCounter(&start);
+                        int checks = 0;
+                        while (freq.QuadPart > 0) {
+                            QueryPerformanceCounter(&now);
+                            if ((now.QuadPart - start.QuadPart) * 1000 >= ms * freq.QuadPart)
+                                break;
+                            if ((++checks & 31) == 0) {
+                                LOCK(queue_lock);
+                                recalled = job->recall || !threads_keep_running;
+                                UNLOCK(queue_lock);
+                                if (recalled)
+                                    break;
+                            }
+                            SwitchToThread();
+                        }
+                        LOCK(queue_lock);
+                        recalled = recalled || job->recall || !threads_keep_running;
+                        UNLOCK(queue_lock);
                     }
-#else
-                    struct timespec deadline;
-                    clock_gettime(CLOCK_REALTIME, &deadline);
-                    deadline.tv_sec += ms / 1000;
-                    deadline.tv_nsec += (long)(ms % 1000) * 1000000L;
-                    if (deadline.tv_nsec >= 1000000000L) {
-                        deadline.tv_sec++;
-                        deadline.tv_nsec -= 1000000000L;
-                    }
-                    while (!job->recall && threads_keep_running &&
-                           PARA_COND_TIMEDWAIT(queue_cond, queue_lock, &deadline)) {
-                        /* woken (recall, spurious, or shutdown); re-check and re-wait to the same deadline */
-                    }
-#endif
                 }
-                recalled = job->recall;
-                UNLOCK(queue_lock);
+                else
+#endif
+                {
+                    LOCK(queue_lock);
+                    if (ms > 0 && !job->recall && threads_keep_running) {
+                        /* Timed condition-variable wait instead of quantized polling: the OS sleeps for (almost) the whole
+                         * remainder in one call, so a 1000 ms arm costs ~1000 ms on any platform (the old 4 ms quantum
+                         * inflated Windows sleeps ~4x through the ~15.6 ms system timer tick). The wait releases
+                         * queue_lock, so notifying threads (submit/recall/shutdown) are never blocked by a sleeping worker.
+                         * Recall and shutdown wakes are observed by re-checking the predicate; the deadline is fixed, so
+                         * spurious or broadcast wakeups just re-wait to it. */
+#ifdef _WIN32
+                        /* Absolute deadline as ms since boot; unsigned subtraction is wrap-safe. */
+                        DWORD deadline = GetTickCount() + (DWORD)ms;
+                        while (!job->recall && threads_keep_running) {
+                            DWORD remaining = deadline - GetTickCount();
+                            if ((int)remaining <= 0)
+                                break;
+                            PARA_COND_TIMEDWAIT(queue_cond, queue_lock, remaining);
+                        }
+#else
+                        struct timespec deadline;
+                        clock_gettime(CLOCK_REALTIME, &deadline);
+                        deadline.tv_sec += ms / 1000;
+                        deadline.tv_nsec += (long)(ms % 1000) * 1000000L;
+                        if (deadline.tv_nsec >= 1000000000L) {
+                            deadline.tv_sec++;
+                            deadline.tv_nsec -= 1000000000L;
+                        }
+                        while (!job->recall && threads_keep_running &&
+                               PARA_COND_TIMEDWAIT(queue_cond, queue_lock, &deadline)) {
+                            /* woken (recall, spurious, or shutdown); re-check and re-wait to the same deadline */
+                        }
+#endif
+                    }
+                    recalled = job->recall;
+                    UNLOCK(queue_lock);
+                }
                 /* output.i = -1 signals an early recall (interrupted or shutdown); otherwise the full duration elapses. */
                 job->output.i = (recalled || !threads_keep_running) ? -1 : ms;
             }
