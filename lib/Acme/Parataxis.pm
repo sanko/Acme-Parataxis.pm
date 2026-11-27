@@ -1729,7 +1729,7 @@ package Acme::Parataxis v0.1.7 {
             $self->[F_PARKED]     = 0;
             $self->[F_PARK_DEREG] = undef;
             _recall_virtual_timer( $self->[F_FID] );    # a finished fiber must not leave a virtual timer behind
-            delete $FIBER_LOCALS{ refaddr($self) };
+            delete $FIBER_LOCALS{ refaddr($self) } if %FIBER_LOCALS;
             $self->[F_FID] = -1;
         }
     }
@@ -1764,7 +1764,7 @@ package Acme::Parataxis v0.1.7 {
 
     sub is_done ($self) {
         if ( $self->[F_IS_DONE] ) {
-            delete $FIBER_LOCALS{ refaddr($self) };
+            delete $FIBER_LOCALS{ refaddr($self) } if %FIBER_LOCALS;
             return 1;
         }
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 && Acme::Parataxis::is_finished( $self->[F_FID] ) ) {
@@ -1772,7 +1772,7 @@ package Acme::Parataxis v0.1.7 {
             my $old_fid = $self->[F_FID];
             $self->[F_PARKED]     = 0;
             $self->[F_PARK_DEREG] = undef;
-            delete $FIBER_LOCALS{ refaddr($self) };
+            delete $FIBER_LOCALS{ refaddr($self) } if %FIBER_LOCALS;
             $self->[F_FID] = -1;
             Acme::Parataxis::destroy_coro($old_fid);
             return 1;
@@ -1817,7 +1817,7 @@ package Acme::Parataxis v0.1.7 {
             $ready = $self->[F_IS_READY];
         }
         croak 'Future not ready' unless $ready;
-        delete $FIBER_LOCALS{ refaddr($self) };    # the fiber is done now; its locals die with it (no-op for Futures)
+        delete $FIBER_LOCALS{ refaddr($self) } if %FIBER_LOCALS;    # the fiber is done now; its locals die with it (no-op for Futures)
         die $self->[F_ERROR] if defined $self->[F_ERROR];
         $self->[F_RESULT];
     }
@@ -1830,7 +1830,7 @@ package Acme::Parataxis v0.1.7 {
 
     sub DESTROY($self) {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
-        delete $FIBER_LOCALS{ refaddr($self) };
+        delete $FIBER_LOCALS{ refaddr($self) } if %FIBER_LOCALS;
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
             $self->[F_PARKED]     = 0;
             $self->[F_PARK_DEREG] = undef;

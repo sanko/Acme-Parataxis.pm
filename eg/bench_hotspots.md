@@ -635,6 +635,31 @@ itself varied 1.12x). Channel, select, HTTP pool, wait-reason, backtrace,
 cancellation, timeout/repark, parallel, stress, saturation, soak and shutdown
 gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 21 — gate fiber-local stash cleanup
+
+`_mark_done()`, `is_done()`, `await()`, `on_ready` failure paths and `DESTROY()`
+all unconditionally evaluated `delete $FIBER_LOCALS{ refaddr($self) }`, even
+though `%FIBER_LOCALS` is empty unless `Acme::Parataxis::Local` has actually
+stored a value. Each call cost a `Scalar::Util::refaddr()` XS call plus a hash
+delete. Guarding every site with `if %FIBER_LOCALS` keeps cleanup for users of
+`Local` and removes the work entirely from the common finish path.
+
+Interleaved A/B against `e1b7106`, `--rounds 1`:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| series (300) | 0.00455 | 0.00414 | 0.910x | 20/30 |
+| semaphore (300) | 0.02503 | 0.02429 | 0.970x | 20/30 |
+
+An earlier 30-pair series run gave 0.944x / 0.933x mean and an earlier
+semaphore run looked 1.039x slower; A/A controls showed both directions were
+load drift (series A/A 1.009x/1.020x, semaphore new A/A 0.939x/0.953x), so the
+repeat runs above are the reliable figures. Parallel, startup, channel and
+offload controls stayed in their usual ranges. Fiber-local, wait-reason,
+backtrace, future, nursery, cancellation, timeout, parallel, stress,
+saturation, soak and shutdown gates passed. Full suite after the step: 74
+files, 1055 tests, PASS.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called
