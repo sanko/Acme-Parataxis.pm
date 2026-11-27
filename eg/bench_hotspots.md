@@ -722,6 +722,29 @@ backtrace, fiber-local, future, timeout/repark, ticker, parallel,
 thread-pool-growth, stress, saturation, soak and shutdown gates passed. Full
 suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — raw lookups in synchronization primitives
+
+After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
+the current-fid and fiber-lookup wrappers by method call. Replacing those with
+`Acme::Parataxis::get_current_parataxis_id()` and
+`Acme::Parataxis::get_fiber_by_id()` kept every caller level and passed the
+wait-reason, backtrace, fiber-local, future, cancellation, timeout/repark,
+ticker, channel-select, parallel, stress, saturation, soak and shutdown gates.
+
+Interleaved A/B against `9df8ce4`, `--count 300 --rounds 1`:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| semaphore | 0.02629 | 0.02645 | 1.006x | 13/30 |
+| channel | 0.01094 | 0.01094 | 1.000x | 17/30 |
+| series | 0.00477 | 0.00443 | 0.929x | 10/20 |
+| parallel | 0.00490 | 0.00463 | 0.945x | 11/20 |
+| offload | 0.00612 | 0.00601 | 0.982x | 16/20 |
+
+Series and parallel medians moved but their means and pairwise win counts were
+flat, so the change was reverted; full suite remains PASS (74 files, 1055
+tests).
+
 ### Rejected — sharing an empty backtrace arrayref
 
 After the Step 22 early stop, parks reached directly from a fiber body still
