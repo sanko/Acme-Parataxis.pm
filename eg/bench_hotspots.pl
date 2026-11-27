@@ -63,6 +63,22 @@ my %workloads = (
     sleep => sub {
         run( sub { await_sleep(1) for 1 .. $count } );
     },
+    cancel_sleep => sub {
+        run( sub {
+            for ( 1 .. $count ) {
+                my $token = Acme::Parataxis::CancellationToken->new;
+                my $worker = fiber {
+                    $token->register;
+                    eval { await_sleep(1000) };
+                    $token->unregister;
+                    return;
+                };
+                yield;
+                $token->cancel;
+                eval { $worker->await };
+            }
+        } );
+    },
     virtual => sub {
         run( virtual => 1, code => sub { await_sleep(1) for 1 .. $count } );
     },
@@ -74,7 +90,7 @@ my %workloads = (
     },
 );
 
-my @names = @only ? @only : qw[series parallel semaphore channel offload sleep virtual maybe_yield maybe_yield_public];
+my @names = @only ? @only : qw[series parallel semaphore channel offload sleep cancel_sleep virtual maybe_yield maybe_yield_public];
 die "unknown workload: $_\n" for grep { !exists $workloads{$_} } @names;
 
 my %baseline;

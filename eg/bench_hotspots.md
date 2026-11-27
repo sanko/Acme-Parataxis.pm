@@ -19,6 +19,7 @@ run to one or more workloads. Workloads:
 - `channel`: `--count` size-1 channel rendezvous hand-offs.
 - `offload`: `--count` `await_core_id()` C worker-pool submissions.
 - `sleep`: `--count` one-millisecond real `await_sleep()` waits, exercising the worker pool's timed waits.
+- `cancel_sleep`: `--count` long `await_sleep()` waits cancelled immediately, exercising sleep-job recall.
 - `virtual`: `--count` virtual-clock sleeps, accelerated by the idle scheduler.
 - `maybe_yield`: `400 * --count` direct C calls, measuring the C counter itself.
 - `maybe_yield_public`: `400 * --count` calls through the exported Perl wrapper.
@@ -213,6 +214,28 @@ Interleaved A/B medians against the `b7ef1df` pair (12 pairs at `--count 300 --r
 The semaphore result was noise: a 20-pair rerun measured 0.02999s old versus
 0.02970s new (0.990x). Full suite after the step: 74 files, 1055 tests, PASS,
 with direct parallel, stress, saturation and soak reruns clean.
+
+### Step 8 — target sleep recall
+
+`recall_sleep_jobs_for_fiber()` walked all 1024 job slots on every cancel or
+timeout. A third bitmap records slots with an armed `TASK_SLEEP` job (NEW or
+BUSY), set at submission and cleared when the slot is reclaimed, so recall now
+visits only armed sleeps. Cancellation still re-checks fiber id, type and status
+under the same lock.
+
+Interleaved A/B medians against the `a8f5668` DLL (12 pairs at `--count 300 --rounds 1`; `sleep` used 8 pairs):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| cancel_sleep | 0.03157 | 0.03087 | 0.978x |
+| sleep | 5.22165 | 5.16935 | 0.990x |
+| offload | 0.07498 | 0.07242 | 0.966x |
+| semaphore | 0.03175 | 0.02890 | 0.910x |
+
+The new cancellation workload improved slightly; the other changes are within
+this machine's noise. Full suite after the step: 74 files, 1055 tests, PASS.
+Direct cancellation/timeout tests (`t/154`–`t/158`), stress, saturation and
+soak all returned 0 with no failing tests.
 
 ### Rejected — canonical waiting marker
 

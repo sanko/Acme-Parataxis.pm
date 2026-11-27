@@ -647,6 +647,9 @@ static uint64_t free_job_mask[JOB_WORD_COUNT];
 /** @brief One bit per submitted-but-unclaimed job, maintained under queue_lock. Workers claim the lowest set bit so
  *  claim order matches the old linear scan. */
 static uint64_t pending_job_mask[JOB_WORD_COUNT];
+/** @brief One bit per armed TASK_SLEEP job (JOB_NEW or JOB_BUSY), maintained under queue_lock so cancellation only
+ *  visits sleeps instead of scanning all 1024 slots. */
+static uint64_t sleep_job_mask[JOB_WORD_COUNT];
 
 /** @brief Count trailing zero bits without a compiler intrinsic, so MSVC and every C99 compiler get the same result. */
 static int para_ctz64(uint64_t x) {
@@ -1199,6 +1202,7 @@ DLLEXPORT void init_threads() {
     for (int w = 0; w < JOB_WORD_COUNT; w++) {
         free_job_mask[w] = ~0ULL;
         pending_job_mask[w] = 0;
+        sleep_job_mask[w] = 0;
     }
     if (MAX_JOBS % JOB_BITS_PER_WORD)
         free_job_mask[JOB_WORD_COUNT - 1] = (1ULL << (MAX_JOBS % JOB_BITS_PER_WORD)) - 1;
@@ -1240,6 +1244,8 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].status = JOB_NEW;
         job_slots[idx].recall = 0;
         pending_job_mask[idx >> 6] |= 1ULL << (idx & 63);
+        if (type == TASK_SLEEP)
+            sleep_job_mask[idx >> 6] |= 1ULL << (idx & 63);
         pending_job_count++;
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < fiber_capacity)
@@ -1308,15 +1314,23 @@ DLLEXPORT int recall_sleep_jobs_for_fiber(int fid) {
         return 0;
     int count = 0;
     LOCK(queue_lock);
-    for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_slots[i].fiber_id != fid)
-            continue;
-        if (job_slots[i].type != TASK_SLEEP)
-            continue;
-        if (job_slots[i].status != JOB_NEW && job_slots[i].status != JOB_BUSY)
-            continue;
-        job_slots[i].recall = 1;
-        count++;
+    for (int w = 0; w < JOB_WORD_COUNT; w++) {
+        uint64_t bits = sleep_job_mask[w];
+        while (bits) {
+            int bit = para_ctz64(bits);
+            int i = w * JOB_BITS_PER_WORD + bit;
+            bits &= bits - 1;
+            if (i >= MAX_JOBS)      /* unused high bits in a partial last word */
+                continue;
+            if (job_slots[i].fiber_id != fid)
+                continue;
+            if (job_slots[i].type != TASK_SLEEP)
+                continue;
+            if (job_slots[i].status != JOB_NEW && job_slots[i].status != JOB_BUSY)
+                continue;
+            job_slots[i].recall = 1;
+            count++;
+        }
     }
     if (count > 0)
         PARA_COND_BROADCAST(queue_cond); /* Wake the armed worker(s) immediately instead of waiting for the next job signal */
@@ -1371,6 +1385,7 @@ DLLEXPORT void free_job_slot(int idx) {
     LOCK(queue_lock);
     job_slots[idx].status = JOB_FREE;
     free_job_mask[idx >> 6] |= 1ULL << (idx & 63);
+    sleep_job_mask[idx >> 6] &= ~(1ULL << (idx & 63));
     outstanding_jobs--;
     UNLOCK(queue_lock);
 
@@ -3543,6 +3558,7 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
         values[count] = has_result[count] ? job->output.i : 0;
         job->status = JOB_FREE;
         free_job_mask[job_idx >> 6] |= 1ULL << (job_idx & 63);
+        sleep_job_mask[job_idx >> 6] &= ~(1ULL << (job_idx & 63));
         outstanding_jobs--;
         count++;
     }
