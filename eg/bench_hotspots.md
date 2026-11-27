@@ -263,6 +263,16 @@ median ratio for `parallel` and a 1.182x median ratio for `offload`, so the
 the step: 74 files, 1055 tests, PASS. Direct cancellation, timeout, HTTP,
 parallel, stress, saturation and soak reruns were clean.
 
+### Rejected — splice the scheduler queue
+
+Replacing `my @work = @SCHEDULER_QUEUE; @SCHEDULER_QUEUE = ()` with
+`my @work = splice @SCHEDULER_QUEUE` kept the global AV's allocation between
+enqueue bursts. It passed the parallel, stress, saturation and soak gates, but
+30 interleaved A/B pairs against `c56d8d8` were neutral on every queue workload
+(series 1.011x, parallel 0.989x, semaphore 0.986x, channel 1.011x medians) and
+the 20-pair offload sample was 1.208x slower. The change was reverted; the full
+suite still passes with 74 files and 1055 tests.
+
 ### Rejected — broadcast gate
 
 `submit_c_job()` broadcasts `queue_cond` on every job submission. A waiter count
