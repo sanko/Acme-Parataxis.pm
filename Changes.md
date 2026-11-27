@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Skip the scheduler's priority scan when no fiber has a non-default priority, skip the FFI call for disabled `maybe_yield()`, maintain the live-fiber count incrementally, and increment the diagnostic swap counter only when `PARA_DIAG` is enabled. These remove always-on work from the common spawn/idle paths without changing feature behavior.
 - Maintain the job pool's pending-job count incrementally instead of re-scanning all 1024 job slots under the queue lock on every submission.
 - Store parked/queued flags and the interrupted-park deregistration callback in flat fiber slots instead of fid-keyed hashes, removing hash lookups from the park, wake and enqueue paths.
+- Drain completed C jobs under one queue lock, copying each result before its slot is reused instead of taking three locks per job.
 
 ### Fixed
 

@@ -121,6 +121,31 @@ Interleaved A/B medians against `HEAD` (`4f9aa40`) on the same machine:
 The park-heavy workloads (`parallel`, `semaphore`) improved; `series` is within
 noise. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 4 — one locked drain for completed jobs
+
+`drain_jobs()` used to take `queue_lock` three times per completed job: once in
+`check_for_completion()` to pop the ring, once in `get_job_result()` to copy the
+result, and once in `free_job_slot()` to release the slot. It now pops the whole
+done ring under one lock, copies each job's owner and result while the slot is
+still reserved, frees the slots, then builds the Perl result pairs and defers
+fiber-id release outside the lock.
+
+Interleaved A/B medians against the `b5d443d` DLL (12 pairs at `--count 300 --rounds 1`; `sleep` used 8 pairs at `--count 200`):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| series | 0.00499 | 0.00469 | 0.940x |
+| parallel | 0.00473 | 0.00453 | 0.958x |
+| semaphore | 0.02769 | 0.02776 | 1.003x |
+| channel | 0.01563 | 0.01586 | 1.015x |
+| offload | 0.07396 | 0.06652 | 0.899x |
+| sleep | 3.57816 | 3.52582 | 0.985x |
+
+The job-heavy `offload` workload improved, the park-heavy workloads stayed
+within noise, and the full suite still passed: 74 files, 1055 tests, PASS.
+Direct reruns of `t/450_parallel.t`, `t/500_stress_fuzz.t`,
+`t/501_saturation.t` and `t/502_soak.t` also returned 0 with no failing tests.
+
 ### Rejected — targeted worker wakeups
 
 Counting workers actually parked in `queue_cond` and signalling only as many as

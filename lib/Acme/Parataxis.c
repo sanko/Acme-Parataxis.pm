@@ -3462,20 +3462,53 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
     dTHX;
     if (!out_ref || !SvROK(out_ref) || SvTYPE(SvRV(out_ref)) != SVt_PVAV)
         return;
+    if (!threads_initialized)
+        init_threads();
     AV * out = (AV *)SvRV(out_ref);
     av_clear(out);
-    while (1) {
-        int job_idx = check_for_completion();
-        if (job_idx == -1)
-            break;
+
+    /* The old loop took queue_lock three times per finished job: once to pop the completion ring, once to read the
+     * result, and once to free the slot. Copy the immutable done state out under a single lock acquisition, release
+     * the slots, then build the Perl result pairs outside the lock. A job's output is published before the worker
+     * marks it JOB_DONE and pushes it, so the lock in this pop gives us a happens-before for those writes. */
+    int owners[MAX_JOBS + 1];
+    int values[MAX_JOBS + 1];
+    int has_result[MAX_JOBS + 1];
+    int count = 0;
+
+    LOCK(queue_lock);
+    while (done_head != done_tail) {
+        int job_idx = done_queue[done_head];
+        done_head = (done_head + 1) % (MAX_JOBS + 1);
+        if (job_idx < 0 || job_idx >= MAX_JOBS)
+            continue;
+        job_t * job = &job_slots[job_idx];
+        owners[count] = job->fiber_id;
+        has_result[count] = (job->type == TASK_SLEEP || job->type == TASK_GET_CPU ||
+                            job->type == TASK_READ || job->type == TASK_WRITE);
+        values[count] = has_result[count] ? job->output.i : 0;
+        job->status = JOB_FREE;
+        outstanding_jobs--;
+        count++;
+    }
+    UNLOCK(queue_lock);
+
+    for (int i = 0; i < count; i++) {
         AV * pair = newAV();
-        av_push(pair, newSViv(get_job_coro_id(job_idx)));
-        SV * res = get_job_result(job_idx);
-        /* get_job_result returns a mortal parked on the caller's tmps stack; copy it so the pair owns its own SV
-         * instead of double-decrementing the mortal when both the pair and FREETMPS release it. */
-        av_push(pair, (res && res != &PL_sv_undef) ? newSVsv(res) : &PL_sv_undef);
+        av_push(pair, newSViv(owners[i]));
+        av_push(pair, has_result[i] ? newSViv(values[i]) : &PL_sv_undef);
         av_push(out, newRV_noinc((SV *)pair));
-        free_job_slot(job_idx);
+
+        /* Same deferred slot release as free_job_slot(): a destroyed fiber's id cannot be reused until every job
+         * it submitted has been reclaimed here. job_refcount/_release_slot are main-thread only. */
+        int owner = owners[i];
+        if (owner >= 0 && owner < fiber_capacity && job_refcount && job_refcount[owner] > 0) {
+            job_refcount[owner]--;
+            if (job_refcount[owner] == 0 && fiber_destroyed[owner]) {
+                fiber_destroyed[owner] = 0;
+                _release_slot(owner);
+            }
+        }
     }
 }
 
