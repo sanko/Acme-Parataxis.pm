@@ -67,3 +67,35 @@ The public `maybe_yield()` ratio is against the old wrapper measured from
 `bd19134` (`0.01478s`) with the same C library; the direct C workload confirms
 that the C counter itself is unchanged. Full suite after the step: 74 files,
 1055 tests, PASS (the two TODO-pass blocks are the known optional HTTP tests).
+
+### Step 2 — job-pool pending count
+
+`submit_c_job()` scanned all 1024 job slots a second time just to count `JOB_NEW`
+entries before deciding whether to grow the worker pool. The count is now
+maintained incrementally (incremented on submit, decremented when a worker claims
+the job), so the scan under `queue_lock` is gone. The free-slot scan stays as it
+is: it is O(1) in normal use, and changing it to a rotating cursor or LIFO made
+the benchmark worse (cold slot cache lines) and broke `t/501_saturation.t`'s
+lowest-free-slot expectation. An attempted signal-instead-of-broadcast wakeup
+also failed that test (jobs stranded with no worker woken), so the broadcast is
+unchanged.
+
+`--count 300 --rounds 7`, medians against the original baseline:
+
+| workload | median_s | ratio |
+| --- | ---: | ---: |
+| series | 0.00523 | 0.785x |
+| parallel | 0.00471 | 0.959x |
+| semaphore | 0.02894 | 0.989x |
+| channel | 0.01491 | 0.980x |
+| offload | 0.05578 | 0.592x |
+| virtual | 0.00648 | 0.987x |
+| maybe_yield (C) | 0.00565 | 1.042x |
+| maybe_yield_public | 0.00784 | - |
+
+Interleaved A/B runs of the offload workload showed 1.0x–1.2x spread in both
+directions on this machine, so the offload ratio against the much earlier
+baseline is not attributed solely to this step; the structural change (one
+fewer locked 1024-slot scan per submission) is the reason to keep it. Full suite
+after the step: 74 files, 1055 tests, PASS, including the saturation and soak
+gates.

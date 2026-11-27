@@ -638,6 +638,9 @@ static int para_fiber_exit_in_flight = 0;
 #define MAX_JOBS 1024
 /** @brief Fixed-size array for background tasks */
 static job_t job_slots[MAX_JOBS];
+
+/** @brief Jobs submitted but not yet claimed by a worker (JOB_NEW), maintained under queue_lock. */
+static int pending_job_count = 0;
 /** @brief Mutex protecting access to the job queue */
 static para_mutex_t queue_lock;
 
@@ -985,6 +988,7 @@ void * worker_thread(void * arg) {
             for (int i = 0; i < MAX_JOBS; i++) {
                 if (job_slots[i].status == JOB_NEW) {
                     job_slots[i].status = JOB_BUSY;
+                    pending_job_count--;
                     found_idx = i;
                     break;
                 }
@@ -1183,6 +1187,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].timeout_ms = timeout_ms;
         job_slots[idx].status = JOB_NEW;
         job_slots[idx].recall = 0;
+        pending_job_count++;
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < fiber_capacity)
             job_refcount[current_fiber_id]++;
@@ -1193,13 +1198,9 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
          * nothing, and queued behind sleeps lasting hundreds of milliseconds. A 10 ms await_sleep submitted while
          * both seeded workers held a 400 ms and a 600 ms sleep woke at 400 ms instead of 10 ms. Pending work with
          * no idle worker to claim it is exactly the case that needs a worker, so now that is what is measured. */
-        int pending_count = 0;
-        for (int i = 0; i < MAX_JOBS; i++)
-            if (job_slots[i].status == JOB_NEW)
-                pending_count++;
         int idle_count = current_thread_count - busy_thread_count;
-        if (pending_count > idle_count)
-            _spawn_workers(pending_count - idle_count); /* stops at max_thread_pool_size / MAX_THREADS */
+        if (pending_job_count > idle_count)
+            _spawn_workers(pending_job_count - idle_count); /* stops at max_thread_pool_size / MAX_THREADS */
 
         /* Broadcast (not signal): a single wakeup may be swallowed by a worker parked in its timed sleep wait
          * (which only re-checks its absolute deadline and continues), leaving idle workers with no wakeup and
