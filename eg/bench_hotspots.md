@@ -545,6 +545,43 @@ an immediate full rerun was PASS. Cancellation, timeout/repark, ticker, rate
 limiter, mock time, diagnostics, parallel, stress, saturation, soak and shutdown
 reruns were clean. Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Step 18 — sleep-aware scheduler spin window
+
+The 64-poll budget from Step 17 still missed 1 ms sleeps on Windows: the
+`usleep(200)` polls are `Sleep(0)` and are exhausted in well under a millisecond,
+after which the scheduler falls back to a `usleep(1000)` that costs a full timer
+tick. Trying a 2 ms wall-clock spin for every outstanding job made `sleep` much
+faster (0.117x) but regressed `offload` (1.459x) and `offload_burst` (9.538x)
+because the scheduler stole the core from CPU workers; a 1 ms window neither
+helped sleeps nor avoided the regressions.
+
+The accepted version counts armed short `TASK_SLEEP` jobs (input <= 8 ms, the
+same jobs that use the worker's high-resolution spin) in C and exposes that
+count to the scheduler. Only while that count is nonzero does the scheduler
+replace the fixed poll budget with a 2 ms wall-clock window. The count is
+sampled after resumed fibers have submitted their next job, so a sequential
+sleep loop replenishes the window every iteration. CPU jobs and long sleeps keep
+the Step 17 behavior.
+
+Interleaved A/B against `4c87558`, `--count 200/300 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| sleep (200) | 1.96986 | 0.20587 | 0.105x |
+| cancel_sleep (300) | 0.03163 | 0.03218 | 1.017x |
+| offload (300) | 0.00721 | 0.00743 | 1.031x |
+| offload_burst (20) | 0.00104 | 0.00104 | 1.000x |
+| virtual_burst (300) | 0.01939 | 0.01951 | 1.006x |
+
+`sleep` was faster in 20/20 pairs. Its A/A controls were flat (old 0.989x
+median / 0.923x mean, new 1.003x / 0.990x), so the win is well outside noise.
+Offload was inside its usual A/A range (old 1.122x / 1.136x, new 0.970x /
+0.863x), and the burst control was unchanged at the median. A five-second long
+sleep stayed bounded (0.031 s CPU with the new pair versus 0.000 s at `times`
+resolution before). Cancellation, timeout/repark, ticker, waitgroup, semaphore,
+channel, diagnostics, parallel, thread-pool-growth, stress, saturation, soak and
+shutdown gates passed. Full suite after the step: 74 files, 1055 tests, PASS.
+
 ### Rejected — reusing the interrupted fiber object for enqueue
 
 `_interrupt()` resolved a fiber with `by_id()` and then called

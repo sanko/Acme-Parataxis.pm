@@ -196,6 +196,7 @@ package Acme::Parataxis v0.1.7 {
         affix $l, 'drain_jobs',                                            [ Pointer [SV] ],               Void;
         affix $l, 'check_for_completion',                                  [],                             Int;
         affix $l, 'get_outstanding_jobs',                                  [],                             Int;
+        affix $l, 'get_short_sleep_jobs',                                  [],                             Int;
         affix $l, 'recall_sleep_jobs_for_fiber',                           [Int],                          Int;
         affix $l, 'get_job_result',                                        [Int],                          Pointer [SV];
         affix $l, 'get_job_coro_id',                                       [Int],                          Int;
@@ -1458,7 +1459,9 @@ package Acme::Parataxis v0.1.7 {
         _enqueue($main_fiber);
         my $run_ok = 1;
         my $run_failure;
-        my $idle_polls     = 0;    # short poll budget, replenished when job completions arrive
+        my $idle_polls     = 0;    # short poll budget, replenished when job activity changes
+        my $spin_short     = 0;    # true while a sub-tick sleep is armed, so only sleeps get the longer wall-clock spin
+        my $fast_until     = 0;    # wall-clock deadline for the longer spin
         my $last_job_count = 0;
         try {
             while ($IS_RUNNING) {
@@ -1482,12 +1485,13 @@ package Acme::Parataxis v0.1.7 {
                 my $job_count = get_outstanding_jobs();
                 if ( $job_count != $last_job_count ) {
                     $idle_polls     = 0;
+                    $spin_short     = get_short_sleep_jobs() > 0;
+                    $fast_until     = $spin_short ? Time::HiRes::time() + 0.002 : 0;
                     $last_job_count = $job_count;
                 }
                 if ($job_count) {
                     drain_jobs( \@ready );
                 }
-                $idle_polls = 0 if @ready;
                 for ( my $i = 0; $i < @ready; $i += 2 ) {
                     my $fid = $ready[$i];
                     my $res = $ready[ $i + 1 ];
@@ -1498,6 +1502,13 @@ package Acme::Parataxis v0.1.7 {
                     if ( defined $fiber && !$fiber->is_done ) {
                         _enqueue($fiber) unless defined $yield_val && $yield_val eq 'WAITING';
                     }
+                }
+                # Refresh after resumed fibers have submitted their next job. drain_jobs() has already released the
+                # completed slot by this point, so sampling here sees only newly armed sleeps.
+                if (@ready) {
+                    $idle_polls = 0;
+                    $spin_short = get_short_sleep_jobs() > 0;
+                    $fast_until = $spin_short ? Time::HiRes::time() + 0.002 : 0;
                 }
                 if (@SCHEDULER_QUEUE) {
                     my @work = @SCHEDULER_QUEUE;
@@ -1512,13 +1523,21 @@ package Acme::Parataxis v0.1.7 {
                 my $active_count = get_live_fiber_count();
                 if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
                     my $remaining_jobs = get_outstanding_jobs();
-                    $idle_polls = 0 unless $remaining_jobs;
+                    unless ($remaining_jobs) {
+                        $idle_polls = 0;
+                        $spin_short = 0;
+                        $fast_until = 0;
+                    }
                     if ($remaining_jobs) {
                         $DRIVER->poll_ready() if $DRIVER;    # fire any already-live driver events, best effort
-                        # Poll briefly at sub-millisecond granularity after completions arrive: C jobs often finish
-                        # well inside one scheduler tick, and a 1 ms usleep is a full 15 ms timer tick on Windows.
-                        # Cap the fast polls so a genuinely long job does not turn the scheduler into a busy loop.
-                        if ( $idle_polls < 64 ) {
+                        # Poll briefly at sub-millisecond granularity after job activity: C jobs often finish well
+                        # inside one scheduler tick, and a 1 ms usleep is a full 15 ms timer tick on Windows. Short
+                        # sleeps get a wall-clock-bounded spin; CPU jobs keep the fixed poll budget so the scheduler
+                        # does not steal the core from the worker that needs to finish the job.
+                        if ( $spin_short && Time::HiRes::time() < $fast_until ) {
+                            usleep(200);
+                        }
+                        elsif ( $idle_polls < 64 ) {
                             usleep(200);
                             $idle_polls++;
                         }

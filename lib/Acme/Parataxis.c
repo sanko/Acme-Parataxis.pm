@@ -650,6 +650,14 @@ static uint64_t pending_job_mask[JOB_WORD_COUNT];
 /** @brief One bit per armed TASK_SLEEP job (JOB_NEW or JOB_BUSY), maintained under queue_lock so cancellation only
  *  visits sleeps instead of scanning all 1024 slots. */
 static uint64_t sleep_job_mask[JOB_WORD_COUNT];
+/** @brief Number of armed short TASK_SLEEP jobs (input <= 8 ms), maintained under queue_lock. The scheduler uses it
+ *  to stretch its sub-tick poll window only when a sleep is actually in flight; CPU jobs keep the short fixed budget. */
+static volatile int short_sleep_jobs = 0;
+
+/** @brief True for the sleep arms that use the Windows high-resolution sub-tick spin in worker_thread(). */
+static int is_short_sleep_job(job_t * job) {
+    return job->type == TASK_SLEEP && job->input.i > 0 && job->input.i <= 8;
+}
 
 /** @brief Count trailing zero bits without a compiler intrinsic, so MSVC and every C99 compiler get the same result. */
 static int para_ctz64(uint64_t x) {
@@ -1264,6 +1272,7 @@ DLLEXPORT void init_threads() {
         pending_job_mask[w] = 0;
         sleep_job_mask[w] = 0;
     }
+    short_sleep_jobs = 0;
     if (MAX_JOBS % JOB_BITS_PER_WORD)
         free_job_mask[JOB_WORD_COUNT - 1] = (1ULL << (MAX_JOBS % JOB_BITS_PER_WORD)) - 1;
 
@@ -1304,8 +1313,11 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].status = JOB_NEW;
         job_slots[idx].recall = 0;
         pending_job_mask[idx >> 6] |= 1ULL << (idx & 63);
-        if (type == TASK_SLEEP)
+        if (type == TASK_SLEEP) {
             sleep_job_mask[idx >> 6] |= 1ULL << (idx & 63);
+            if (is_short_sleep_job(&job_slots[idx]))
+                short_sleep_jobs++;
+        }
         pending_job_count++;
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < fiber_capacity)
@@ -1357,6 +1369,8 @@ DLLEXPORT int check_for_completion() {
  * @return int Number of outstanding jobs.
  */
 DLLEXPORT int get_outstanding_jobs() { return outstanding_jobs; }
+/** @brief Number of armed short sleeps currently in flight; read by the scheduler to size its poll window. */
+DLLEXPORT int get_short_sleep_jobs() { return short_sleep_jobs; }
 
 /**
  * @brief Recalls (abandons early) every armed TASK_SLEEP job owned by the given fiber.
@@ -1443,6 +1457,8 @@ DLLEXPORT void free_job_slot(int idx) {
         return;
     int owner = job_slots[idx].fiber_id;
     LOCK(queue_lock);
+    if (is_short_sleep_job(&job_slots[idx]))
+        short_sleep_jobs--;
     job_slots[idx].status = JOB_FREE;
     free_job_mask[idx >> 6] |= 1ULL << (idx & 63);
     sleep_job_mask[idx >> 6] &= ~(1ULL << (idx & 63));
@@ -3615,6 +3631,8 @@ DLLEXPORT void drain_jobs(SV * out_ref) {
         has_result[count] = (job->type == TASK_SLEEP || job->type == TASK_GET_CPU ||
                             job->type == TASK_READ || job->type == TASK_WRITE);
         values[count] = has_result[count] ? job->output.i : 0;
+        if (is_short_sleep_job(job))
+            short_sleep_jobs--;
         job->status = JOB_FREE;
         free_job_mask[job_idx >> 6] |= 1ULL << (job_idx & 63);
         sleep_job_mask[job_idx >> 6] &= ~(1ULL << (job_idx & 63));
