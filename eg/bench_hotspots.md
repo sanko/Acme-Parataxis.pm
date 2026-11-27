@@ -484,6 +484,20 @@ were flat (old 1.008x median / 1.004x mean, new 0.998x / 0.951x and 1.001x /
 priority, scheduler-scope, parallel, stress and saturation reruns were clean.
 Full suite after the step: 74 files, 1055 tests, PASS.
 
+### Rejected — binary insertion into the priority queue
+
+When any fiber has used a non-default priority, `_enqueue()` linearly scans the
+sorted run queue for the insertion point. Replacing that scan with an upper-bound
+binary search preserves stable FIFO order for equal priorities and passed the
+priority, scheduler-scope, cancellation, parallel, stress, saturation, soak and
+shutdown gates.
+
+It was not faster. Interleaved A/B against `0d09970`: priority_parallel at 300
+was 1.023x median / 1.003x mean, at 500 it was 1.001x / 1.000x, and
+priority_series was 1.109x / 1.032x; series and parallel controls were within
+noise. The remaining cost is the `splice` itself, which dominates the saved
+comparisons here. Reverted; full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — deduplicating `current_fid()` in await/wait
 
 `await()` and `wait()` each read `current_fid()` twice: once for the croak test
