@@ -314,6 +314,16 @@ Preemption, cancellation/timeout, HTTP, ticker, transparent-unblock, parallel,
 stress, saturation, soak and shutdown reruns were clean. Full suite after the
 step: 74 files, 1055 tests, PASS.
 
+### Rejected — pass known fiber objects into wakeups
+
+`Semaphore` and `Channel` already resolved a waiter with `by_id()` to check for
+staleness, then `_scheduler_enqueue_by_id()` looked it up again. Passing the
+known object into the enqueue helper removed that second FFI call. Correctness
+gates passed, but 30 interleaved pairs against `b2255de` were neutral: semaphore
+0.996x median / 0.999x mean and channel 0.988x / 0.995x, inside the recorded
+noise. Series and parallel were unchanged. Reverted; full suite remains PASS
+(74 files, 1055 tests).
+
 ### Rejected — deliver fiber objects from `drain_jobs()`
 
 `drain_jobs()` could append a strong reference to each owner fiber instead of
