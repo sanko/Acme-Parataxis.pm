@@ -458,6 +458,19 @@ rate limiter, mock time, diagnostics, channel-select deadlock, parallel, stress,
 saturation, soak and shutdown reruns were clean. Full suite after the step:
 74 files, 1055 tests, PASS.
 
+### Rejected — lock-free flag reads in the sub-tick spin
+
+The Windows sub-tick spin took `queue_lock` at entry and exit (and every 32
+yields) only to read the already-`volatile` recall and shutdown flags. Removing
+those acquisitions and reading the flags directly was safe in the targeted
+cancellation, timeout/repark, ticker, stress, saturation, soak and shutdown
+gates, and looked modestly better once (sleep 0.921x median / 0.946x mean).
+
+The gain did not repeat: a second A/B was 0.993x / 0.962x, A/A controls were
+0.983x / 1.007x (new) and 1.011x / 0.930x (old), and cancel_sleep and offload
+were neutral. Reverted rather than carry a subtler memory-ordering assumption
+for no measured gain. Full suite remains PASS (74 files, 1055 tests).
+
 ### Rejected — live queued-priority count
 
 `$HAS_PRIORITIES` is sticky: once any fiber ever gets a non-default priority,
