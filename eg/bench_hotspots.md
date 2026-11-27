@@ -169,6 +169,29 @@ The offload path improved; the other workloads stayed within noise. Full suite
 after the step: 74 files, 1055 tests, PASS, with the direct stress, saturation
 and soak reruns also clean.
 
+### Step 6 — pending-job bitmap
+
+Workers had the mirror image of the submission scan: every claim walked the 1024
+`job_t` structs looking for `JOB_NEW`. A second bitmap records pending work, and
+claiming its lowest set bit keeps the same lowest-slot order. The worker now
+takes the bit under `queue_lock` and leaves the existing `JOB_BUSY` and
+`pending_job_count` updates in place.
+
+Interleaved A/B medians against the `e6d09ff` DLL (12 pairs at `--count 300 --rounds 1`; `sleep` used 8 pairs at `--count 200`):
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| series | 0.00470 | 0.00438 | 0.932x |
+| parallel | 0.00437 | 0.00437 | 1.000x |
+| semaphore | 0.02552 | 0.02599 | 1.018x |
+| channel | 0.01501 | 0.01525 | 1.016x |
+| offload | 0.07895 | 0.05026 | 0.637x |
+| sleep | 3.41904 | 3.36047 | 0.983x |
+
+Offload improved substantially; the remaining workloads stayed within noise.
+Full suite after the step: 74 files, 1055 tests, PASS, with direct stress,
+saturation and soak reruns clean.
+
 ### Rejected — targeted worker wakeups
 
 Counting workers actually parked in `queue_cond` and signalling only as many as

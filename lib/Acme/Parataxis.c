@@ -644,6 +644,9 @@ static job_t job_slots[MAX_JOBS];
 #define JOB_BITS_PER_WORD 64
 #define JOB_WORD_COUNT ((MAX_JOBS + JOB_BITS_PER_WORD - 1) / JOB_BITS_PER_WORD)
 static uint64_t free_job_mask[JOB_WORD_COUNT];
+/** @brief One bit per submitted-but-unclaimed job, maintained under queue_lock. Workers claim the lowest set bit so
+ *  claim order matches the old linear scan. */
+static uint64_t pending_job_mask[JOB_WORD_COUNT];
 
 /** @brief Count trailing zero bits without a compiler intrinsic, so MSVC and every C99 compiler get the same result. */
 static int para_ctz64(uint64_t x) {
@@ -675,6 +678,23 @@ static int take_free_job_slot(void) {
 
 /** @brief Jobs submitted but not yet claimed by a worker (JOB_NEW), maintained under queue_lock. */
 static int pending_job_count = 0;
+
+/** @brief Claims the lowest submitted-but-unclaimed job, or -1 when none are pending. Caller holds queue_lock and
+ *  still owns the status/pending_job_count updates, matching the old scan's side effects exactly. */
+static int take_pending_job_slot(void) {
+    for (int w = 0; w < JOB_WORD_COUNT; w++) {
+        uint64_t bits = pending_job_mask[w];
+        if (!bits)
+            continue;
+        int bit = para_ctz64(bits);
+        int idx = w * JOB_BITS_PER_WORD + bit;
+        if (idx >= MAX_JOBS)    /* unused high bits in a partial last word */
+            return -1;
+        pending_job_mask[w] &= ~(1ULL << bit);
+        return idx;
+    }
+    return -1;
+}
 /** @brief Mutex protecting access to the job queue */
 static para_mutex_t queue_lock;
 
@@ -1019,13 +1039,10 @@ void * worker_thread(void * arg) {
 
         LOCK(queue_lock);
         while (threads_keep_running) {
-            for (int i = 0; i < MAX_JOBS; i++) {
-                if (job_slots[i].status == JOB_NEW) {
-                    job_slots[i].status = JOB_BUSY;
-                    pending_job_count--;
-                    found_idx = i;
-                    break;
-                }
+            found_idx = take_pending_job_slot();
+            if (found_idx != -1) {
+                job_slots[found_idx].status = JOB_BUSY;
+                pending_job_count--;
             }
             if (found_idx != -1 || !threads_keep_running)
                 break;
@@ -1179,8 +1196,10 @@ DLLEXPORT void init_threads() {
 #endif
     for (int i = 0; i < MAX_JOBS; i++)
         job_slots[i].status = JOB_FREE;
-    for (int w = 0; w < JOB_WORD_COUNT; w++)
+    for (int w = 0; w < JOB_WORD_COUNT; w++) {
         free_job_mask[w] = ~0ULL;
+        pending_job_mask[w] = 0;
+    }
     if (MAX_JOBS % JOB_BITS_PER_WORD)
         free_job_mask[JOB_WORD_COUNT - 1] = (1ULL << (MAX_JOBS % JOB_BITS_PER_WORD)) - 1;
 
@@ -1220,6 +1239,7 @@ DLLEXPORT int submit_c_job(int type, int64_t arg, int timeout_ms) {
         job_slots[idx].timeout_ms = timeout_ms;
         job_slots[idx].status = JOB_NEW;
         job_slots[idx].recall = 0;
+        pending_job_mask[idx >> 6] |= 1ULL << (idx & 63);
         pending_job_count++;
         outstanding_jobs++;
         if (current_fiber_id >= 0 && current_fiber_id < fiber_capacity)
