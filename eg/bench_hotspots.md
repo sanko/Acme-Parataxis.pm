@@ -840,6 +840,31 @@ the same spread (series 0.972x–1.044x, parallel 0.887x–0.937x), while the
 park-heavy channel and semaphore paths were flat or slightly worse. The change
 was reverted.
 
+### Rejected — guarded `_wake_select_waiters()` calls
+
+`Channel::get()`/`put()` and their variants called `_wake_select_waiters()` on
+every operation, but the method immediately returned when no `select()` waiter
+was registered. Guarding all nine call sites with `if @select_waiters` left the
+select path unchanged and passed channel-select, wait-reason, backtrace,
+future, timeout/repark, ticker, parallel, stress, saturation, soak and shutdown
+gates.
+
+Interleaved A/B against `b21e2c8`, `--count 300 --rounds 1` unless noted:
+
+| workload | old_s | new_s | ratio | new faster |
+| --- | ---: | ---: | ---: | ---: |
+| channel (300, forward) | 0.01033 | 0.01024 | 0.991x | 16/30 |
+| channel (300, reversed) | 0.01059 | 0.01065 | 1.006x | 14/30 |
+| channel (500, forward) | 0.01717 | 0.01718 | 1.001x | 9/20 |
+| channel (500, reversed) | 0.01776 | 0.01759 | 0.990x | 14/20 |
+| semaphore (300) | 0.02322 | 0.02458 | 1.059x | 8/20 |
+| series (300) | 0.00454 | 0.00430 | 0.947x | 8/20 |
+| parallel (300) | 0.00478 | 0.00432 | 0.904x | 11/20 |
+
+Channel was flat in both orders, semaphore was worse, and the fiber-only gains
+were not repeatable (their A/A controls were equally wide). The change was
+reverted.
+
 ### Rejected — raw lookups in synchronization primitives
 
 After Step 23, `Semaphore`, `Channel::select` and `Future::await` still reached
