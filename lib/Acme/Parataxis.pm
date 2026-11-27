@@ -30,12 +30,9 @@ package Acme::Parataxis v0.1.7 {
     our @IPC_BUFFER;
     my $lib;
     my @SCHEDULER_QUEUE;
-    my %SCHEDULER_QUEUED;
     my $HAS_PRIORITIES = 0;     # true once any fiber has been given a non-default priority
     my $IS_RUNNING = 0;
     my $DRIVER;                 # the attached Acme::Parataxis::Driver (undef = the worker-pool fallback path), see attach_loop
-    my %PARKED;                 # fid => true, while the fiber is suspended in a blocking wait (see _park / _resume_hooks)
-    my %PARK_REGS;              # fid => coderef that removes a parked fiber from its waiter list when its park is interrupted
     our %FIBER_LOCALS;          # fiber-object refaddr => { local-id => value }; stashes for Acme::Parataxis::Local
     our @INHERIT_LOCAL_IDS;     # ids of Acme::Parataxis::Local objects created with inherit => 1; spawn seeds these from parent to child
     our %ACTOR_REGISTRY;        # registered actor names => Acme::Parataxis::Actor handles; the actor(name)/whereis table
@@ -63,14 +60,33 @@ package Acme::Parataxis v0.1.7 {
         F_INTERRUPT       => 12,
         F_CANCEL_SCOPES   => 13,
         F_DEADLINE_SCOPES => 14,
-        F_DEADLINE_ARMED  => 15
+        F_DEADLINE_ARMED  => 15,
+        F_PARKED          => 16,    # true while suspended in a blocking wait (was %PARKED)
+        F_PARK_DEREG      => 17,    # coderef removing this fiber from its waiter list on an interrupted park
+        F_QUEUED          => 18     # true while sitting in @SCHEDULER_QUEUE (was %SCHEDULER_QUEUED)
     };
+
+    # Parked fibers used to be tracked in %PARKED/%PARK_REGS keyed by fid, and queued ones in %SCHEDULER_QUEUED.
+    # Those hashes cost a lookup on every park, wake and enqueue; the flags now live in flat slots on the fiber
+    # object instead. Destroying a fiber drops its flags with it, and run() clears them explicitly on the cold
+    # teardown paths (the hot loop clears them as it drains the queue).
+    sub _take_park_dereg ($fiber) {
+        my $dereg = $fiber->[F_PARK_DEREG];
+        $fiber->[F_PARK_DEREG] = undef;
+        return $dereg;
+    }
+
+    sub _clear_queued_flags () {
+        for my $fid ( _live_fiber_ids() ) {
+            my $fiber = Acme::Parataxis::get_fiber_by_id($fid);
+            $fiber->[F_QUEUED] = 0 if ref $fiber;
+        }
+    }
 
     # Scheduler run queue. Kept sorted by descending priority (stable for equal priorities, so a group of same-priority fibers stays FIFO).
     sub _enqueue ($fiber) {
-        my $fid = $fiber->[F_FID];
-        return if $SCHEDULER_QUEUED{$fid};
-        $SCHEDULER_QUEUED{$fid} = 1;
+        return if $fiber->[F_QUEUED];
+        $fiber->[F_QUEUED] = 1;
         if ( !$HAS_PRIORITIES ) {
             push @SCHEDULER_QUEUE, $fiber;
             return;
@@ -96,7 +112,7 @@ package Acme::Parataxis v0.1.7 {
 
     # Diagnostics: a snapshot of every live fiber, riding entirely on wait_reason: _park records
     # [reason, file, line] on the fiber before it yields and _resume_hooks clears it on a natural wake, so a
-    # live fiber that still carries a reason (or is in %PARKED) is blocked, not merely preempted. WAITING =
+    # live fiber that still carries a reason (or has its parked slot set) is blocked, not merely preempted. WAITING =
     # parked on a wait; READY = in the scheduler run queue; RUNNING = the fiber calling the snapshot (only
     # when taken from inside a run); RUNNABLE = live but neither parked nor queued (e.g. a generator's body
     # or a fiber surrendered mid-quantum). Each record also carries the bounded user-side caller
@@ -111,9 +127,9 @@ package Acme::Parataxis v0.1.7 {
             next unless $fiber && ref $fiber;
             my $reason = $fiber->[F_WAIT_REASON];    # undef once the fiber is woken normally
             my $state
-                = ( defined $reason || $PARKED{$fid} ) ? 'WAITING' :
-                $SCHEDULER_QUEUED{$fid}                ? 'READY' :
-                ( $current >= 0 && $fid == $current )  ? 'RUNNING' :
+                = ( defined $reason || $fiber->[F_PARKED] ) ? 'WAITING' :
+                $fiber->[F_QUEUED]                           ? 'READY' :
+                ( $current >= 0 && $fid == $current )        ? 'RUNNING' :
                 'RUNNABLE';
             push @rows, { fid => $fid, state => $state, reason => $reason };
         }
@@ -358,8 +374,8 @@ package Acme::Parataxis v0.1.7 {
             warn sprintf "PARATAXIS_TRACE t=%.0fms fid=%d ENTRY failfast pre=%s site=%s\n", ( time - $^T ) * 1000, $fid, $pre, "$pfile:$pline"
                 if $ENV{PARATAXIS_TRACE};
             $fiber->[F_INTERRUPT] = undef;
-            delete $PARKED{$fid};
-            if ( my $dereg = delete $PARK_REGS{$fid} ) { $dereg->() }
+            $fiber->[F_PARKED] = 0;
+            if ( my $dereg = _take_park_dereg($fiber) ) { $dereg->() }
             warn "PARATAXIS_TRACE park RE-ENTRY fail-fast fid=$fid reason=$reason pre=$pre\n" if $ENV{PARATAXIS_TRACE};
             my $err = $pre eq 'timeout' ? Acme::Parataxis::Error::Timeout->new( wait_reason => $pre_site ) :
                 Acme::Parataxis::Error::Cancelled->new( wait_reason => $pre_site );
@@ -374,8 +390,8 @@ package Acme::Parataxis v0.1.7 {
             my $scope = $scopes->[-1];
             if ( $scope && $scope->cancelled ) {
                 my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
-                delete $PARKED{$fid};
-                if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
+                $fiber->[F_PARKED] = 0;
+                if ( my $old = _take_park_dereg($fiber) ) { $old->() }
                 $dereg->() if $dereg;    # this park's waiter entry (pushed before _park) is stale: remove it too
                 die Acme::Parataxis::Error::Cancelled->new( wait_reason => [ 'cancel', $pfile, $pline ] );
             }
@@ -415,8 +431,8 @@ package Acme::Parataxis v0.1.7 {
                     # returns normally.
                     $eff->{served} = 1;
                     my ( $pfile, $pline ) = ( caller($level) )[ 1, 2 ];
-                    delete $PARKED{$fid};
-                    if ( my $old = delete $PARK_REGS{$fid} ) { $old->() }
+                    $fiber->[F_PARKED] = 0;
+                    if ( my $old = _take_park_dereg($fiber) ) { $old->() }
                     $dereg->() if $dereg;    # as above: this park's own waiter entry is stale too
                     warn "PARATAXIS_TRACE park DEADLINE fail-fast fid=$fid reason=$reason abs=" . $eff->{abs} . " now=$now\n"
                         if $ENV{PARATAXIS_TRACE};
@@ -456,8 +472,8 @@ package Acme::Parataxis v0.1.7 {
         }
         my $site = [ $reason, $file, $line, $bt ];
         $fiber->[F_WAIT_REASON] = $site;
-        $PARKED{$fid}           = 1;
-        $PARK_REGS{$fid}        = $dereg if defined $dereg;
+        $fiber->[F_PARKED]      = 1;
+        $fiber->[F_PARK_DEREG]  = $dereg if defined $dereg;
         my $res = yield('WAITING');
         if ( defined( my $kind = $fiber->[F_INTERRUPT] ) ) {
             if ( $kind eq 'timeout' ) {
@@ -474,8 +490,8 @@ package Acme::Parataxis v0.1.7 {
                 ( defined $site ? $site->[1] . ':' . $site->[2] : 'n/a' )
                 if $ENV{PARATAXIS_TRACE};
             $fiber->[F_INTERRUPT] = undef;
-            delete $PARKED{$fid};
-            if ( my $dereg = delete $PARK_REGS{$fid} ) { $dereg->() }
+            $fiber->[F_PARKED] = 0;
+            if ( my $dereg = _take_park_dereg($fiber) ) { $dereg->() }
             my $err = $kind eq 'timeout' ? Acme::Parataxis::Error::Timeout->new( wait_reason => $site ) :
                 Acme::Parataxis::Error::Cancelled->new( wait_reason => $site );
             die $err;
@@ -493,16 +509,17 @@ package Acme::Parataxis v0.1.7 {
         $fiber->[F_INTERRUPT] = $kind if $kind eq 'cancel' || $kind eq 'timeout';
         recall_sleep_jobs_for_fiber($fid);
         _recall_virtual_timer($fid);    # a virtual timer has no C job; drop it so a recalled fiber is never re-woken
-        _scheduler_enqueue_by_id($fid) if $PARKED{$fid};
+        _scheduler_enqueue_by_id($fid) if $fiber->[F_PARKED];
         return $fiber;
     }
 
     # On a natural wake the park's deregistrations are dropped (the park is over); on an interrupt wake they are kept
     # for the throw in _park, which runs them before the fiber unwinds.
     sub _resume_hooks ($fiber) {
-        return unless delete $PARKED{ $fiber->[F_FID] };
+        return unless $fiber->[F_PARKED];
+        $fiber->[F_PARKED] = 0;
         $fiber->[F_WAIT_REASON] = undef;
-        delete $PARK_REGS{ $fiber->[F_FID] } unless defined $fiber->[F_INTERRUPT];
+        $fiber->[F_PARK_DEREG] = undef unless defined $fiber->[F_INTERRUPT];
         my $hooks = $fiber->[F_WAKE_HOOKS];
         $fiber->[F_WAKE_HOOKS] = undef;
         if ($hooks) { $_->($fiber) for @$hooks }
@@ -1258,8 +1275,8 @@ package Acme::Parataxis v0.1.7 {
 
     # Scheduler internals
     sub _scheduler_enqueue_by_id ($fid) {
-        return if $SCHEDULER_QUEUED{$fid};
         if ( my $fiber = Acme::Parataxis->by_id($fid) ) {
+            return if $fiber->[F_QUEUED];
             _enqueue($fiber);
         }
     }
@@ -1333,7 +1350,7 @@ package Acme::Parataxis v0.1.7 {
             return $fiber->await;
         }
         @SCHEDULER_QUEUE  = ();
-        %SCHEDULER_QUEUED = ();
+        _clear_queued_flags();
         $IS_RUNNING       = 1;
 
         # run( virtual => 1 ) turns on the virtual clock for the whole run. Everything the scheduler waits
@@ -1449,10 +1466,10 @@ package Acme::Parataxis v0.1.7 {
                 }
                 if (@SCHEDULER_QUEUE) {
                     my @work = @SCHEDULER_QUEUE;
-                    @SCHEDULER_QUEUE  = ();
-                    %SCHEDULER_QUEUED = ();
+                    @SCHEDULER_QUEUE = ();
                     for my $current (@work) {
                         next unless $current;
+                        $current->[F_QUEUED] = 0;
                         _resume_hooks($current);
                         _handle_run( $current, run_fiber_checked( $current->fid, undef ) );
                     }
@@ -1491,9 +1508,9 @@ package Acme::Parataxis v0.1.7 {
                             # above so they cannot make a later healthy run look deadlocked; they stay parked forever in
                             # the C table but are harmless because the count below only ever triggers on fibers created
                             # by this run.
-                            $IS_RUNNING       = 0;
-                            @SCHEDULER_QUEUE  = ();
-                            %SCHEDULER_QUEUED = ();
+                            $IS_RUNNING      = 0;
+                            @SCHEDULER_QUEUE = ();
+                            _clear_queued_flags();
                             my $rows = _fiber_snapshot();
                             my @mine = grep { !$PRESET_FIBERS{ $_->{fid} } } @$rows;
                             my $body = '';
@@ -1597,8 +1614,9 @@ package Acme::Parataxis v0.1.7 {
         my $n = shift;
         $self->[F_PRIORITY] = $n;
         $HAS_PRIORITIES = 1 if $n;
-        my $fid = $self->[F_FID];
-        if ( delete $SCHEDULER_QUEUED{$fid} ) {
+        if ( $self->[F_QUEUED] ) {
+            my $fid = $self->[F_FID];
+            $self->[F_QUEUED] = 0;
             @SCHEDULER_QUEUE = grep { $_->[F_FID] != $fid } @SCHEDULER_QUEUE;
             _enqueue($self);
         }
@@ -1636,8 +1654,8 @@ package Acme::Parataxis v0.1.7 {
         return if $self->[F_IS_DONE];
         $self->[F_IS_DONE] = 1;
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
-            delete $PARKED{ $self->[F_FID] };
-            delete $PARK_REGS{ $self->[F_FID] };
+            $self->[F_PARKED]     = 0;
+            $self->[F_PARK_DEREG] = undef;
             _recall_virtual_timer( $self->[F_FID] );    # a finished fiber must not leave a virtual timer behind
             delete $FIBER_LOCALS{ refaddr($self) };
             $self->[F_FID] = -1;
@@ -1680,8 +1698,8 @@ package Acme::Parataxis v0.1.7 {
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 && Acme::Parataxis::is_finished( $self->[F_FID] ) ) {
             $self->[F_IS_DONE] = 1;
             my $old_fid = $self->[F_FID];
-            delete $PARKED{$old_fid};
-            delete $PARK_REGS{$old_fid};
+            $self->[F_PARKED]     = 0;
+            $self->[F_PARK_DEREG] = undef;
             delete $FIBER_LOCALS{ refaddr($self) };
             $self->[F_FID] = -1;
             Acme::Parataxis::destroy_coro($old_fid);
@@ -1742,8 +1760,8 @@ package Acme::Parataxis v0.1.7 {
         return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
         delete $FIBER_LOCALS{ refaddr($self) };
         if ( defined $self->[F_FID] && $self->[F_FID] >= 0 ) {
-            delete $PARKED{ $self->[F_FID] };
-            delete $PARK_REGS{ $self->[F_FID] };
+            $self->[F_PARKED]     = 0;
+            $self->[F_PARK_DEREG] = undef;
             Acme::Parataxis::destroy_coro( $self->[F_FID] );
             $self->[F_FID] = -1;
         }

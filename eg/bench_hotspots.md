@@ -99,3 +99,23 @@ baseline is not attributed solely to this step; the structural change (one
 fewer locked 1024-slot scan per submission) is the reason to keep it. Full suite
 after the step: 74 files, 1055 tests, PASS, including the saturation and soak
 gates.
+
+### Step 3 — parked/queued flags in fiber slots
+
+`%PARKED`, `%PARK_REGS` and `%SCHEDULER_QUEUED` were hashes keyed by fiber id and
+consulted on every park, wake and enqueue. They are now slots on the flat fiber
+arrayref (`F_PARKED`, `F_PARK_DEREG`, `F_QUEUED`), so the hot paths do array
+indexing instead of hash lookups. The run loop clears `F_QUEUED` as it drains
+the queue; the cold teardown paths clear it for all live fibers.
+
+Interleaved A/B medians against `HEAD` (`4f9aa40`) on the same machine:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| series | 0.00457 | 0.00493 | 1.078x |
+| parallel | 0.00505 | 0.00441 | 0.873x |
+| semaphore | 0.03042 | 0.02756 | 0.906x |
+| channel | 0.01473 | 0.01464 | 0.993x |
+
+The park-heavy workloads (`parallel`, `semaphore`) improved; `series` is within
+noise. Full suite after the step: 74 files, 1055 tests, PASS.
