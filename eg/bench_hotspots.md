@@ -314,6 +314,40 @@ Preemption, cancellation/timeout, HTTP, ticker, transparent-unblock, parallel,
 stress, saturation, soak and shutdown reruns were clean. Full suite after the
 step: 74 files, 1055 tests, PASS.
 
+### Step 12 — bounded fast idle polling
+
+On tick-quantized platforms a 1 ms `usleep()` can cost a full 15 ms timer tick,
+so short C jobs finished long before the scheduler looked again. `run()` now
+uses up to four 200 µs polls after the outstanding-job count changes or a
+completion arrives, then falls back to the normal 1 ms sleep. The budget is
+reset only on new job activity, so a long wait does not become a busy loop.
+
+Interleaved A/B against `d9560eb` at `--count 300 --rounds 1`:
+
+| workload | old_s | new_s | ratio |
+| --- | ---: | ---: | ---: |
+| offload | 0.07212 | 0.02055 | 0.285x |
+| offload (500) | 0.12146 | 0.03153 | 0.260x |
+| sleep (200) | 3.26168 | 3.22066 | 0.987x |
+| cancel_sleep | 0.03078 | 0.03019 | 0.981x |
+
+Offload was faster in 28/30 pairs at 300 and 20/20 at 500. The fiber-only paths
+stayed inside noise over 40 pairs (series 1.051x median / 1.006x mean, parallel
+0.975x / 0.987x). A five-second wall-clock sleep probe used 0.109 s CPU with the
+new pair versus 0.141 s before, confirming the fast polls stop. Cancellation,
+timeout, repark, ticker, transparent-unblock, parallel, stress, saturation, soak
+and shutdown reruns were clean. Full suite after the step: 74 files, 1055 tests,
+PASS.
+
+### Rejected — unconditional 200 µs idle polling
+
+Replacing the scheduler's `usleep(1000)` with `usleep(200)` made offload appear
+10x faster (0.099x median), but on this Windows Perl `usleep(200)` degenerates
+to `Sleep(0)`: 5000 calls took 0.0013 s wall and 0.031 s CPU, while 5000
+`usleep(1000)` calls took 50.39 s wall. It would spin the scheduler for the
+whole duration of a long job. Reverted in favor of the bounded fast-poll in
+Step 12.
+
 ### Rejected — pass known fiber objects into wakeups
 
 `Semaphore` and `Channel` already resolved a waiter with `by_id()` to check for

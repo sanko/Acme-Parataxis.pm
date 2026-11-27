@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Flatten the completed-job drain buffer so finished jobs are delivered as alternating fiber ids and results without allocating one arrayref pair per job.
 - Merge `run()`'s queued-flag clear and live-fiber snapshot into one fiber-table scan.
 - Claim the next C job while publishing the previous completion under the same queue lock, avoiding one lock/unlock pair per job without changing worker wakeups or claim order.
+- Poll the scheduler briefly at sub-millisecond granularity after job activity, then fall back to the normal idle sleep so long waits do not become a busy loop.
 
 ### Fixed
 

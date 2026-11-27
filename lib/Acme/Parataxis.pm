@@ -1437,6 +1437,8 @@ package Acme::Parataxis v0.1.7 {
         _enqueue($main_fiber);
         my $run_ok = 1;
         my $run_failure;
+        my $idle_polls     = 0;    # short poll budget, replenished when job completions arrive
+        my $last_job_count = 0;
         try {
             while ($IS_RUNNING) {
 
@@ -1456,9 +1458,15 @@ package Acme::Parataxis v0.1.7 {
                     $interrupt_run_fibers->();
                 }
                 my @ready;    # flat fiber_id/result pairs written by drain_jobs()
-                if ( get_outstanding_jobs() ) {
+                my $job_count = get_outstanding_jobs();
+                if ( $job_count != $last_job_count ) {
+                    $idle_polls     = 0;
+                    $last_job_count = $job_count;
+                }
+                if ($job_count) {
                     drain_jobs( \@ready );
                 }
+                $idle_polls = 0 if @ready;
                 for ( my $i = 0; $i < @ready; $i += 2 ) {
                     my $fid = $ready[$i];
                     my $res = $ready[ $i + 1 ];
@@ -1482,9 +1490,20 @@ package Acme::Parataxis v0.1.7 {
                 }
                 my $active_count = get_live_fiber_count();
                 if ( $IS_RUNNING && !@SCHEDULER_QUEUE && !@ready ) {
-                    if ( get_outstanding_jobs() ) {
+                    my $remaining_jobs = get_outstanding_jobs();
+                    $idle_polls = 0 unless $remaining_jobs;
+                    if ($remaining_jobs) {
                         $DRIVER->poll_ready() if $DRIVER;    # fire any already-live driver events, best effort
-                        usleep(1000);                        # Wait for background jobs to finish
+                        # Poll briefly at sub-millisecond granularity after completions arrive: C jobs often finish
+                        # well inside one scheduler tick, and a 1 ms usleep is a full 15 ms timer tick on Windows.
+                        # Cap the fast polls so a genuinely long job does not turn the scheduler into a busy loop.
+                        if ( $idle_polls < 4 ) {
+                            usleep(200);
+                            $idle_polls++;
+                        }
+                        else {
+                            usleep(1000);
+                        }
                     }
                     elsif ( $DRIVER && $DRIVER->pending ) {
 
